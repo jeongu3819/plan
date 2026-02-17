@@ -1,0 +1,50 @@
+# ─── Node / Frontend ───
+node_modules/
+dist/
+build/
+*.local
+.vite/
+
+# ─── Python / Backend ───
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ─── Data ───
+backend/data.json
+
+# ─── IDE ───
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── OS ───
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Logs ───
+*.log
+npm-debug.log*
+
+# ─── Env ───
+.env
+.env.local
+.env.*.local
+
+# ─── Database ───
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Prisma ───
+backend/prisma/migrations/
+
+# ─── Docker ───
+docker-compose.override.yml
