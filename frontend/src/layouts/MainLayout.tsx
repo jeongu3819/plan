@@ -19,6 +19,7 @@ import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, Project, User } from '../api/client';
@@ -45,6 +46,8 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     const setCurrentUserId = useAppStore(state => state.setCurrentUserId);
     const bgColor = useAppStore(state => state.bgColor);
     const setBgColor = useAppStore(state => state.setBgColor);
+    const projectsCollapsed = useAppStore(state => state.projectsCollapsed);
+    const toggleProjectsCollapsed = useAppStore(state => state.toggleProjectsCollapsed);
     const [paletteOpen, setPaletteOpen] = useState(false);
 
     // ── Derived theme colors ──
@@ -169,9 +172,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                     {[
                         { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
                         { text: 'Kanban Board', icon: <ViewKanbanIcon />, path: projects.length > 0 ? `/project/${projects[0].id}` : '/' },
-                        { text: 'Roadmap', icon: <TimelineIcon />, path: projects.length > 0 ? `/project/${projects[0].id}?tab=roadmap` : '/' },
-                        { text: 'AI Settings', icon: <AutoAwesomeIcon />, path: '/ai-settings' },
-                    ].map((item) => {
+                        { text: '전체 Roadmap', icon: <TimelineIcon />, path: '/roadmap' },
+                        { text: 'AI Settings', icon: <AutoAwesomeIcon />, path: '/ai-settings', adminOnly: true },
+                    ].filter(item => !item.adminOnly || currentUser?.role === 'admin').map((item) => {
                         const isActive = item.path === '/' ? location.pathname === '/' : location.pathname + location.search === item.path;
                         return (
                             <ListItem key={item.text} disablePadding sx={{ mb: 0.3 }}>
@@ -184,122 +187,142 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                     })}
                 </List>
 
-                {/* Projects */}
-                <Box sx={{ px: 2.5, pt: 2, pb: 0.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontWeight: 600, fontSize: '0.7rem', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Projects</Typography>
-                    <Tooltip title="New Project">
-                        <AddIcon onClick={() => setProjectDialogOpen(true)} sx={{ fontSize: 16, color: theme.sidebarMuted, cursor: 'pointer', '&:hover': { color: theme.sidebarText }, transition: 'color 0.15s' }} />
-                    </Tooltip>
+                {/* Projects - flex-growing, scrollable middle section */}
+                <Box sx={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <Box
+                        onClick={toggleProjectsCollapsed}
+                        sx={{ px: 2.5, pt: 2, pb: 0.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', '&:hover': { opacity: 0.8 }, flexShrink: 0 }}
+                    >
+                        <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontWeight: 600, fontSize: '0.7rem', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Projects</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Tooltip title="New Project">
+                                <AddIcon onClick={(e) => { e.stopPropagation(); setProjectDialogOpen(true); }} sx={{ fontSize: 16, color: theme.sidebarMuted, cursor: 'pointer', '&:hover': { color: theme.sidebarText }, transition: 'color 0.15s' }} />
+                            </Tooltip>
+                            {projectsCollapsed ? <ExpandMoreIcon sx={{ fontSize: 16, color: theme.sidebarMuted }} /> : <ExpandLessIcon sx={{ fontSize: 16, color: theme.sidebarMuted }} />}
+                        </Box>
+                    </Box>
+
+                    <Collapse in={!projectsCollapsed} sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto' }}>
+                        <List sx={{ px: 1, pb: 1 }}>
+                            {projects.map((project, index) => {
+                                const isActive = location.pathname === `/project/${project.id}`;
+                                const dotColor = PROJECT_COLORS[index % PROJECT_COLORS.length];
+                                return (
+                                    <ListItem
+                                        key={project.id}
+                                        disablePadding
+                                        sx={{ mb: 0.3 }}
+                                        secondaryAction={
+                                            <IconButton
+                                                edge="end"
+                                                size="small"
+                                                onClick={(e) => { e.stopPropagation(); setProjectMenuAnchor(e.currentTarget); setProjectMenuId(project.id); }}
+                                                sx={{ color: theme.sidebarMuted, opacity: 0, '.MuiListItem-root:hover &': { opacity: 1 }, transition: 'opacity 0.15s' }}
+                                            >
+                                                <MoreVertIcon sx={{ fontSize: '1rem' }} />
+                                            </IconButton>
+                                        }
+                                    >
+                                        <ListItemButton onClick={() => navigate(`/project/${project.id}`)} sx={{ borderRadius: 1.5, py: 0.8, px: 1.5, color: isActive ? theme.sidebarText : theme.sidebarMuted, bgcolor: isActive ? theme.sidebarHover : 'transparent', '&:hover': { bgcolor: theme.sidebarHover } }}>
+                                            <ListItemIcon sx={{ minWidth: 36 }}>
+                                                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: isActive ? '#2955FF' : dotColor }} />
+                                            </ListItemIcon>
+                                            <ListItemText primary={project.name} primaryTypographyProps={{ fontSize: '0.85rem', fontWeight: isActive ? 600 : 400, noWrap: true }} />
+                                        </ListItemButton>
+                                    </ListItem>
+                                );
+                            })}
+                        </List>
+                    </Collapse>
                 </Box>
 
-                <List sx={{ px: 1, flexGrow: 1, overflowY: 'auto' }}>
-                    {projects.map((project, index) => {
-                        const isActive = location.pathname === `/project/${project.id}`;
-                        const dotColor = PROJECT_COLORS[index % PROJECT_COLORS.length];
-                        return (
-                            <ListItem
-                                key={project.id}
-                                disablePadding
-                                sx={{ mb: 0.3 }}
-                                secondaryAction={
-                                    <IconButton
-                                        edge="end"
-                                        size="small"
-                                        onClick={(e) => { e.stopPropagation(); setProjectMenuAnchor(e.currentTarget); setProjectMenuId(project.id); }}
-                                        sx={{ color: theme.sidebarMuted, opacity: 0, '.MuiListItem-root:hover &': { opacity: 1 }, transition: 'opacity 0.15s' }}
-                                    >
-                                        <MoreVertIcon sx={{ fontSize: '1rem' }} />
-                                    </IconButton>
-                                }
-                            >
-                                <ListItemButton onClick={() => navigate(`/project/${project.id}`)} sx={{ borderRadius: 1.5, py: 0.8, px: 1.5, color: isActive ? theme.sidebarText : theme.sidebarMuted, bgcolor: isActive ? theme.sidebarHover : 'transparent', '&:hover': { bgcolor: theme.sidebarHover } }}>
-                                    <ListItemIcon sx={{ minWidth: 36 }}>
-                                        <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: isActive ? '#2955FF' : dotColor }} />
-                                    </ListItemIcon>
-                                    <ListItemText primary={project.name} primaryTypographyProps={{ fontSize: '0.85rem', fontWeight: isActive ? 600 : 400, noWrap: true }} />
+                {/* Bottom fixed section - Admin/Trash/User/Theme */}
+                <Box sx={{ flexShrink: 0 }}>
+                    <Divider sx={{ borderColor: theme.sidebarDivider, mx: 1.5 }} />
+
+                    {/* Admin + Trash */}
+                    <List sx={{ px: 1, py: 0.5 }}>
+                        {currentUser?.role === 'admin' && (
+                            <ListItem disablePadding sx={{ mb: 0.3 }}>
+                                <ListItemButton onClick={() => navigate('/admin')} sx={{ borderRadius: 1.5, py: 0.8, px: 1.5, color: location.pathname === '/admin' ? theme.sidebarText : theme.sidebarMuted, bgcolor: location.pathname === '/admin' ? theme.sidebarHover : 'transparent', '&:hover': { bgcolor: theme.sidebarHover } }}>
+                                    <ListItemIcon sx={{ color: location.pathname === '/admin' ? '#2955FF' : theme.sidebarMuted, minWidth: 36 }}><AdminPanelSettingsIcon /></ListItemIcon>
+                                    <ListItemText primary="어드민" primaryTypographyProps={{ fontSize: '0.85rem', fontWeight: location.pathname === '/admin' ? 600 : 400 }} />
                                 </ListItemButton>
                             </ListItem>
-                        );
-                    })}
-                </List>
+                        )}
+                        <ListItem disablePadding>
+                            <ListItemButton onClick={() => navigate('/trash')} sx={{ borderRadius: 1.5, py: 0.8, px: 1.5, color: location.pathname === '/trash' ? theme.sidebarText : theme.sidebarMuted, bgcolor: location.pathname === '/trash' ? theme.sidebarHover : 'transparent', '&:hover': { bgcolor: theme.sidebarHover } }}>
+                                <ListItemIcon sx={{ color: location.pathname === '/trash' ? '#2955FF' : theme.sidebarMuted, minWidth: 36 }}><DeleteOutlineIcon /></ListItemIcon>
+                                <ListItemText primary="Trash" primaryTypographyProps={{ fontSize: '0.85rem', fontWeight: location.pathname === '/trash' ? 600 : 400 }} />
+                            </ListItemButton>
+                        </ListItem>
+                    </List>
 
-                {/* Bottom */}
-                <Divider sx={{ borderColor: theme.sidebarDivider, mx: 1.5 }} />
+                    <Divider sx={{ borderColor: theme.sidebarDivider, mx: 1.5 }} />
 
-                {/* Trash */}
-                <List sx={{ px: 1, py: 0.5 }}>
-                    <ListItem disablePadding>
-                        <ListItemButton onClick={() => navigate('/trash')} sx={{ borderRadius: 1.5, py: 0.8, px: 1.5, color: location.pathname === '/trash' ? theme.sidebarText : theme.sidebarMuted, bgcolor: location.pathname === '/trash' ? theme.sidebarHover : 'transparent', '&:hover': { bgcolor: theme.sidebarHover } }}>
-                            <ListItemIcon sx={{ color: location.pathname === '/trash' ? '#2955FF' : theme.sidebarMuted, minWidth: 36 }}><DeleteOutlineIcon /></ListItemIcon>
-                            <ListItemText primary="Trash" primaryTypographyProps={{ fontSize: '0.85rem', fontWeight: location.pathname === '/trash' ? 600 : 400 }} />
-                        </ListItemButton>
-                    </ListItem>
-                </List>
-
-                <Divider sx={{ borderColor: theme.sidebarDivider, mx: 1.5 }} />
-
-                {/* User Selector */}
-                <Box sx={{ p: 1.5 }}>
-                    <Box
-                        onClick={(e) => setUserMenuAnchor(e.currentTarget)}
-                        sx={{
-                            display: 'flex', alignItems: 'center', gap: 1.5, p: 1, borderRadius: 1.5,
-                            cursor: 'pointer', '&:hover': { bgcolor: theme.sidebarHover }, transition: 'background 0.15s',
-                        }}
-                    >
-                        <Avatar sx={{
-                            width: 32, height: 32, fontSize: '0.8rem', fontWeight: 700,
-                            bgcolor: currentUser?.avatar_color || '#2955FF',
-                        }}>
-                            {currentUser?.username?.charAt(0).toUpperCase() || 'U'}
-                        </Avatar>
-                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                            <Typography variant="body2" sx={{ color: theme.sidebarText, fontWeight: 600, fontSize: '0.8rem', lineHeight: 1.2 }} noWrap>
-                                {currentUser?.username || 'Select User'}
-                            </Typography>
-                            <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontSize: '0.65rem' }}>
-                                {currentUser?.role || 'member'}
-                            </Typography>
+                    {/* User Selector */}
+                    <Box sx={{ p: 1.5 }}>
+                        <Box
+                            onClick={(e) => setUserMenuAnchor(e.currentTarget)}
+                            sx={{
+                                display: 'flex', alignItems: 'center', gap: 1.5, p: 1, borderRadius: 1.5,
+                                cursor: 'pointer', '&:hover': { bgcolor: theme.sidebarHover }, transition: 'background 0.15s',
+                            }}
+                        >
+                            <Avatar sx={{
+                                width: 32, height: 32, fontSize: '0.8rem', fontWeight: 700,
+                                bgcolor: currentUser?.avatar_color || '#2955FF',
+                            }}>
+                                {currentUser?.username?.charAt(0).toUpperCase() || 'U'}
+                            </Avatar>
+                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                <Typography variant="body2" sx={{ color: theme.sidebarText, fontWeight: 600, fontSize: '0.8rem', lineHeight: 1.2 }} noWrap>
+                                    {currentUser?.username || 'Select User'}
+                                </Typography>
+                                <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontSize: '0.65rem' }}>
+                                    {currentUser?.role || 'member'}
+                                </Typography>
+                            </Box>
+                            <SwapHorizIcon sx={{ color: theme.sidebarMuted, fontSize: '1rem' }} />
                         </Box>
-                        <SwapHorizIcon sx={{ color: theme.sidebarMuted, fontSize: '1rem' }} />
                     </Box>
-                </Box>
 
-                {/* ── Background Color Palette ── */}
-                <Divider sx={{ borderColor: theme.sidebarDivider, mx: 1.5 }} />
-                <Box sx={{ px: 1.5, py: 1 }}>
-                    <Box
-                        onClick={() => setPaletteOpen(!paletteOpen)}
-                        sx={{
-                            display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5,
-                            borderRadius: 1.5, cursor: 'pointer',
-                            '&:hover': { bgcolor: theme.sidebarHover }, transition: 'background 0.15s',
-                        }}
-                    >
-                        <PaletteIcon sx={{ fontSize: '1rem', color: theme.sidebarMuted }} />
-                        <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontWeight: 600, fontSize: '0.7rem' }}>
-                            Theme
-                        </Typography>
-                        <Box sx={{ ml: 'auto', width: 16, height: 16, borderRadius: '50%', bgcolor: bgColor, border: `2px solid ${theme.sidebarDivider}` }} />
-                    </Box>
-                    {paletteOpen && (
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, mt: 0.8, px: 0.5 }}>
-                            {BG_PALETTE.map(color => (
-                                <Tooltip key={color} title={color} placement="top">
-                                    <Box
-                                        onClick={() => setBgColor(color)}
-                                        sx={{
-                                            width: 22, height: 22, borderRadius: '50%', bgcolor: color,
-                                            cursor: 'pointer', transition: 'transform 0.15s, box-shadow 0.15s',
-                                            border: bgColor === color ? '2.5px solid #2955FF' : '2px solid transparent',
-                                            boxShadow: bgColor === color ? '0 0 0 2px rgba(41,85,255,0.3)' : 'none',
-                                            '&:hover': { transform: 'scale(1.2)', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' },
-                                        }}
-                                    />
-                                </Tooltip>
-                            ))}
+                    {/* ── Background Color Palette ── */}
+                    <Divider sx={{ borderColor: theme.sidebarDivider, mx: 1.5 }} />
+                    <Box sx={{ px: 1.5, py: 1 }}>
+                        <Box
+                            onClick={() => setPaletteOpen(!paletteOpen)}
+                            sx={{
+                                display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5,
+                                borderRadius: 1.5, cursor: 'pointer',
+                                '&:hover': { bgcolor: theme.sidebarHover }, transition: 'background 0.15s',
+                            }}
+                        >
+                            <PaletteIcon sx={{ fontSize: '1rem', color: theme.sidebarMuted }} />
+                            <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontWeight: 600, fontSize: '0.7rem' }}>
+                                Theme
+                            </Typography>
+                            <Box sx={{ ml: 'auto', width: 16, height: 16, borderRadius: '50%', bgcolor: bgColor, border: `2px solid ${theme.sidebarDivider}` }} />
                         </Box>
-                    )}
+                        {paletteOpen && (
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, mt: 0.8, px: 0.5 }}>
+                                {BG_PALETTE.map(color => (
+                                    <Tooltip key={color} title={color} placement="top">
+                                        <Box
+                                            onClick={() => setBgColor(color)}
+                                            sx={{
+                                                width: 22, height: 22, borderRadius: '50%', bgcolor: color,
+                                                cursor: 'pointer', transition: 'transform 0.15s, box-shadow 0.15s',
+                                                border: bgColor === color ? '2.5px solid #2955FF' : '2px solid transparent',
+                                                boxShadow: bgColor === color ? '0 0 0 2px rgba(41,85,255,0.3)' : 'none',
+                                                '&:hover': { transform: 'scale(1.2)', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' },
+                                            }}
+                                        />
+                                    </Tooltip>
+                                ))}
+                            </Box>
+                        )}
+                    </Box>
                 </Box>
             </Box>
 

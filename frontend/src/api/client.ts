@@ -50,10 +50,30 @@ export interface User {
     role?: string;
     avatar_color?: string;
     is_active?: boolean;
+    group_name?: string;
 }
 
 export interface DashboardLayout {
     [key: string]: any;
+}
+
+export interface Shortcut {
+    id: number;
+    name: string;
+    url: string;
+    icon_text: string;
+    icon_color: string;
+    order: number;
+    open_new_tab: boolean;
+    active: boolean;
+    created_at?: string;
+}
+
+export interface Group {
+    id: number;
+    name: string;
+    matched_count?: number;
+    created_at?: string;
 }
 
 // ─── API ───
@@ -248,6 +268,56 @@ export const api = {
     },
     approveJoinRequest: async (projectId: number, userId: number, action: string): Promise<any> => {
         const res = await client.post(`/projects/${projectId}/join-requests/approve`, { user_id: userId, action });
+        return res.data;
+    },
+
+    // Global Roadmap
+    getGlobalRoadmap: async (userId: number, view: string = 'month'): Promise<{ view: string; items: RoadmapItem[] }> => {
+        const res = await client.get('/roadmap/global', { params: { user_id: userId, view } });
+        return res.data;
+    },
+
+    // Shortcuts
+    getShortcuts: async (): Promise<Shortcut[]> => {
+        const res = await client.get('/shortcuts');
+        return res.data.shortcuts || [];
+    },
+    createShortcut: async (data: { name: string; url: string; icon_text?: string; icon_color?: string; order?: number; open_new_tab?: boolean }, userId: number): Promise<Shortcut> => {
+        const res = await client.post(`/shortcuts?user_id=${userId}`, data);
+        return res.data;
+    },
+    updateShortcut: async (id: number, data: Partial<Shortcut>, userId: number): Promise<Shortcut> => {
+        const res = await client.patch(`/shortcuts/${id}?user_id=${userId}`, data);
+        return res.data;
+    },
+    deleteShortcut: async (id: number, userId: number): Promise<void> => {
+        await client.delete(`/shortcuts/${id}?user_id=${userId}`);
+    },
+
+    // Admin
+    getAdminUsers: async (userId: number): Promise<User[]> => {
+        const res = await client.get(`/admin/users?user_id=${userId}`);
+        return res.data.users || [];
+    },
+    toggleUserActive: async (targetId: number, userId: number): Promise<User> => {
+        const res = await client.patch(`/admin/users/${targetId}/toggle-active?user_id=${userId}`);
+        return res.data;
+    },
+
+    // Groups
+    getGroups: async (userId: number): Promise<Group[]> => {
+        const res = await client.get(`/admin/groups?user_id=${userId}`);
+        return res.data.groups || [];
+    },
+    createGroup: async (data: { name: string }, userId: number): Promise<Group> => {
+        const res = await client.post(`/admin/groups?user_id=${userId}`, data);
+        return res.data;
+    },
+    deleteGroup: async (groupId: number, userId: number): Promise<void> => {
+        await client.delete(`/admin/groups/${groupId}?user_id=${userId}`);
+    },
+    applyGroup: async (groupId: number, userId: number): Promise<any> => {
+        const res = await client.post(`/admin/groups/${groupId}/apply?user_id=${userId}`);
         return res.data;
     },
 };

@@ -8,6 +8,8 @@ import HomePage from './pages/HomePage';
 import ProjectPage from './pages/ProjectPage';
 import TrashPage from './pages/TrashPage';
 import AiSettingsPage from './pages/AiSettingsPage';
+import GlobalRoadmapPage from './pages/GlobalRoadmapPage';
+import AdminPage from './pages/AdminPage';
 import { MainLayout } from './layouts/MainLayout';
 import TaskDrawer from './components/TaskDrawer';
 
@@ -119,6 +121,8 @@ const App: React.FC = () => {
                                 <Route path="/project/:id" element={<ProjectPage />} />
                                 <Route path="/trash" element={<TrashPage />} />
                                 <Route path="/ai-settings" element={<AiSettingsPage />} />
+                                <Route path="/roadmap" element={<GlobalRoadmapPage />} />
+                                <Route path="/admin" element={<AdminPage />} />
                             </Routes>
                         </MainLayout>
                         <TaskDrawer />

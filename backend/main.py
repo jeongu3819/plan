@@ -136,6 +136,8 @@ DEFAULT_DATA = {
     "project_members": [{"project_id": 1, "user_id": 1, "role": "owner"}],
     "project_files": [],
     "join_requests": [],
+    "groups": [],
+    "shortcuts": [],
 }
 
 def load_data() -> Dict[str, Any]:
@@ -194,6 +196,22 @@ def next_id(items: list) -> int:
     return max(item["id"] for item in items) + 1
 
 # ─── Permission Helpers ───
+
+def get_user_project_ids(data: dict, user_id: int) -> set:
+    """Return set of project IDs the user has access to (member or owner)."""
+    members = data.get("project_members", [])
+    pids = set(m["project_id"] for m in members if m["user_id"] == user_id)
+    for p in data.get("projects", []):
+        if p.get("owner_id") == user_id:
+            pids.add(p["id"])
+    return pids
+
+def require_admin(data: dict, user_id: int):
+    """Raise 403 if user is not admin."""
+    user = next((u for u in data.get("users", []) if u["id"] == user_id), None)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
 
 def check_project_access(data: dict, project_id: int, user_id: int):
     """Check if user has access to project. Raises 403 if not."""
@@ -1046,9 +1064,16 @@ def get_roadmap(
 @app.get("/api/stats")
 def get_stats(user_id: Optional[int] = None):
     data = load_data()
-    tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
+    all_tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
     projects = data.get("projects", [])
-    users = data.get("users", [])
+
+    # Filter by user's authorized projects
+    if user_id:
+        authorized_pids = get_user_project_ids(data, user_id)
+        tasks = [t for t in all_tasks if t.get("project_id") in authorized_pids]
+        projects = [p for p in projects if p["id"] in authorized_pids]
+    else:
+        tasks = all_tasks
 
     total = len(tasks)
     in_progress = len([t for t in tasks if t.get("status") == "in_progress"])
@@ -1056,7 +1081,7 @@ def get_stats(user_id: Optional[int] = None):
     todo = len([t for t in tasks if t.get("status") == "todo"])
     hold = len([t for t in tasks if t.get("status") == "hold"])
 
-    # Per-project stats
+    # Per-project stats (only authorized)
     project_stats = []
     for p in projects:
         p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
@@ -1430,6 +1455,254 @@ def generate_report(body: ReportRequest):
         raise HTTPException(status_code=502, detail=f"AI API returned error {e.response.status_code}: {e.response.text[:300]}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+# ─── Global Roadmap (all authorized projects) ───
+
+@app.get("/api/roadmap/global")
+def get_global_roadmap(user_id: int = Query(...), view: str = Query(default="month")):
+    data = load_data()
+    today_str = date.today().isoformat()
+    authorized_pids = get_user_project_ids(data, user_id)
+    projects = [p for p in data.get("projects", []) if p["id"] in authorized_pids]
+    all_tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
+    sub_projects = data.get("sub_projects", [])
+    items = []
+
+    for project in projects:
+        pid = project["id"]
+        p_tasks = [t for t in all_tasks if t.get("project_id") == pid]
+        p_subs = [s for s in sub_projects if s.get("project_id") == pid]
+
+        active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
+        total = len(active_tasks)
+        done = len([t for t in active_tasks if t.get("status") == "done"])
+        if total > 0:
+            progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
+            project_progress = round(progress_sum / total)
+        else:
+            project_progress = 0
+
+        start_dates = [t["start_date"] for t in p_tasks if t.get("start_date")]
+        due_dates = [t["due_date"] for t in p_tasks if t.get("due_date")]
+
+        project_item = {
+            "id": f"project-{pid}",
+            "type": "project",
+            "name": project.get("name", ""),
+            "start_date": min(start_dates) if start_dates else None,
+            "due_date": max(due_dates) if due_dates else None,
+            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
+            "progress": project_progress,
+            "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
+            "children": [],
+        }
+
+        for sp in p_subs:
+            sp_tasks_filtered = [t for t in p_tasks if t.get("sub_project_id") == sp["id"]]
+            sp_all = [t for t in p_tasks if t.get("sub_project_id") == sp["id"]]
+            sp_active = [t for t in sp_all if t.get("status") != "hold"]
+            sp_total = len(sp_active)
+            sp_done = len([t for t in sp_active if t.get("status") == "done"])
+            if sp_total > 0:
+                sp_prog = round(sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in sp_active) / sp_total)
+            else:
+                sp_prog = 0
+            sp_starts = [t["start_date"] for t in sp_all if t.get("start_date")]
+            sp_dues = [t["due_date"] for t in sp_all if t.get("due_date")]
+            sp_item = {
+                "id": f"subproject-{sp['id']}",
+                "type": "subproject",
+                "name": sp.get("name", ""),
+                "start_date": min(sp_starts) if sp_starts else None,
+                "due_date": max(sp_dues) if sp_dues else None,
+                "status": "done" if sp_prog == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
+                "progress": sp_prog,
+                "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_prog < 100),
+                "children": [],
+            }
+            for t in sp_tasks_filtered:
+                t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
+                sp_item["children"].append({
+                    "id": f"task-{t['id']}", "type": "task", "name": t.get("title", ""),
+                    "start_date": t.get("start_date"), "due_date": t.get("due_date"),
+                    "status": t.get("status", "todo"), "progress": t.get("progress", 0),
+                    "overdue": t_overdue, "assignee_ids": t.get("assignee_ids", []),
+                })
+            project_item["children"].append(sp_item)
+
+        root_tasks = [t for t in p_tasks if not t.get("sub_project_id")]
+        for t in root_tasks:
+            t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
+            project_item["children"].append({
+                "id": f"task-{t['id']}", "type": "task", "name": t.get("title", ""),
+                "start_date": t.get("start_date"), "due_date": t.get("due_date"),
+                "status": t.get("status", "todo"), "progress": t.get("progress", 0),
+                "overdue": t_overdue, "assignee_ids": t.get("assignee_ids", []),
+            })
+
+        items.append(project_item)
+
+    return {"view": view, "items": items}
+
+
+# ─── Admin Endpoints ───
+
+@app.get("/api/admin/users")
+def admin_get_users(user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    return {"users": data.get("users", [])}
+
+@app.patch("/api/admin/users/{target_id}/toggle-active")
+def admin_toggle_user_active(target_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    users = data.get("users", [])
+    user = next((u for u in users if u["id"] == target_id), None)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user["is_active"] = not user.get("is_active", True)
+    save_data(data)
+    return user
+
+
+# ─── Group Endpoints ───
+
+class GroupCreate(BaseModel):
+    name: str
+
+@app.get("/api/admin/groups")
+def admin_get_groups(user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    users = data.get("users", [])
+    # Enrich each group with the count of matching users
+    result = []
+    for g in groups:
+        matched = [u for u in users if u.get("group_name") == g["name"]]
+        result.append({**g, "matched_count": len(matched)})
+    return {"groups": result}
+
+@app.post("/api/admin/groups")
+def admin_create_group(group: GroupCreate, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    # Check duplicate group name
+    if any(g["name"] == group.name for g in groups):
+        raise HTTPException(status_code=400, detail=f"그룹명 '{group.name}'이(가) 이미 등록되어 있습니다.")
+    new_group = {
+        "id": next_id(groups),
+        "name": group.name,
+        "created_at": datetime.now().isoformat(),
+    }
+    groups.append(new_group)
+    data["groups"] = groups
+    save_data(data)
+    # Return with matched_count
+    users = data.get("users", [])
+    matched = [u for u in users if u.get("group_name") == group.name]
+    return {**new_group, "matched_count": len(matched)}
+
+@app.delete("/api/admin/groups/{group_id}")
+def admin_delete_group(group_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    data["groups"] = [g for g in groups if g["id"] != group_id]
+    save_data(data)
+    return {"message": "Group deleted"}
+
+@app.post("/api/admin/groups/{group_id}/apply")
+def admin_apply_group(group_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    group = next((g for g in groups if g["id"] == group_id), None)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    users = data.get("users", [])
+    activated = 0
+    for user in users:
+        if user.get("group_name") == group["name"]:
+            if not user.get("is_active", True):
+                user["is_active"] = True
+                activated += 1
+    save_data(data)
+    total_matched = sum(1 for u in users if u.get("group_name") == group["name"])
+    return {"message": f"Activated {activated} users (total matched: {total_matched})", "activated": activated, "total_matched": total_matched}
+
+
+
+# ─── Shortcut Endpoints ───
+
+class ShortcutCreate(BaseModel):
+    name: str
+    url: str
+    icon_text: Optional[str] = None
+    icon_color: Optional[str] = "#2955FF"
+    order: Optional[int] = 0
+    open_new_tab: Optional[bool] = True
+
+class ShortcutUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    icon_text: Optional[str] = None
+    icon_color: Optional[str] = None
+    order: Optional[int] = None
+    open_new_tab: Optional[bool] = None
+    active: Optional[bool] = None
+
+@app.get("/api/shortcuts")
+def get_shortcuts():
+    data = load_data()
+    shortcuts = data.get("shortcuts", [])
+    return {"shortcuts": shortcuts}
+
+@app.post("/api/shortcuts")
+def create_shortcut(shortcut: ShortcutCreate, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    shortcuts = data.get("shortcuts", [])
+    new_sc = {
+        "id": next_id(shortcuts),
+        "name": shortcut.name,
+        "url": shortcut.url,
+        "icon_text": shortcut.icon_text or shortcut.name[0].upper(),
+        "icon_color": shortcut.icon_color,
+        "order": shortcut.order if shortcut.order else len(shortcuts),
+        "open_new_tab": shortcut.open_new_tab,
+        "active": True,
+        "created_at": datetime.now().isoformat(),
+    }
+    shortcuts.append(new_sc)
+    data["shortcuts"] = shortcuts
+    save_data(data)
+    return new_sc
+
+@app.patch("/api/shortcuts/{shortcut_id}")
+def update_shortcut(shortcut_id: int, updates: ShortcutUpdate, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    shortcuts = data.get("shortcuts", [])
+    sc = next((s for s in shortcuts if s["id"] == shortcut_id), None)
+    if not sc:
+        raise HTTPException(status_code=404, detail="Shortcut not found")
+    for key, val in updates.dict(exclude_unset=True).items():
+        sc[key] = val
+    save_data(data)
+    return sc
+
+@app.delete("/api/shortcuts/{shortcut_id}")
+def delete_shortcut(shortcut_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    shortcuts = data.get("shortcuts", [])
+    data["shortcuts"] = [s for s in shortcuts if s["id"] != shortcut_id]
+    save_data(data)
+    return {"message": "Shortcut deleted"}
+
 
 # Initialize stub data if file doesn't exist
 if not os.path.exists(DATA_FILE):

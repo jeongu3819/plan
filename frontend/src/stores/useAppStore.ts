@@ -27,6 +27,10 @@ interface AppState {
     // Theme
     bgColor: string;
     setBgColor: (color: string) => void;
+
+    // Sidebar collapse
+    projectsCollapsed: boolean;
+    toggleProjectsCollapsed: () => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -60,10 +64,14 @@ export const useAppStore = create<AppState>()(
             // Theme
             bgColor: '#F3F4F6',
             setBgColor: (color) => set({ bgColor: color }),
+
+            // Sidebar collapse
+            projectsCollapsed: false,
+            toggleProjectsCollapsed: () => set((state) => ({ projectsCollapsed: !state.projectsCollapsed })),
         }),
         {
             name: 'antigravity-app-store',
-            partialize: (state) => ({ currentUserId: state.currentUserId, bgColor: state.bgColor }),
+            partialize: (state) => ({ currentUserId: state.currentUserId, bgColor: state.bgColor, projectsCollapsed: state.projectsCollapsed }),
         }
     )
 );
