@@ -89,13 +89,13 @@ const KOREAN_HOLIDAYS: Record<string, string> = {
 
 const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
     const [currentMonth, setCurrentMonth] = useState(new Date());
+    const openDrawer = useAppStore((state) => state.openDrawer);
+    const currentUserId = useAppStore((state) => state.currentUserId);
 
     const { data: tasks, isLoading } = useQuery({
-        queryKey: ['tasks', projectId],
-        queryFn: () => api.getTasks(projectId),
+        queryKey: ['tasks', projectId, currentUserId],
+        queryFn: () => api.getTasks(projectId, currentUserId),
     });
-
-    const openDrawer = useAppStore((state) => state.openDrawer);
 
     const monthStart = startOfMonth(currentMonth);
     const monthEnd = endOfMonth(currentMonth);

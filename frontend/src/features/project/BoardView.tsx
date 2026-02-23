@@ -84,13 +84,14 @@ const DroppableColumn = ({ id, children }: { id: string; children: React.ReactNo
 };
 
 const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
-    const { data: tasks, isLoading } = useQuery({
-        queryKey: ['tasks', projectId],
-        queryFn: () => api.getTasks(projectId),
-    });
-
     const queryClient = useQueryClient();
     const openDrawer = useAppStore((state) => state.openDrawer);
+    const currentUserId = useAppStore((state) => state.currentUserId);
+
+    const { data: tasks, isLoading } = useQuery({
+        queryKey: ['tasks', projectId, currentUserId],
+        queryFn: () => api.getTasks(projectId, currentUserId),
+    });
     const [activeTask, setActiveTask] = React.useState<Task | null>(null);
 
     const sensors = useSensors(

@@ -4,7 +4,11 @@ import {
     ListItemText, Typography, Avatar, Divider,
     Dialog, DialogTitle, DialogContent, DialogActions,
     TextField, Button, IconButton, Menu, MenuItem, Tooltip,
+    Switch, FormControlLabel, Collapse, Select, FormControl, InputLabel,
+    Checkbox,
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban';
 import TimelineIcon from '@mui/icons-material/Timeline';
@@ -53,8 +57,8 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         return { sidebar, sidebarText, sidebarMuted, sidebarHover, sidebarDivider };
     }, [bgColor]);
 
-    // Fetch projects & users
-    const { data: projects = [] } = useQuery<Project[]>({ queryKey: ['projects'], queryFn: () => api.getProjects() });
+    // Fetch projects & users (scoped by currentUserId)
+    const { data: projects = [] } = useQuery<Project[]>({ queryKey: ['projects', currentUserId], queryFn: () => api.getProjects(currentUserId) });
     const { data: users = [] } = useQuery<User[]>({ queryKey: ['users'], queryFn: () => api.getUsers() });
 
     const currentUser = users.find(u => u.id === currentUserId) || users[0];
@@ -62,6 +66,18 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     // Dialogs & menus
     const [projectDialogOpen, setProjectDialogOpen] = useState(false);
     const [newProjectName, setNewProjectName] = useState('');
+    const [newProjectDescription, setNewProjectDescription] = useState('');
+    const [requireApproval, setRequireApproval] = useState(false);
+    const [advancedOpen, setAdvancedOpen] = useState(false);
+    const [permissions, setPermissions] = useState({
+        post_write: 'all',
+        post_edit: 'all',
+        post_view: 'all',
+        comment_write: 'all',
+        file_view: 'all',
+        file_download: 'all',
+    });
+    const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([]);
     const [userDialogOpen, setUserDialogOpen] = useState(false);
     const [newUsername, setNewUsername] = useState('');
     const [newLoginId, setNewLoginId] = useState('');
@@ -73,12 +89,24 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
 
     // Mutations
     const createProjectMutation = useMutation({
-        mutationFn: (name: string) => api.createProject({ name, owner_id: currentUserId }),
+        mutationFn: () => api.createProject({
+            name: newProjectName.trim(),
+            description: newProjectDescription.trim() || undefined,
+            owner_id: currentUserId,
+            require_approval: requireApproval,
+            permissions,
+            member_ids: selectedMemberIds,
+        }),
         onSuccess: (newProject) => {
             queryClient.invalidateQueries({ queryKey: ['projects'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
             setProjectDialogOpen(false);
             setNewProjectName('');
+            setNewProjectDescription('');
+            setRequireApproval(false);
+            setAdvancedOpen(false);
+            setSelectedMemberIds([]);
+            setPermissions({ post_write: 'all', post_edit: 'all', post_view: 'all', comment_write: 'all', file_view: 'all', file_download: 'all' });
             if (newProject?.id) navigate(`/project/${newProject.id}`);
         },
         onError: (err: any) => {
@@ -311,7 +339,12 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 {users.map(user => (
                     <MenuItem
                         key={user.id}
-                        onClick={() => { setCurrentUserId(user.id); setUserMenuAnchor(null); }}
+                        onClick={() => {
+                            setCurrentUserId(user.id);
+                            setUserMenuAnchor(null);
+                            // Clear all cached data so permission-filtered queries re-fetch
+                            queryClient.removeQueries();
+                        }}
                         selected={user.id === currentUserId}
                         sx={{ fontSize: '0.85rem', py: 1 }}
                     >
@@ -330,15 +363,156 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 </MenuItem>
             </Menu>
 
-            {/* ─── New Project Dialog ─── */}
-            <Dialog open={projectDialogOpen} onClose={() => setProjectDialogOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
-                <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>New Project</DialogTitle>
+            {/* ─── New Project Dialog (Enhanced) ─── */}
+            <Dialog open={projectDialogOpen} onClose={() => setProjectDialogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+                <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>새 프로젝트</DialogTitle>
                 <DialogContent>
-                    <TextField autoFocus fullWidth label="Project Name" placeholder="e.g. Marketing Campaign" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} sx={{ mt: 1 }} onKeyDown={(e) => { if (e.key === 'Enter' && newProjectName.trim()) createProjectMutation.mutate(newProjectName.trim()); }} />
+                    <TextField
+                        autoFocus fullWidth label="프로젝트 제목 *" placeholder="예: 마케팅 캠페인"
+                        value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
+                        sx={{ mt: 1, mb: 2 }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && newProjectName.trim()) createProjectMutation.mutate(); }}
+                    />
+                    <TextField
+                        fullWidth label="프로젝트 설명" placeholder="프로젝트에 대한 간단한 설명을 입력하세요"
+                        multiline rows={2}
+                        value={newProjectDescription} onChange={(e) => setNewProjectDescription(e.target.value)}
+                        sx={{ mb: 2 }}
+                    />
+                    <FormControlLabel
+                        control={<Switch checked={requireApproval} onChange={(e) => setRequireApproval(e.target.checked)} color="primary" />}
+                        label={
+                            <Box>
+                                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>관리자 승인 후 참여 가능</Typography>
+                                <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>
+                                    {requireApproval ? 'ON: 참여 요청 후 관리자가 승인해야 합니다' : 'OFF: 즉시 참여 가능'}
+                                </Typography>
+                            </Box>
+                        }
+                        sx={{ mb: 1, ml: 0 }}
+                    />
+
+                    {/* Member Selection */}
+                    <Box sx={{ mb: 2 }}>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.05em', mb: 0.5, display: 'block' }}>
+                            프로젝트 담당자 선택
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem', mb: 1, display: 'block' }}>
+                            선택된 사용자만 이 프로젝트를 조회할 수 있습니다. (생성자는 자동 포함)
+                        </Typography>
+                        <Box sx={{ maxHeight: 160, overflowY: 'auto', border: '1px solid #E5E7EB', borderRadius: 2, p: 0.5 }}>
+                            {users.filter(u => u.id !== currentUserId).map(user => (
+                                <Box
+                                    key={user.id}
+                                    onClick={() => setSelectedMemberIds(prev =>
+                                        prev.includes(user.id) ? prev.filter(id => id !== user.id) : [...prev, user.id]
+                                    )}
+                                    sx={{
+                                        display: 'flex', alignItems: 'center', gap: 1, py: 0.5, px: 1,
+                                        borderRadius: 1.5, cursor: 'pointer',
+                                        '&:hover': { bgcolor: '#F3F4F6' },
+                                        bgcolor: selectedMemberIds.includes(user.id) ? '#EEF2FF' : 'transparent',
+                                    }}
+                                >
+                                    <Checkbox size="small" checked={selectedMemberIds.includes(user.id)} sx={{ p: 0.3 }} />
+                                    <Avatar sx={{ width: 22, height: 22, fontSize: '0.55rem', bgcolor: user.avatar_color || '#2955FF' }}>
+                                        {user.username.charAt(0).toUpperCase()}
+                                    </Avatar>
+                                    <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>{user.username}</Typography>
+                                    <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem', ml: 'auto' }}>{user.role || 'member'}</Typography>
+                                </Box>
+                            ))}
+                            {users.filter(u => u.id !== currentUserId).length === 0 && (
+                                <Typography variant="body2" sx={{ color: '#9CA3AF', fontSize: '0.8rem', textAlign: 'center', py: 2 }}>
+                                    추가할 수 있는 사용자가 없습니다
+                                </Typography>
+                            )}
+                        </Box>
+                    </Box>
+
+                    <Divider sx={{ my: 1.5 }} />
+
+                    {/* Collapsible Advanced Settings */}
+                    <Box
+                        onClick={() => setAdvancedOpen(!advancedOpen)}
+                        sx={{ display: 'flex', alignItems: 'center', cursor: 'pointer', py: 1, '&:hover': { color: '#2955FF' }, transition: 'color 0.15s' }}
+                    >
+                        <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem', flexGrow: 1 }}>추가 설정</Typography>
+                        {advancedOpen ? <ExpandLessIcon sx={{ fontSize: '1.2rem' }} /> : <ExpandMoreIcon sx={{ fontSize: '1.2rem' }} />}
+                    </Box>
+
+                    <Collapse in={advancedOpen}>
+                        <Box sx={{ pl: 1, pt: 1 }}>
+                            {/* Post Permissions */}
+                            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.05em', mb: 1, display: 'block' }}>
+                                게시글 권한
+                            </Typography>
+                            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5, mb: 2 }}>
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel sx={{ fontSize: '0.8rem' }}>작성 권한</InputLabel>
+                                    <Select native value={permissions.post_write} onChange={(e) => setPermissions({ ...permissions, post_write: e.target.value as string })} label="작성 권한" sx={{ fontSize: '0.8rem' }}>
+                                        <option value="all">전체</option>
+                                        <option value="admin">관리자</option>
+                                        <option value="members_only">프로젝트 담당자들만</option>
+                                    </Select>
+                                </FormControl>
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel sx={{ fontSize: '0.8rem' }}>수정 권한</InputLabel>
+                                    <Select native value={permissions.post_edit} onChange={(e) => setPermissions({ ...permissions, post_edit: e.target.value as string })} label="수정 권한" sx={{ fontSize: '0.8rem' }}>
+                                        <option value="all">전체</option>
+                                        <option value="admin">관리자</option>
+                                        <option value="members_only">프로젝트 담당자들만</option>
+                                    </Select>
+                                </FormControl>
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel sx={{ fontSize: '0.8rem' }}>조회 권한</InputLabel>
+                                    <Select native value={permissions.post_view} onChange={(e) => setPermissions({ ...permissions, post_view: e.target.value as string })} label="조회 권한" sx={{ fontSize: '0.8rem' }}>
+                                        <option value="all">전체</option>
+                                        <option value="members_only">프로젝트 담당자들만</option>
+                                    </Select>
+                                </FormControl>
+                            </Box>
+
+                            {/* Comment Permissions */}
+                            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.05em', mb: 1, display: 'block' }}>
+                                댓글 권한
+                            </Typography>
+                            <Box sx={{ mb: 2 }}>
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel sx={{ fontSize: '0.8rem' }}>댓글 작성 권한</InputLabel>
+                                    <Select native value={permissions.comment_write} onChange={(e) => setPermissions({ ...permissions, comment_write: e.target.value as string })} label="댓글 작성 권한" sx={{ fontSize: '0.8rem' }}>
+                                        <option value="all">전체</option>
+                                        <option value="members_only">프로젝트 담당자들만</option>
+                                    </Select>
+                                </FormControl>
+                            </Box>
+
+                            {/* File Permissions */}
+                            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.05em', mb: 1, display: 'block' }}>
+                                파일 권한
+                            </Typography>
+                            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel sx={{ fontSize: '0.8rem' }}>파일 조회 권한</InputLabel>
+                                    <Select native value={permissions.file_view} onChange={(e) => setPermissions({ ...permissions, file_view: e.target.value as string })} label="파일 조회 권한" sx={{ fontSize: '0.8rem' }}>
+                                        <option value="all">전체</option>
+                                        <option value="members_only">프로젝트 담당자들만</option>
+                                    </Select>
+                                </FormControl>
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel sx={{ fontSize: '0.8rem' }}>파일 다운로드 권한</InputLabel>
+                                    <Select native value={permissions.file_download} onChange={(e) => setPermissions({ ...permissions, file_download: e.target.value as string })} label="파일 다운로드 권한" sx={{ fontSize: '0.8rem' }}>
+                                        <option value="all">전체</option>
+                                        <option value="members_only">프로젝트 담당자들만</option>
+                                    </Select>
+                                </FormControl>
+                            </Box>
+                        </Box>
+                    </Collapse>
                 </DialogContent>
                 <DialogActions sx={{ px: 3, pb: 2 }}>
-                    <Button onClick={() => setProjectDialogOpen(false)} sx={{ color: '#6B7280' }}>Cancel</Button>
-                    <Button variant="contained" onClick={() => createProjectMutation.mutate(newProjectName.trim())} disabled={!newProjectName.trim()} sx={{ bgcolor: '#2955FF' }}>Create</Button>
+                    <Button onClick={() => setProjectDialogOpen(false)} sx={{ color: '#6B7280' }}>취소</Button>
+                    <Button variant="contained" onClick={() => createProjectMutation.mutate()} disabled={!newProjectName.trim()} sx={{ bgcolor: '#2955FF' }}>생성</Button>
                 </DialogActions>
             </Dialog>
 

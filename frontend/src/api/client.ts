@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Task, Note, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge } from '../types';
+import { Task, Note, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge, ProjectFile } from '../types';
 
 const API_URL = 'http://localhost:8000/api';
 
@@ -39,6 +39,8 @@ export interface Project {
     owner_id?: number;
     visibility?: string;
     created_at?: string;
+    require_approval?: boolean;
+    permissions?: Record<string, string>;
 }
 
 export interface User {
@@ -65,11 +67,12 @@ export const api = {
     },
 
     // Projects
-    getProjects: async (): Promise<Project[]> => {
-        const res = await client.get('/projects');
+    getProjects: async (userId?: number): Promise<Project[]> => {
+        const params = userId ? { user_id: userId } : {};
+        const res = await client.get('/projects', { params });
         return res.data.projects || [];
     },
-    createProject: async (project: { name: string; description?: string; owner_id?: number }): Promise<Project> => {
+    createProject: async (project: { name: string; description?: string; owner_id?: number; require_approval?: boolean; permissions?: Record<string, string>; member_ids?: number[] }): Promise<Project> => {
         const res = await client.post('/projects', project);
         return res.data;
     },
@@ -104,13 +107,13 @@ export const api = {
     },
 
     // Tasks
-    getTasks: async (projectId?: number): Promise<Task[]> => {
-        const res = await client.get('/data');
+    getTasks: async (projectId?: number, userId?: number): Promise<Task[]> => {
+        const params: Record<string, any> = {};
+        if (projectId) params.project_id = projectId;
+        if (userId) params.user_id = userId;
+        const res = await client.get('/tasks', { params });
         let tasks: Task[] = res.data.tasks || [];
         tasks = tasks.filter(t => !t.archived_at);
-        if (projectId) {
-            tasks = tasks.filter(t => t.project_id === projectId);
-        }
         return tasks;
     },
     createTask: async (task: Omit<Task, 'id'>): Promise<Task> => {
@@ -210,6 +213,41 @@ export const api = {
     // Report
     generateReport: async (projectId: number): Promise<{ report: string; model: string }> => {
         const res = await client.post('/report/generate', { project_id: projectId });
+        return res.data;
+    },
+
+    // Project Files
+    getProjectFiles: async (projectId: number, userId?: number): Promise<ProjectFile[]> => {
+        const params = userId ? { user_id: userId } : {};
+        const res = await client.get(`/projects/${projectId}/files`, { params });
+        return res.data.files || [];
+    },
+    uploadProjectFile: async (projectId: number, file: File, userId: number = 1): Promise<ProjectFile> => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await client.post(`/projects/${projectId}/files?user_id=${userId}`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        return res.data;
+    },
+    downloadProjectFile: (projectId: number, fileId: number): string => {
+        return `${API_URL}/projects/${projectId}/files/${fileId}/download`;
+    },
+    deleteProjectFile: async (projectId: number, fileId: number): Promise<void> => {
+        await client.delete(`/projects/${projectId}/files/${fileId}`);
+    },
+
+    // Join Requests
+    requestJoin: async (projectId: number, userId: number): Promise<any> => {
+        const res = await client.post(`/projects/${projectId}/join-request?user_id=${userId}`);
+        return res.data;
+    },
+    getJoinRequests: async (projectId: number): Promise<any[]> => {
+        const res = await client.get(`/projects/${projectId}/join-requests`);
+        return res.data.join_requests || [];
+    },
+    approveJoinRequest: async (projectId: number, userId: number, action: string): Promise<any> => {
+        const res = await client.post(`/projects/${projectId}/join-requests/approve`, { user_id: userId, action });
         return res.data;
     },
 };
