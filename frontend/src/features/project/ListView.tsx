@@ -29,12 +29,13 @@ const priorityConfig: Record<string, { label: string; color: string }> = {
 };
 
 const ListView: React.FC<ListViewProps> = ({ projectId }) => {
-    const { data: tasks, isLoading } = useQuery({
-        queryKey: ['tasks', projectId],
-        queryFn: () => api.getTasks(projectId),
-    });
-
     const openDrawer = useAppStore((state) => state.openDrawer);
+    const currentUserId = useAppStore((state) => state.currentUserId);
+
+    const { data: tasks, isLoading } = useQuery({
+        queryKey: ['tasks', projectId, currentUserId],
+        queryFn: () => api.getTasks(projectId, currentUserId),
+    });
 
     if (isLoading) return <Typography>Loading...</Typography>;
 

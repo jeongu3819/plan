@@ -1,0 +1,19 @@
+가상환경 만들기 
+python -m venv plan
+plan\Scripts\activate
+
+txt 파일 내 라이브러리 설치하기
+pip install -r requirements.txt
+
+실행방법
+uvicorn main:app --reload
+
+forntend npm 설치
+npm install
+
+실행방법
+npm run dev
+
+
+
+

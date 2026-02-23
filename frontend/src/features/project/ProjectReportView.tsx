@@ -291,6 +291,7 @@ interface ReportData {
         tasks: TaskDetail[];
         sub_projects: { name: string; description: string }[];
         members: string[];
+        project_files?: { id: number; filename: string; size: number; created_at: string }[];
     };
 }
 
@@ -935,6 +936,55 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
 
                             {/* ✅ Executive Summary 블록으로 렌더 */}
                             <ExecutiveSummaryBlock projectName={s.project.name} text={sections.next_steps} />
+                        </Paper>
+                    )}
+
+                    {/* ─── Project Files Section ─── */}
+                    {s.project_files && s.project_files.length > 0 && (
+                        <Paper
+                            sx={{
+                                p: 3,
+                                mb: 2.5,
+                                borderRadius: 3,
+                                border: "1px solid #E5E7EB",
+                                boxShadow: "0 1px 8px rgba(0,0,0,0.04)",
+                            }}
+                        >
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+                                <AttachFileIcon sx={{ color: "#14B8A6", fontSize: "1.2rem" }} />
+                                <Typography variant="h6" sx={{ fontWeight: 700, color: "#1A1D29", fontSize: "1rem" }}>
+                                    첨부파일 참고자료
+                                </Typography>
+                                <Chip
+                                    label={`${s.project_files.length}개`}
+                                    size="small"
+                                    sx={{ bgcolor: "#F0FDFA", color: "#14B8A6", fontWeight: 700, fontSize: "0.7rem", height: 22 }}
+                                />
+                            </Box>
+                            <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                                {s.project_files.map((pf) => (
+                                    <Box
+                                        key={pf.id}
+                                        sx={{
+                                            display: "flex", alignItems: "center", gap: 1.5,
+                                            p: 1.5, borderRadius: 2, bgcolor: "#F9FAFB", border: "1px solid #F3F4F6",
+                                        }}
+                                    >
+                                        <AttachFileIcon sx={{ color: "#9CA3AF", fontSize: "1rem" }} />
+                                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                            <Typography variant="body2" sx={{ fontWeight: 600, fontSize: "0.8rem", color: "#374151" }} noWrap>
+                                                {pf.filename}
+                                            </Typography>
+                                            <Typography variant="caption" sx={{ color: "#9CA3AF", fontSize: "0.7rem" }}>
+                                                {(pf.size / 1024).toFixed(1)} KB · {pf.created_at ? new Date(pf.created_at).toLocaleDateString('ko-KR') : ''}
+                                            </Typography>
+                                        </Box>
+                                    </Box>
+                                ))}
+                            </Box>
+                            <Typography variant="body2" sx={{ color: "#6B7280", fontSize: "0.8rem", mt: 1.5, fontStyle: "italic" }}>
+                                관련 내용을 확인하려면 Files 탭에서 첨부파일 목록을 클릭하세요.
+                            </Typography>
                         </Paper>
                     )}
                 </Box>

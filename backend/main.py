@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File as FastAPIFile
+from fastapi.responses import FileResponse
+import shutil
+import uuid
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import json
@@ -49,16 +52,31 @@ class TaskUpdate(BaseModel):
     sub_project_id: Optional[int] = None
     progress: Optional[int] = None
 
+# Default permissions for new projects
+DEFAULT_PERMISSIONS = {
+    "post_write": "all",
+    "post_edit": "all",
+    "post_view": "all",
+    "comment_write": "all",
+    "file_view": "all",
+    "file_download": "all",
+}
+
 class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     owner_id: Optional[int] = 1
     visibility: Optional[str] = "private"
+    require_approval: Optional[bool] = False
+    permissions: Optional[Dict[str, str]] = None
+    member_ids: Optional[List[int]] = None
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     visibility: Optional[str] = None
+    require_approval: Optional[bool] = None
+    permissions: Optional[Dict[str, str]] = None
 
 class UserCreate(BaseModel):
     username: str
@@ -95,10 +113,17 @@ class MemberAdd(BaseModel):
     user_id: int
     role: Optional[str] = "member"
 
+class MemberApproval(BaseModel):
+    user_id: int
+    action: str  # "approve" or "reject"
+
 # ─── Data Helpers ───
 
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 DEFAULT_DATA = {
-    "projects": [{"id": 1, "name": "Demo Project", "created_at": "2026-01-01T00:00:00", "owner_id": 1, "visibility": "private", "description": ""}],
+    "projects": [{"id": 1, "name": "Demo Project", "created_at": "2026-01-01T00:00:00", "owner_id": 1, "visibility": "private", "description": "", "require_approval": False, "permissions": DEFAULT_PERMISSIONS}],
     "users": [
         {"id": 1, "loginid": "admin", "username": "Admin", "role": "admin", "avatar_color": "#2955FF", "is_active": True},
     ],
@@ -109,6 +134,10 @@ DEFAULT_DATA = {
     "notes": [],
     "attachments": [],
     "project_members": [{"project_id": 1, "user_id": 1, "role": "owner"}],
+    "project_files": [],
+    "join_requests": [],
+    "groups": [],
+    "shortcuts": [],
 }
 
 def load_data() -> Dict[str, Any]:
@@ -123,7 +152,7 @@ def load_data() -> Dict[str, Any]:
             if key not in data:
                 data[key] = DEFAULT_DATA[key] if not isinstance(DEFAULT_DATA[key], list) else []
 
-        # Migrate projects: add owner_id, visibility, description
+        # Migrate projects: add owner_id, visibility, description, require_approval, permissions
         for p in data.get("projects", []):
             if "owner_id" not in p:
                 p["owner_id"] = 1
@@ -131,6 +160,10 @@ def load_data() -> Dict[str, Any]:
                 p["visibility"] = "private"
             if "description" not in p:
                 p["description"] = ""
+            if "require_approval" not in p:
+                p["require_approval"] = False
+            if "permissions" not in p:
+                p["permissions"] = dict(DEFAULT_PERMISSIONS)
 
         # Migrate tasks: add sub_project_id, progress
         for t in data.get("tasks", []):
@@ -142,6 +175,12 @@ def load_data() -> Dict[str, Any]:
         # Ensure project_members has at least owner for project 1
         if not data.get("project_members"):
             data["project_members"] = [{"project_id": 1, "user_id": 1, "role": "owner"}]
+
+        # Ensure project_files and join_requests exist
+        if "project_files" not in data:
+            data["project_files"] = []
+        if "join_requests" not in data:
+            data["join_requests"] = []
 
         return data
     except json.JSONDecodeError:
@@ -157,6 +196,22 @@ def next_id(items: list) -> int:
     return max(item["id"] for item in items) + 1
 
 # ─── Permission Helpers ───
+
+def get_user_project_ids(data: dict, user_id: int) -> set:
+    """Return set of project IDs the user has access to (member or owner)."""
+    members = data.get("project_members", [])
+    pids = set(m["project_id"] for m in members if m["user_id"] == user_id)
+    for p in data.get("projects", []):
+        if p.get("owner_id") == user_id:
+            pids.add(p["id"])
+    return pids
+
+def require_admin(data: dict, user_id: int):
+    """Raise 403 if user is not admin."""
+    user = next((u for u in data.get("users", []) if u["id"] == user_id), None)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
 
 def check_project_access(data: dict, project_id: int, user_id: int):
     """Check if user has access to project. Raises 403 if not."""
@@ -187,6 +242,43 @@ def check_project_access(data: dict, project_id: int, user_id: int):
 
     raise HTTPException(status_code=403, detail="Access denied: you are not a member of this project")
 
+
+def check_project_permission(data: dict, project_id: int, user_id: int, permission_key: str):
+    """Check if user has a specific permission on a project. Raises 403 if not."""
+    users = data.get("users", [])
+    user = next((u for u in users if u["id"] == user_id), None)
+    # Admin always passes
+    if user and user.get("role") == "admin":
+        return True
+
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    permissions = project.get("permissions", DEFAULT_PERMISSIONS)
+    perm_value = permissions.get(permission_key, "all")
+
+    if perm_value == "all":
+        return True
+
+    # Check if user is project owner
+    if project.get("owner_id") == user_id:
+        return True
+
+    if perm_value == "admin":
+        if user and user.get("role") == "admin":
+            return True
+        raise HTTPException(status_code=403, detail=f"권한이 없습니다: {permission_key} 은(는) 관리자만 가능합니다")
+
+    if perm_value == "members_only":
+        members = data.get("project_members", [])
+        is_member = any(m["project_id"] == project_id and m["user_id"] == user_id for m in members)
+        if is_member:
+            return True
+        raise HTTPException(status_code=403, detail=f"권한이 없습니다: {permission_key} 은(는) 프로젝트 담당자만 가능합니다")
+
+    return True
+
 # ─── Root ───
 
 @app.get("/")
@@ -194,8 +286,27 @@ def read_root():
     return {"message": "Welcome to Antigravity Schedule Platform API"}
 
 @app.get("/api/data")
-def get_all_data():
-    return load_data()
+def get_all_data(user_id: Optional[int] = None):
+    data = load_data()
+    if user_id:
+        # Filter tasks: only tasks where user is assignee or is member of the project
+        users = data.get("users", [])
+        user = next((u for u in users if u["id"] == user_id), None)
+        is_admin = user and user.get("role") == "admin"
+        if not is_admin:
+            members = data.get("project_members", [])
+            user_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
+            # Also include projects owned by user
+            for p in data.get("projects", []):
+                if p.get("owner_id") == user_id:
+                    user_project_ids.add(p["id"])
+            data["tasks"] = [
+                t for t in data.get("tasks", [])
+                if t.get("project_id") in user_project_ids and (
+                    not t.get("assignee_ids") or user_id in t.get("assignee_ids", [])
+                )
+            ]
+    return data
 
 # ─── User Endpoints ───
 
@@ -272,13 +383,31 @@ def save_user_layout(user_id: int, body: LayoutUpdate):
 # ─── Task Endpoints ───
 
 @app.get("/api/tasks")
-def get_tasks(project_id: Optional[int] = None, assignee_id: Optional[int] = None):
+def get_tasks(project_id: Optional[int] = None, assignee_id: Optional[int] = None, user_id: Optional[int] = None):
     data = load_data()
     tasks = data.get("tasks", [])
     if project_id:
         tasks = [t for t in tasks if t.get("project_id") == project_id]
     if assignee_id:
         tasks = [t for t in tasks if assignee_id in t.get("assignee_ids", [])]
+    # Filter by user permissions: only tasks where user is assignee or task has no assignees
+    if user_id:
+        users = data.get("users", [])
+        user = next((u for u in users if u["id"] == user_id), None)
+        is_admin = user and user.get("role") == "admin"
+        if not is_admin:
+            # Check project membership
+            members = data.get("project_members", [])
+            user_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
+            for p in data.get("projects", []):
+                if p.get("owner_id") == user_id:
+                    user_project_ids.add(p["id"])
+            tasks = [
+                t for t in tasks
+                if t.get("project_id") in user_project_ids and (
+                    not t.get("assignee_ids") or user_id in t.get("assignee_ids", [])
+                )
+            ]
     return {"tasks": tasks}
 
 @app.post("/api/tasks")
@@ -405,12 +534,24 @@ def create_project(project: ProjectCreate):
     new_project["id"] = next_id(projects)
     new_project["created_at"] = datetime.now().isoformat()
 
+    # Set default permissions if not provided
+    if new_project.get("permissions") is None:
+        new_project["permissions"] = dict(DEFAULT_PERMISSIONS)
+
     projects.append(new_project)
     data["projects"] = projects
 
     # Auto-add owner as member
     members = data.get("project_members", [])
     members.append({"project_id": new_project["id"], "user_id": new_project["owner_id"], "role": "owner"})
+
+    # Add additional members from member_ids
+    member_ids = new_project.pop("member_ids", None) or []
+    for mid in member_ids:
+        if mid != new_project["owner_id"]:
+            if not any(m["project_id"] == new_project["id"] and m["user_id"] == mid for m in members):
+                members.append({"project_id": new_project["id"], "user_id": mid, "role": "member"})
+
     data["project_members"] = members
 
     save_data(data)
@@ -473,6 +614,25 @@ def add_project_member(project_id: int, member: MemberAdd):
     if any(m["project_id"] == project_id and m["user_id"] == member.user_id for m in members):
         raise HTTPException(status_code=400, detail="User is already a member")
 
+    # Check if project requires approval
+    if project.get("require_approval", False):
+        join_requests = data.get("join_requests", [])
+        # Check if already requested
+        if any(jr["project_id"] == project_id and jr["user_id"] == member.user_id and jr["status"] == "pending" for jr in join_requests):
+            raise HTTPException(status_code=400, detail="이미 참여 요청이 있습니다")
+        new_request = {
+            "id": next_id(join_requests) if join_requests else 1,
+            "project_id": project_id,
+            "user_id": member.user_id,
+            "role": member.role,
+            "status": "pending",
+            "created_at": datetime.now().isoformat(),
+        }
+        join_requests.append(new_request)
+        data["join_requests"] = join_requests
+        save_data(data)
+        return {"message": "참여 요청이 등록되었습니다. 관리자 승인 후 참여 가능합니다.", "status": "pending"}
+
     members.append({"project_id": project_id, "user_id": member.user_id, "role": member.role})
     data["project_members"] = members
     save_data(data)
@@ -485,6 +645,176 @@ def remove_project_member(project_id: int, user_id: int):
     data["project_members"] = [m for m in members if not (m["project_id"] == project_id and m["user_id"] == user_id)]
     save_data(data)
     return {"message": "Member removed"}
+
+# ─── Join Requests ───
+
+@app.post("/api/projects/{project_id}/join-request")
+def request_join(project_id: int, user_id: int = Query(...)):
+    """Request to join a project (when require_approval is ON)."""
+    data = load_data()
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    members = data.get("project_members", [])
+    if any(m["project_id"] == project_id and m["user_id"] == user_id for m in members):
+        raise HTTPException(status_code=400, detail="이미 프로젝트 멤버입니다")
+
+    join_requests = data.get("join_requests", [])
+    if any(jr["project_id"] == project_id and jr["user_id"] == user_id and jr["status"] == "pending" for jr in join_requests):
+        raise HTTPException(status_code=400, detail="이미 참여 요청이 있습니다")
+
+    new_request = {
+        "id": next_id(join_requests) if join_requests else 1,
+        "project_id": project_id,
+        "user_id": user_id,
+        "role": "member",
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+    }
+    join_requests.append(new_request)
+    data["join_requests"] = join_requests
+    save_data(data)
+    return {"message": "참여 요청이 등록되었습니다", "request": new_request}
+
+@app.get("/api/projects/{project_id}/join-requests")
+def get_join_requests(project_id: int):
+    data = load_data()
+    requests = [jr for jr in data.get("join_requests", []) if jr["project_id"] == project_id]
+    # Enrich with user info
+    users = {u["id"]: u for u in data.get("users", [])}
+    for jr in requests:
+        user = users.get(jr["user_id"], {})
+        jr["username"] = user.get("username", "Unknown")
+        jr["avatar_color"] = user.get("avatar_color", "#ccc")
+    return {"join_requests": requests}
+
+@app.post("/api/projects/{project_id}/join-requests/approve")
+def approve_join_request(project_id: int, body: MemberApproval):
+    """Approve or reject a join request."""
+    data = load_data()
+    join_requests = data.get("join_requests", [])
+
+    target = None
+    for jr in join_requests:
+        if jr["project_id"] == project_id and jr["user_id"] == body.user_id and jr["status"] == "pending":
+            target = jr
+            break
+
+    if not target:
+        raise HTTPException(status_code=404, detail="참여 요청을 찾을 수 없습니다")
+
+    if body.action == "approve":
+        target["status"] = "approved"
+        # Add as member
+        members = data.get("project_members", [])
+        members.append({"project_id": project_id, "user_id": body.user_id, "role": target.get("role", "member")})
+        data["project_members"] = members
+        data["join_requests"] = join_requests
+        save_data(data)
+        return {"message": "참여가 승인되었습니다"}
+    elif body.action == "reject":
+        target["status"] = "rejected"
+        data["join_requests"] = join_requests
+        save_data(data)
+        return {"message": "참여가 거부되었습니다"}
+    else:
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+
+# ─── Project Files ───
+
+@app.get("/api/projects/{project_id}/files")
+def get_project_files(project_id: int, user_id: Optional[int] = None):
+    data = load_data()
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Permission check
+    if user_id:
+        check_project_permission(data, project_id, user_id, "file_view")
+
+    files = [f for f in data.get("project_files", []) if f.get("project_id") == project_id]
+    files.sort(key=lambda f: f.get("created_at", ""), reverse=True)
+    return {"files": files}
+
+@app.post("/api/projects/{project_id}/files")
+async def upload_project_file(project_id: int, file: UploadFile = FastAPIFile(...), user_id: int = Query(default=1)):
+    data = load_data()
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Create project folder
+    project_dir = os.path.join(UPLOAD_DIR, str(project_id))
+    os.makedirs(project_dir, exist_ok=True)
+
+    # Generate unique filename
+    ext = os.path.splitext(file.filename or "")[1]
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    file_path = os.path.join(project_dir, stored_name)
+
+    # Save file
+    contents = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(contents)
+
+    file_size = len(contents)
+
+    project_files = data.get("project_files", [])
+    new_file = {
+        "id": next_id(project_files) if project_files else 1,
+        "project_id": project_id,
+        "filename": file.filename or stored_name,
+        "stored_name": stored_name,
+        "size": file_size,
+        "uploader_id": user_id,
+        "created_at": datetime.now().isoformat(),
+    }
+    project_files.append(new_file)
+    data["project_files"] = project_files
+    save_data(data)
+    return new_file
+
+@app.get("/api/projects/{project_id}/files/{file_id}/download")
+def download_project_file(project_id: int, file_id: int, user_id: Optional[int] = None):
+    data = load_data()
+
+    # Permission check
+    if user_id:
+        check_project_permission(data, project_id, user_id, "file_download")
+
+    pf = next((f for f in data.get("project_files", []) if f["id"] == file_id and f["project_id"] == project_id), None)
+    if not pf:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = os.path.join(UPLOAD_DIR, str(project_id), pf["stored_name"])
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    return FileResponse(
+        path=file_path,
+        filename=pf["filename"],
+        media_type="application/octet-stream",
+    )
+
+@app.delete("/api/projects/{project_id}/files/{file_id}")
+def delete_project_file(project_id: int, file_id: int):
+    data = load_data()
+    project_files = data.get("project_files", [])
+
+    pf = next((f for f in project_files if f["id"] == file_id and f["project_id"] == project_id), None)
+    if not pf:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Remove from disk
+    file_path = os.path.join(UPLOAD_DIR, str(project_id), pf["stored_name"])
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    data["project_files"] = [f for f in project_files if f["id"] != file_id]
+    save_data(data)
+    return {"message": "File deleted"}
 
 # ─── SubProjects ───
 
@@ -734,9 +1064,16 @@ def get_roadmap(
 @app.get("/api/stats")
 def get_stats(user_id: Optional[int] = None):
     data = load_data()
-    tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
+    all_tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
     projects = data.get("projects", [])
-    users = data.get("users", [])
+
+    # Filter by user's authorized projects
+    if user_id:
+        authorized_pids = get_user_project_ids(data, user_id)
+        tasks = [t for t in all_tasks if t.get("project_id") in authorized_pids]
+        projects = [p for p in projects if p["id"] in authorized_pids]
+    else:
+        tasks = all_tasks
 
     total = len(tasks)
     in_progress = len([t for t in tasks if t.get("status") == "in_progress"])
@@ -744,7 +1081,7 @@ def get_stats(user_id: Optional[int] = None):
     todo = len([t for t in tasks if t.get("status") == "todo"])
     hold = len([t for t in tasks if t.get("status") == "hold"])
 
-    # Per-project stats
+    # Per-project stats (only authorized)
     project_stats = []
     for p in projects:
         p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
@@ -893,6 +1230,7 @@ def generate_report(body: ReportRequest):
         members = []
     users = {u["id"]: u for u in data.get("users", [])}
     notes = [n for n in data.get("notes", []) if n.get("project_id") == body.project_id]
+    project_files = [f for f in data.get("project_files", []) if f.get("project_id") == body.project_id]
 
     # ── Calculate progress (Hold excluded, 1 decimal) ──
     active_tasks = [t for t in tasks if t.get("status") != "hold"]
@@ -970,6 +1308,10 @@ def generate_report(body: ReportRequest):
         "tasks": task_details,
         "sub_projects": [{"name": sp.get("name", ""), "description": sp.get("description", "")} for sp in sub_projects],
         "members": member_names,
+        "project_files": [
+            {"id": pf["id"], "filename": pf.get("filename", ""), "size": pf.get("size", 0), "created_at": pf.get("created_at", "")}
+            for pf in project_files
+        ],
     }
 
     # ── Build AI prompt ──
@@ -1006,6 +1348,9 @@ def generate_report(body: ReportRequest):
 ## 서브프로젝트
 {chr(10).join([f'- {sp["name"]}: {sp.get("description", "")}' for sp in sub_projects]) if sub_projects else "없음"}
 
+## 프로젝트 첨부파일
+{chr(10).join([f'- {pf.get("filename", "")} (크기: {round(pf.get("size", 0)/1024, 1)}KB, 업로드일: {pf.get("created_at", "N/A")})' for pf in project_files]) if project_files else "첨부파일 없음"}
+
 ---
 아래 4개 섹션으로 나눠서 분석 보고서를 작성해주세요. 마크다운 문법(#, **, -, ```)을 사용하지 마세요. 일반 텍스트로만 작성하세요.
 
@@ -1018,6 +1363,7 @@ def generate_report(body: ReportRequest):
 
 [섹션3: 종합 현황 분석]
 현재 프로젝트가 어떤 단계에 있는지, 핵심 진행 작업, 완료 작업, 지연/보류 작업을 정리하세요.
+프로젝트에 첨부파일이 있으면, 어떤 파일이 포함되어 있는지 간략히 안내하세요.
 
 [섹션4: 다음 단계 제언]
 다음으로 가장 중요한 작업이 무엇인지, 어떤 순서로 진행하면 좋을지 제안하세요.
@@ -1109,6 +1455,254 @@ def generate_report(body: ReportRequest):
         raise HTTPException(status_code=502, detail=f"AI API returned error {e.response.status_code}: {e.response.text[:300]}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+# ─── Global Roadmap (all authorized projects) ───
+
+@app.get("/api/roadmap/global")
+def get_global_roadmap(user_id: int = Query(...), view: str = Query(default="month")):
+    data = load_data()
+    today_str = date.today().isoformat()
+    authorized_pids = get_user_project_ids(data, user_id)
+    projects = [p for p in data.get("projects", []) if p["id"] in authorized_pids]
+    all_tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
+    sub_projects = data.get("sub_projects", [])
+    items = []
+
+    for project in projects:
+        pid = project["id"]
+        p_tasks = [t for t in all_tasks if t.get("project_id") == pid]
+        p_subs = [s for s in sub_projects if s.get("project_id") == pid]
+
+        active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
+        total = len(active_tasks)
+        done = len([t for t in active_tasks if t.get("status") == "done"])
+        if total > 0:
+            progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
+            project_progress = round(progress_sum / total)
+        else:
+            project_progress = 0
+
+        start_dates = [t["start_date"] for t in p_tasks if t.get("start_date")]
+        due_dates = [t["due_date"] for t in p_tasks if t.get("due_date")]
+
+        project_item = {
+            "id": f"project-{pid}",
+            "type": "project",
+            "name": project.get("name", ""),
+            "start_date": min(start_dates) if start_dates else None,
+            "due_date": max(due_dates) if due_dates else None,
+            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
+            "progress": project_progress,
+            "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
+            "children": [],
+        }
+
+        for sp in p_subs:
+            sp_tasks_filtered = [t for t in p_tasks if t.get("sub_project_id") == sp["id"]]
+            sp_all = [t for t in p_tasks if t.get("sub_project_id") == sp["id"]]
+            sp_active = [t for t in sp_all if t.get("status") != "hold"]
+            sp_total = len(sp_active)
+            sp_done = len([t for t in sp_active if t.get("status") == "done"])
+            if sp_total > 0:
+                sp_prog = round(sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in sp_active) / sp_total)
+            else:
+                sp_prog = 0
+            sp_starts = [t["start_date"] for t in sp_all if t.get("start_date")]
+            sp_dues = [t["due_date"] for t in sp_all if t.get("due_date")]
+            sp_item = {
+                "id": f"subproject-{sp['id']}",
+                "type": "subproject",
+                "name": sp.get("name", ""),
+                "start_date": min(sp_starts) if sp_starts else None,
+                "due_date": max(sp_dues) if sp_dues else None,
+                "status": "done" if sp_prog == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
+                "progress": sp_prog,
+                "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_prog < 100),
+                "children": [],
+            }
+            for t in sp_tasks_filtered:
+                t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
+                sp_item["children"].append({
+                    "id": f"task-{t['id']}", "type": "task", "name": t.get("title", ""),
+                    "start_date": t.get("start_date"), "due_date": t.get("due_date"),
+                    "status": t.get("status", "todo"), "progress": t.get("progress", 0),
+                    "overdue": t_overdue, "assignee_ids": t.get("assignee_ids", []),
+                })
+            project_item["children"].append(sp_item)
+
+        root_tasks = [t for t in p_tasks if not t.get("sub_project_id")]
+        for t in root_tasks:
+            t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
+            project_item["children"].append({
+                "id": f"task-{t['id']}", "type": "task", "name": t.get("title", ""),
+                "start_date": t.get("start_date"), "due_date": t.get("due_date"),
+                "status": t.get("status", "todo"), "progress": t.get("progress", 0),
+                "overdue": t_overdue, "assignee_ids": t.get("assignee_ids", []),
+            })
+
+        items.append(project_item)
+
+    return {"view": view, "items": items}
+
+
+# ─── Admin Endpoints ───
+
+@app.get("/api/admin/users")
+def admin_get_users(user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    return {"users": data.get("users", [])}
+
+@app.patch("/api/admin/users/{target_id}/toggle-active")
+def admin_toggle_user_active(target_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    users = data.get("users", [])
+    user = next((u for u in users if u["id"] == target_id), None)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user["is_active"] = not user.get("is_active", True)
+    save_data(data)
+    return user
+
+
+# ─── Group Endpoints ───
+
+class GroupCreate(BaseModel):
+    name: str
+
+@app.get("/api/admin/groups")
+def admin_get_groups(user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    users = data.get("users", [])
+    # Enrich each group with the count of matching users
+    result = []
+    for g in groups:
+        matched = [u for u in users if u.get("group_name") == g["name"]]
+        result.append({**g, "matched_count": len(matched)})
+    return {"groups": result}
+
+@app.post("/api/admin/groups")
+def admin_create_group(group: GroupCreate, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    # Check duplicate group name
+    if any(g["name"] == group.name for g in groups):
+        raise HTTPException(status_code=400, detail=f"그룹명 '{group.name}'이(가) 이미 등록되어 있습니다.")
+    new_group = {
+        "id": next_id(groups),
+        "name": group.name,
+        "created_at": datetime.now().isoformat(),
+    }
+    groups.append(new_group)
+    data["groups"] = groups
+    save_data(data)
+    # Return with matched_count
+    users = data.get("users", [])
+    matched = [u for u in users if u.get("group_name") == group.name]
+    return {**new_group, "matched_count": len(matched)}
+
+@app.delete("/api/admin/groups/{group_id}")
+def admin_delete_group(group_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    data["groups"] = [g for g in groups if g["id"] != group_id]
+    save_data(data)
+    return {"message": "Group deleted"}
+
+@app.post("/api/admin/groups/{group_id}/apply")
+def admin_apply_group(group_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    groups = data.get("groups", [])
+    group = next((g for g in groups if g["id"] == group_id), None)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    users = data.get("users", [])
+    activated = 0
+    for user in users:
+        if user.get("group_name") == group["name"]:
+            if not user.get("is_active", True):
+                user["is_active"] = True
+                activated += 1
+    save_data(data)
+    total_matched = sum(1 for u in users if u.get("group_name") == group["name"])
+    return {"message": f"Activated {activated} users (total matched: {total_matched})", "activated": activated, "total_matched": total_matched}
+
+
+
+# ─── Shortcut Endpoints ───
+
+class ShortcutCreate(BaseModel):
+    name: str
+    url: str
+    icon_text: Optional[str] = None
+    icon_color: Optional[str] = "#2955FF"
+    order: Optional[int] = 0
+    open_new_tab: Optional[bool] = True
+
+class ShortcutUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    icon_text: Optional[str] = None
+    icon_color: Optional[str] = None
+    order: Optional[int] = None
+    open_new_tab: Optional[bool] = None
+    active: Optional[bool] = None
+
+@app.get("/api/shortcuts")
+def get_shortcuts():
+    data = load_data()
+    shortcuts = data.get("shortcuts", [])
+    return {"shortcuts": shortcuts}
+
+@app.post("/api/shortcuts")
+def create_shortcut(shortcut: ShortcutCreate, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    shortcuts = data.get("shortcuts", [])
+    new_sc = {
+        "id": next_id(shortcuts),
+        "name": shortcut.name,
+        "url": shortcut.url,
+        "icon_text": shortcut.icon_text or shortcut.name[0].upper(),
+        "icon_color": shortcut.icon_color,
+        "order": shortcut.order if shortcut.order else len(shortcuts),
+        "open_new_tab": shortcut.open_new_tab,
+        "active": True,
+        "created_at": datetime.now().isoformat(),
+    }
+    shortcuts.append(new_sc)
+    data["shortcuts"] = shortcuts
+    save_data(data)
+    return new_sc
+
+@app.patch("/api/shortcuts/{shortcut_id}")
+def update_shortcut(shortcut_id: int, updates: ShortcutUpdate, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    shortcuts = data.get("shortcuts", [])
+    sc = next((s for s in shortcuts if s["id"] == shortcut_id), None)
+    if not sc:
+        raise HTTPException(status_code=404, detail="Shortcut not found")
+    for key, val in updates.dict(exclude_unset=True).items():
+        sc[key] = val
+    save_data(data)
+    return sc
+
+@app.delete("/api/shortcuts/{shortcut_id}")
+def delete_shortcut(shortcut_id: int, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    shortcuts = data.get("shortcuts", [])
+    data["shortcuts"] = [s for s in shortcuts if s["id"] != shortcut_id]
+    save_data(data)
+    return {"message": "Shortcut deleted"}
+
 
 # Initialize stub data if file doesn't exist
 if not os.path.exists(DATA_FILE):

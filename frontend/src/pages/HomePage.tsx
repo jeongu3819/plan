@@ -16,7 +16,7 @@ import WidgetsIcon from '@mui/icons-material/Widgets';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, DashboardStats, ProjectStats } from '../api/client';
+import { api, DashboardStats, ProjectStats, Shortcut, User } from '../api/client';
 import { Task } from '../types';
 import { useAppStore } from '../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
@@ -609,6 +609,9 @@ const HomePage: React.FC = () => {
                 </Tooltip>
             </Box>
 
+            {/* ── Shortcut Icon Cards ── */}
+            <ShortcutSection currentUserId={currentUserId} navigate={navigate} />
+
             {/* ── Sortable Widget Grid ── */}
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                 <SortableContext items={displayOrder} strategy={rectSortingStrategy}>
@@ -669,6 +672,98 @@ const HomePage: React.FC = () => {
                     ))}
                 </List>
             </Drawer>
+        </Box>
+    );
+};
+
+// ── Shortcut Section Component ──
+const ShortcutSection: React.FC<{ currentUserId: number; navigate: ReturnType<typeof useNavigate> }> = ({ currentUserId, navigate }) => {
+    const { data: shortcuts = [] } = useQuery<Shortcut[]>({
+        queryKey: ['shortcuts'],
+        queryFn: api.getShortcuts,
+    });
+    const { data: users = [] } = useQuery<User[]>({
+        queryKey: ['users'],
+        queryFn: api.getUsers,
+    });
+    const currentUser = users.find(u => u.id === currentUserId);
+    const isAdmin = currentUser?.role === 'admin';
+
+    const activeShortcuts = shortcuts.filter(s => s.active !== false).sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    if (activeShortcuts.length === 0 && !isAdmin) return null;
+
+    return (
+        <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.8rem', color: '#6B7280', mb: 1.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                바로가기
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', justifyContent: 'center' }}>
+                {activeShortcuts.map(sc => (
+                    <Tooltip key={sc.id} title={sc.url}>
+                        <Box
+                            onClick={() => {
+                                if (sc.open_new_tab !== false) window.open(sc.url, '_blank');
+                                else window.location.href = sc.url;
+                            }}
+                            sx={{
+                                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8,
+                                cursor: 'pointer', width: 80,
+                                '&:hover .shortcut-icon': { transform: 'scale(1.08)', boxShadow: '0 4px 16px rgba(0,0,0,0.15)' },
+                                transition: 'all 0.15s',
+                            }}
+                        >
+                            <Box
+                                className="shortcut-icon"
+                                sx={{
+                                    width: 52, height: 52, borderRadius: 2.5, bgcolor: sc.icon_color || '#2955FF',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    color: '#fff', fontWeight: 800, fontSize: '1.3rem',
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                                    transition: 'all 0.2s ease',
+                                }}
+                            >
+                                {sc.icon_text || sc.name.charAt(0).toUpperCase()}
+                            </Box>
+                            <Typography variant="caption" sx={{
+                                fontSize: '0.68rem', fontWeight: 500, color: '#4B5563',
+                                textAlign: 'center', lineHeight: 1.2,
+                                overflow: 'hidden', textOverflow: 'ellipsis',
+                                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                                maxWidth: 80,
+                            }}>
+                                {sc.name}
+                            </Typography>
+                        </Box>
+                    </Tooltip>
+                ))}
+                {isAdmin && (
+                    <Box
+                        onClick={() => navigate('/admin')}
+                        sx={{
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8,
+                            cursor: 'pointer', width: 80,
+                            '&:hover .add-icon': { transform: 'scale(1.08)', borderColor: '#2955FF' },
+                        }}
+                    >
+                        <Box
+                            className="add-icon"
+                            sx={{
+                                width: 52, height: 52, borderRadius: 2.5,
+                                border: '2px dashed #CBD5E1',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                color: '#9CA3AF', fontSize: '1.5rem', fontWeight: 400,
+                                transition: 'all 0.2s ease',
+                            }}
+                        >
+                            +
+                        </Box>
+                        <Typography variant="caption" sx={{ fontSize: '0.68rem', fontWeight: 500, color: '#9CA3AF' }}>
+                            추가
+                        </Typography>
+                    </Box>
+                )}
+            </Box>
         </Box>
     );
 };

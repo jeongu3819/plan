@@ -14,6 +14,25 @@ export interface Project {
     owner_id?: number;
     visibility?: string;
     created_at?: string;
+    require_approval?: boolean;
+    permissions?: {
+        post_write?: string;
+        post_edit?: string;
+        post_view?: string;
+        comment_write?: string;
+        file_view?: string;
+        file_download?: string;
+    };
+}
+
+export interface ProjectFile {
+    id: number;
+    project_id: number;
+    filename: string;
+    stored_name: string;
+    size: number;
+    uploader_id: number;
+    created_at: string;
 }
 
 export interface SubProject {

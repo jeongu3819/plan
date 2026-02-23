@@ -7,11 +7,32 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SaveIcon from '@mui/icons-material/Save';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import BlockIcon from '@mui/icons-material/Block';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
+import { api, User } from '../api/client';
+import { useAppStore } from '../stores/useAppStore';
+import { useNavigate } from 'react-router-dom';
 
 const AiSettingsPage: React.FC = () => {
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
+    const currentUserId = useAppStore(state => state.currentUserId);
+    const { data: users = [] } = useQuery<User[]>({ queryKey: ['users'], queryFn: () => api.getUsers() });
+    const currentUser = users.find(u => u.id === currentUserId) || users[0];
+
+    // Admin guard – block non-admin direct URL access
+    if (currentUser && currentUser.role !== 'admin') {
+        return (
+            <Box sx={{ p: 4, textAlign: 'center' }}>
+                <BlockIcon sx={{ fontSize: 48, color: '#EF4444', mb: 2 }} />
+                <Typography variant="h6" sx={{ fontWeight: 700, mb: 1, color: '#1A1D29' }}>접근 권한이 없습니다</Typography>
+                <Typography variant="body2" sx={{ color: '#6B7280', mb: 3 }}>AI Settings는 관리자만 접근할 수 있습니다.</Typography>
+                <Button variant="contained" onClick={() => navigate('/')} sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2, bgcolor: '#2955FF', '&:hover': { bgcolor: '#1E3FCC' } }}>
+                    Dashboard로 돌아가기
+                </Button>
+            </Box>
+        );
+    }
     const [apiUrl, setApiUrl] = useState('');
     const [modelName, setModelName] = useState('');
     const [apiKey, setApiKey] = useState('');
