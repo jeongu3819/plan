@@ -10,6 +10,7 @@ import TrashPage from './pages/TrashPage';
 import AiSettingsPage from './pages/AiSettingsPage';
 import GlobalRoadmapPage from './pages/GlobalRoadmapPage';
 import AdminPage from './pages/AdminPage';
+import SearchPage from './pages/SearchPage';
 import { MainLayout } from './layouts/MainLayout';
 import TaskDrawer from './components/TaskDrawer';
 
@@ -122,6 +123,7 @@ const App: React.FC = () => {
                                 <Route path="/trash" element={<TrashPage />} />
                                 <Route path="/ai-settings" element={<AiSettingsPage />} />
                                 <Route path="/roadmap" element={<GlobalRoadmapPage />} />
+                                <Route path="/search" element={<SearchPage />} />
                                 <Route path="/admin" element={<AdminPage />} />
                             </Routes>
                         </MainLayout>

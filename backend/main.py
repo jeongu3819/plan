@@ -117,6 +117,29 @@ class MemberApproval(BaseModel):
     user_id: int
     action: str  # "approve" or "reject"
 
+class SearchRequest(BaseModel):
+    query: str = ""
+    status: Optional[str] = None
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+    sort: Optional[str] = "updated"
+
+class SearchSummaryRequest(BaseModel):
+    project_ids: List[int]
+    query: str = ""
+
+class SummaryFeedback(BaseModel):
+    summary_id: int
+    rating: str
+    comment: Optional[str] = None
+
+class SummaryCorrectionSave(BaseModel):
+    summary_id: int
+    corrected_text: str
+
+class ProjectAiQueryRequest(BaseModel):
+    query: str
+
 # ─── Data Helpers ───
 
 UPLOAD_DIR = "uploads"
@@ -138,6 +161,9 @@ DEFAULT_DATA = {
     "join_requests": [],
     "groups": [],
     "shortcuts": [],
+    "ai_summaries": [],
+    "search_feedback": [],
+    "project_ai_queries": [],
 }
 
 def load_data() -> Dict[str, Any]:
@@ -1703,6 +1729,422 @@ def delete_shortcut(shortcut_id: int, user_id: int = Query(...)):
     save_data(data)
     return {"message": "Shortcut deleted"}
 
+# ─── Search & AI Summary Endpoints ───
+
+@app.post("/api/search")
+def search_projects(req: SearchRequest, user_id: int = Query(...)):
+    import datetime
+    data = load_data()
+    user_project_ids = get_user_project_ids(data, user_id)
+    projects = [p for p in data.get("projects", []) if p["id"] in user_project_ids]
+    
+    query = req.query.lower() if req.query else ""
+    status_filter = req.status
+    
+    results = []
+    
+    all_tasks = data.get("tasks", [])
+    all_sub_projects = data.get("sub_projects", [])
+    all_notes = data.get("notes", [])
+    all_files = data.get("project_files", [])
+    
+    for p in projects:
+        p_tasks = [t for t in all_tasks if t.get("project_id") == p["id"] and not t.get("archived_at")]
+        p_sub_projects = [sp for sp in all_sub_projects if sp.get("project_id") == p["id"]]
+        p_notes = [n for n in all_notes if n.get("project_id") == p["id"]]
+        p_files = [f for f in all_files if f.get("project_id") == p["id"]]
+        
+        match = False
+        if not query:
+            match = True
+        else:
+            if query in p["name"].lower() or query in p.get("description", "").lower():
+                match = True
+            elif any(query in t["title"].lower() or query in (t.get("description") or "").lower() for t in p_tasks):
+                match = True
+            elif any(query in sp["name"].lower() or query in (sp.get("description") or "").lower() for sp in p_sub_projects):
+                match = True
+            elif any(query in n["content"].lower() for n in p_notes):
+                match = True
+                
+        if not match:
+            continue
+            
+        active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
+        hold_tasks = [t for t in p_tasks if t.get("status") == "hold"]
+        done_tasks = [t for t in p_tasks if t.get("status") == "done"]
+        in_progress_tasks = [t for t in p_tasks if t.get("status") == "in_progress"]
+        todo_tasks = [t for t in p_tasks if t.get("status") == "todo"]
+        
+        overall_progress = 0
+        if len(active_tasks) > 0:
+            progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
+            overall_progress = round(progress_sum / len(active_tasks), 1)
+            
+        derived_status = "todo"
+        if len(in_progress_tasks) > 0 or (0 < overall_progress < 100):
+            derived_status = "in_progress"
+        elif len(active_tasks) > 0 and len(done_tasks) == len(active_tasks):
+            derived_status = "done"
+        elif len(hold_tasks) > 0 and len(active_tasks) == 0:
+            derived_status = "hold"
+            
+        if status_filter and status_filter != "all" and derived_status != status_filter:
+            continue
+            
+        now = datetime.datetime.now().date()
+        overdue_tasks = []
+        upcoming_tasks = []
+        for t in p_tasks:
+            if t.get("status") != "done" and t.get("due_date"):
+                try:
+                    due = datetime.datetime.fromisoformat(t["due_date"].split("T")[0]).date()
+                    if due < now:
+                        overdue_tasks.append(t)
+                    elif (due - now).days <= 7:
+                        upcoming_tasks.append(t)
+                except ValueError:
+                    pass
+                    
+        results.append({
+            "project": p,
+            "tasks": p_tasks,
+            "sub_projects": p_sub_projects,
+            "notes": p_notes,
+            "files": p_files,
+            "progress": overall_progress,
+            "status_counts": {
+                "total": len(p_tasks),
+                "done": len(done_tasks),
+                "in_progress": len(in_progress_tasks),
+                "todo": len(todo_tasks),
+                "hold": len(hold_tasks)
+            },
+            "overdue_tasks": overdue_tasks,
+            "upcoming_tasks": upcoming_tasks
+        })
+        
+    if req.sort == "updated":
+        results.sort(key=lambda x: x["project"]["id"], reverse=True)
+        
+    return {"projects": results, "total": len(results)}
+
+@app.post("/api/search/ai-summary")
+def generate_search_summary(req: SearchSummaryRequest, user_id: int = Query(...)):
+    import httpx
+    import datetime
+    
+    data = load_data()
+    user_project_ids = get_user_project_ids(data, user_id)
+    
+    ai_settings = data.get("ai_settings", {})
+    api_url = ai_settings.get("api_url", "")
+    model_name = ai_settings.get("model_name", "")
+    api_key = ai_settings.get("api_key", "")
+
+    if not api_url or not model_name:
+        raise HTTPException(status_code=400, detail="AI settings not configured. Please set API URL and model name in Settings.")
+        
+    projects_to_summarize = [p for p in data.get("projects", []) if p["id"] in req.project_ids and p["id"] in user_project_ids]
+    if not projects_to_summarize:
+        raise HTTPException(status_code=404, detail="No valid projects found for summary.")
+        
+    all_tasks = data.get("tasks", [])
+    all_sub_projects = data.get("sub_projects", [])
+    project_prompts = []
+    
+    for p in projects_to_summarize:
+        p_tasks = [t for t in all_tasks if t.get("project_id") == p["id"] and not t.get("archived_at")]
+        p_sub_projects = [sp for sp in all_sub_projects if sp.get("project_id") == p["id"]]
+        
+        task_lines = []
+        for t in p_tasks:
+            task_lines.append(f'- {t["title"]} | 상태:{t["status"]} | 진척도:{t.get("progress",0)}% | 마감:{t.get("due_date", "미정")}')
+            
+        sp_lines = [f'- {sp["name"]}' for sp in p_sub_projects]
+        
+        p_prompt = f"""[프로젝트: {p["name"]} (ID: {p["id"]})]
+- 설명: {p.get("description", "없음")}
+- 하위프로젝트: {", ".join(sp_lines) if sp_lines else "없음"}
+- 일정/Task:
+{chr(10).join(task_lines) if task_lines else "Task 없음"}
+"""
+        project_prompts.append(p_prompt)
+        
+    system_prompt = "당신은 전문 프로젝트 매니저 보조 AI입니다. 항상 한국어로 답변하며, 마크다운 문법(#, **, -)을 사용하지 않고 일반 텍스트로만 구조화하여 작성하세요."
+    
+    user_prompt = f"""사용자가 다음 조건/키워드로 프로젝트를 검색했습니다: "{req.query if req.query else '전체 검색'}"
+검색된 프로젝트 데이터를 분석하여 각 프로젝트별로 구조화된 요약을 작성해주세요.
+
+[검색된 프로젝트 데이터]
+{chr(10).join(project_prompts)}
+
+아래 형식에 맞추어 각 프로젝트별로 빈 줄 없이 연달아 답변하세요:
+[프로젝트ID: (각 프로젝트의 ID 숫자)]
+[한줄요약] 프로젝트의 핵심 요약 한 줄
+[진행상황] 현재까지의 주요 진행 상황 및 달성률
+[핵심일정] 임박한 일정이나 핵심 마감일
+[하위프로젝트] 하위프로젝트 총평
+[관련자료] 요약된 문서/자료 등 (없으면 "자료 없음" 기재)
+[리스크] 지연/이슈 등 잠재적 리스크
+[다음액션] 향후 조치사항
+"""
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    endpoint = api_url.rstrip("/")
+    if not endpoint.endswith("/chat/completions"):
+        if endpoint.endswith("/v1"):
+            endpoint += "/chat/completions"
+        elif not endpoint.endswith("/v1/chat/completions"):
+            endpoint += "/v1/chat/completions"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 4096,
+    }
+
+    try:
+        import httpx
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(endpoint, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "Report generation failed.")
+            
+            project_summaries = []
+            current_pid = None
+            current_summary = None
+            
+            for line in content.split('\n'):
+                prefix = line.strip()
+                if prefix.startswith("[프로젝트ID:"):
+                    if current_summary:
+                        project_summaries.append(current_summary)
+                    try:
+                        pid_str = prefix.split(":")[1].replace("]", "").strip()
+                        current_pid = int(pid_str)
+                    except:
+                        current_pid = -1
+                    current_summary = {
+                        "project_id": current_pid,
+                        "project_name": next((p["name"] for p in projects_to_summarize if p["id"] == current_pid), "Unknown"),
+                        "one_liner": "",
+                        "status_text": "",
+                        "key_schedule": "",
+                        "sub_project_summary": "",
+                        "related_materials": "",
+                        "risks": "",
+                        "next_actions": ""
+                    }
+                elif current_summary:
+                    if prefix.startswith("[한줄요약]"): current_summary["one_liner"] = prefix.replace("[한줄요약]", "").strip()
+                    elif prefix.startswith("[진행상황]"): current_summary["status_text"] = prefix.replace("[진행상황]", "").strip()
+                    elif prefix.startswith("[핵심일정]"): current_summary["key_schedule"] = prefix.replace("[핵심일정]", "").strip()
+                    elif prefix.startswith("[하위프로젝트]"): current_summary["sub_project_summary"] = prefix.replace("[하위프로젝트]", "").strip()
+                    elif prefix.startswith("[관련자료]"): current_summary["related_materials"] = prefix.replace("[관련자료]", "").strip()
+                    elif prefix.startswith("[리스크]"): current_summary["risks"] = prefix.replace("[리스크]", "").strip()
+                    elif prefix.startswith("[다음액션]"): current_summary["next_actions"] = prefix.replace("[다음액션]", "").strip()
+            
+            if current_summary:
+                project_summaries.append(current_summary)
+                
+            summaries_list = data.setdefault("ai_summaries", [])
+            summary_id = next_id(summaries_list)
+            
+            summary_record = {
+                "id": summary_id,
+                "query": req.query,
+                "overall_summary": content,
+                "project_summaries": project_summaries,
+                "model": model_name,
+                "created_at": datetime.datetime.now().isoformat(),
+                "user_id": user_id,
+                "is_corrected": False
+            }
+            summaries_list.append(summary_record)
+            save_data(data)
+            
+            return summary_record
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search summary generation failed: {str(e)}")
+
+@app.post("/api/projects/{project_id}/ai-query")
+def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_id: int = Query(...)):
+    import httpx
+    import datetime
+    
+    data = load_data()
+    check_project_access(data, project_id, user_id)
+    
+    ai_settings = data.get("ai_settings", {})
+    api_url = ai_settings.get("api_url", "")
+    model_name = ai_settings.get("model_name", "")
+    api_key = ai_settings.get("api_key", "")
+
+    if not api_url or not model_name:
+        raise HTTPException(status_code=400, detail="AI settings not configured. Please set API URL and model name in Settings.")
+        
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Gather Context
+    all_tasks = data.get("tasks", [])
+    p_tasks = [t for t in all_tasks if t.get("project_id") == project_id and not t.get("archived_at")]
+    
+    all_sub_projects = data.get("sub_projects", [])
+    p_sub_projects = [sp for sp in all_sub_projects if sp.get("project_id") == project_id]
+    
+    all_notes = data.get("notes", [])
+    p_notes = [n for n in all_notes if n.get("project_id") == project_id]
+    
+    task_lines = []
+    for t in p_tasks:
+        task_lines.append(f'- {t["title"]} | 상태:{t["status"]} | 진척도:{t.get("progress",0)}% | 우선순위:{t.get("priority","medium")} | 마감:{t.get("due_date", "미정")}')
+        
+    sp_lines = [f'- {sp["name"]}: {sp.get("description", "")}' for sp in p_sub_projects]
+    note_lines = [f'- {n["content"]}' for n in p_notes]
+    
+    context_str = f"""[프로젝트: {project["name"]}]
+- 설명: {project.get("description", "없음")}
+- 작성일: {project.get("created_at", "")}
+
+[하위프로젝트]
+{chr(10).join(sp_lines) if sp_lines else "없음"}
+
+[결부된 일정/Task 목록]
+{chr(10).join(task_lines) if task_lines else "Task 없음"}
+
+[관련 노트 및 자료]
+{chr(10).join(note_lines) if note_lines else "없음"}
+"""
+
+    system_prompt = "당신은 전문 프로젝트 매니저 보조 AI입니다. 주어진 프로젝트 컨텍스트만을 바탕으로 사용자의 질문이나 요청 사항을 명확하고 구조적으로 답변하세요. 답변은 마크다운 문법(#, **, - 등)을 사용하지 않고 일반 텍스트로만 구조화하여 작성해야 합니다. 정보가 없으면 추측하지 말고 '제공된 컨텍스트에 해당 정보가 없습니다'라고 답하세요."
+    
+    user_prompt = f"""[현재 프로젝트 컨텍스트]
+{context_str}
+
+사용자의 요청(질의): "{req.query}"
+
+위 컨텍스트를 분석하여 사용자의 요청에 알맞은 답변을 작성해주세요.
+반드시 아래와 같은 형식으로 빈 줄 없이 연달아 답변하세요:
+[한줄요약] 사용자의 요청에 대한 전체적인 요약 한 줄
+[상세내용] 질문의 의도에 맞춘 상세 데이터/일정/진행상황 정리
+[핵심일정] 질의와 관련된 지연 가능성이나 핵심 일정
+[다음액션] 해당 질의 내용을 바탕으로 제안하는 방향이나 다음 액션
+"""
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    endpoint = api_url.rstrip("/")
+    if not endpoint.endswith("/chat/completions"):
+        if endpoint.endswith("/v1"):
+            endpoint += "/chat/completions"
+        elif not endpoint.endswith("/v1/chat/completions"):
+            endpoint += "/v1/chat/completions"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 4096,
+    }
+
+    try:
+        import httpx
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(endpoint, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "응답 생성에 실패했습니다.")
+            
+            parsed_summary = {
+                "one_liner": "",
+                "details": "",
+                "key_schedule": "",
+                "next_actions": "",
+            }
+            
+            # 파싱
+            for line in content.split('\\n'):
+                prefix = line.strip()
+                if prefix.startswith("[한줄요약]"): parsed_summary["one_liner"] = prefix.replace("[한줄요약]", "").strip()
+                elif prefix.startswith("[상세내용]"): parsed_summary["details"] = prefix.replace("[상세내용]", "").strip()
+                elif prefix.startswith("[핵심일정]"): parsed_summary["key_schedule"] = prefix.replace("[핵심일정]", "").strip()
+                elif prefix.startswith("[다음액션]"): parsed_summary["next_actions"] = prefix.replace("[다음액션]", "").strip()
+                
+            queries_list = data.setdefault("project_ai_queries", [])
+            query_id = next_id(queries_list)
+            
+            query_record = {
+                "id": query_id,
+                "project_id": project_id,
+                "user_id": user_id,
+                "query": req.query,
+                "parsed_response": parsed_summary,
+                "raw_response": content,
+                "model": model_name,
+                "created_at": datetime.datetime.now().isoformat()
+            }
+            queries_list.append(query_record)
+            save_data(data)
+            
+            return query_record
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI query generation failed: {str(e)}")
+
+
+@app.get("/api/search/summaries")
+def get_search_summaries(user_id: int = Query(...)):
+    data = load_data()
+    summaries = [s for s in data.get("ai_summaries", []) if s.get("user_id") == user_id]
+    summaries.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"summaries": summaries}
+
+@app.post("/api/search/feedback")
+def submit_summary_feedback(feedback: SummaryFeedback, user_id: int = Query(...)):
+    import datetime
+    data = load_data()
+    feedbacks = data.setdefault("search_feedback", [])
+    new_fb = {
+        "id": next_id(feedbacks),
+        "summary_id": feedback.summary_id,
+        "rating": feedback.rating,
+        "comment": feedback.comment,
+        "user_id": user_id,
+        "created_at": datetime.datetime.now().isoformat()
+    }
+    feedbacks.append(new_fb)
+    save_data(data)
+    return new_fb
+
+@app.post("/api/search/correction")
+def save_summary_correction(correction: SummaryCorrectionSave, user_id: int = Query(...)):
+    data = load_data()
+    summaries = data.get("ai_summaries", [])
+    summary = next((s for s in summaries if s["id"] == correction.summary_id), None)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Summary not found")
+        
+    summary["overall_summary"] = correction.corrected_text
+    summary["is_corrected"] = True
+    save_data(data)
+    return summary
 
 # Initialize stub data if file doesn't exist
 if not os.path.exists(DATA_FILE):

@@ -20,6 +20,7 @@ import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, Project, User } from '../api/client';
@@ -172,7 +173,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                     {[
                         { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
                         { text: 'Kanban Board', icon: <ViewKanbanIcon />, path: projects.length > 0 ? `/project/${projects[0].id}` : '/' },
-                        { text: '전체 Roadmap', icon: <TimelineIcon />, path: '/roadmap' },
+                        { text: '전체 로드맵', icon: <TimelineIcon />, path: '/roadmap' },
                         { text: 'AI Settings', icon: <AutoAwesomeIcon />, path: '/ai-settings', adminOnly: true },
                     ].filter(item => !item.adminOnly || currentUser?.role === 'admin').map((item) => {
                         const isActive = item.path === '/' ? location.pathname === '/' : location.pathname + location.search === item.path;

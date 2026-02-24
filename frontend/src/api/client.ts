@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Task, Note, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge, ProjectFile } from '../types';
+import { Task, Note, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge, ProjectFile, SearchResultProject, SearchSummaryResult, ProjectAiQueryResponse } from '../types';
 
 const API_URL = 'http://localhost:8000/api';
 
@@ -320,4 +320,30 @@ export const api = {
         const res = await client.post(`/admin/groups/${groupId}/apply?user_id=${userId}`);
         return res.data;
     },
+
+    // ─── Search & AI Summary ───
+    searchProjects: async (params: { query?: string; status?: string; from_date?: string; to_date?: string; sort?: string }, userId: number): Promise<{ projects: SearchResultProject[]; total: number }> => {
+        const res = await client.post(`/search?user_id=${userId}`, params);
+        return res.data;
+    },
+    generateSearchSummary: async (data: { project_ids: number[]; query?: string }, userId: number): Promise<SearchSummaryResult> => {
+        const res = await client.post(`/search/ai-summary?user_id=${userId}`, data);
+        return res.data;
+    },
+    getSearchSummaries: async (userId: number): Promise<{ summaries: SearchSummaryResult[] }> => {
+        const res = await client.get(`/search/summaries?user_id=${userId}`);
+        return res.data;
+    },
+    submitSummaryFeedback: async (data: { summary_id: number; rating: string; comment?: string }, userId: number): Promise<any> => {
+        const res = await client.post(`/search/feedback?user_id=${userId}`, data);
+        return res.data;
+    },
+    saveSummaryCorrection: async (data: { summary_id: number; corrected_text: string }, userId: number): Promise<any> => {
+        const res = await client.post(`/search/correction?user_id=${userId}`, data);
+        return res.data;
+    },
+    queryProjectAi: async (projectId: number, query: string, userId: number): Promise<ProjectAiQueryResponse> => {
+        const res = await client.post(`/projects/${projectId}/ai-query?user_id=${userId}`, { query });
+        return res.data;
+    }
 };

@@ -123,3 +123,52 @@ export interface GraphEdge {
     source: string;
     target: string;
 }
+
+export interface SearchResultProject {
+    project: Project;
+    tasks: Task[];
+    sub_projects: SubProject[];
+    notes: Note[];
+    files: ProjectFile[];
+    progress: number;
+    status_counts: { total: number; done: number; in_progress: number; todo: number; hold: number };
+    overdue_tasks: Task[];
+    upcoming_tasks: Task[];
+}
+
+export interface AiProjectSummary {
+    project_id: number;
+    project_name: string;
+    one_liner: string;
+    status_text: string;
+    key_schedule: string;
+    sub_project_summary: string;
+    related_materials: string;
+    risks: string;
+    next_actions: string;
+}
+
+export interface SearchSummaryResult {
+    id: number;
+    query: string;
+    overall_summary: string;
+    project_summaries: AiProjectSummary[];
+    model: string;
+    created_at: string;
+}
+
+export interface ProjectAiQueryResponse {
+    id: number;
+    project_id: number;
+    user_id: number;
+    query: string;
+    parsed_response: {
+        one_liner: string;
+        details: string;
+        key_schedule: string;
+        next_actions: string;
+    };
+    raw_response: string;
+    model: string;
+    created_at: string;
+}
