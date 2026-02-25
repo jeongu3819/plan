@@ -1,5 +1,8 @@
 import React from 'react';
-import { Box, Paper, Typography, Chip } from '@mui/material';
+import { Box, Paper, Typography, Chip, TextField, MenuItem, IconButton, Tooltip } from '@mui/material';
+import SortIcon from '@mui/icons-material/Sort';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { Task } from '../../types';
 import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -37,6 +40,19 @@ const COLUMNS: { id: Task['status']; label: string; color: string }[] = [
     { id: 'done', label: 'Done', color: '#22C55E' },
     { id: 'hold', label: 'Hold', color: '#F59E0B' },
 ];
+
+type SortField = 'default' | 'created_at' | 'due_date' | 'priority' | 'title';
+type SortDirection = 'asc' | 'desc';
+
+const SORT_OPTIONS: { value: SortField; label: string }[] = [
+    { value: 'default', label: '기본순서' },
+    { value: 'due_date', label: '마감일순' },
+    { value: 'priority', label: '우선순위순' },
+    { value: 'title', label: '이름순' },
+    { value: 'created_at', label: '생성일순' },
+];
+
+const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
 // Sortable task wrapper
 const SortableTaskItem = ({ task, onClick }: { task: Task; onClick: () => void }) => {
@@ -93,6 +109,43 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         queryFn: () => api.getTasks(projectId, currentUserId),
     });
     const [activeTask, setActiveTask] = React.useState<Task | null>(null);
+    const [sortField, setSortField] = React.useState<SortField>('default');
+    const [sortDirection, setSortDirection] = React.useState<SortDirection>('asc');
+
+    const sortTasks = React.useCallback((taskList: Task[]): Task[] => {
+        if (sortField === 'default') return taskList;
+        return [...taskList].sort((a, b) => {
+            let cmp = 0;
+            switch (sortField) {
+                case 'due_date': {
+                    const aVal = a.due_date || '';
+                    const bVal = b.due_date || '';
+                    if (!aVal && !bVal) cmp = 0;
+                    else if (!aVal) cmp = 1;
+                    else if (!bVal) cmp = -1;
+                    else cmp = aVal.localeCompare(bVal);
+                    break;
+                }
+                case 'priority': {
+                    const aP = priorityOrder[a.priority || ''] ?? 3;
+                    const bP = priorityOrder[b.priority || ''] ?? 3;
+                    cmp = aP - bP;
+                    break;
+                }
+                case 'title': {
+                    cmp = (a.title || '').localeCompare(b.title || '');
+                    break;
+                }
+                case 'created_at': {
+                    const aVal = a.created_at || '';
+                    const bVal = b.created_at || '';
+                    cmp = aVal.localeCompare(bVal);
+                    break;
+                }
+            }
+            return sortDirection === 'desc' ? -cmp : cmp;
+        });
+    }, [sortField, sortDirection]);
 
     const sensors = useSensors(
         useSensor(PointerSensor, {
@@ -152,15 +205,49 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     }
 
     return (
-        <DndContext
-            sensors={sensors}
-            collisionDetection={pointerWithin}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-        >
-            <Box sx={{ display: 'flex', gap: 2, overflowX: 'auto', pb: 2, height: 'calc(100vh - 180px)' }}>
-                {COLUMNS.map((col) => {
-                    const colTasks = tasks?.filter((t) => t.status === col.id) || [];
+        <Box>
+            {/* Sort Controls */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+                <SortIcon sx={{ fontSize: 18, color: '#6B7280' }} />
+                <TextField
+                    select
+                    size="small"
+                    value={sortField}
+                    onChange={(e) => setSortField(e.target.value as SortField)}
+                    sx={{
+                        minWidth: 130,
+                        '& .MuiOutlinedInput-root': { fontSize: '0.8rem', height: 32 },
+                        '& .MuiSelect-select': { py: 0.5 },
+                    }}
+                >
+                    {SORT_OPTIONS.map((opt) => (
+                        <MenuItem key={opt.value} value={opt.value} sx={{ fontSize: '0.8rem' }}>
+                            {opt.label}
+                        </MenuItem>
+                    ))}
+                </TextField>
+                {sortField !== 'default' && (
+                    <Tooltip title={sortDirection === 'asc' ? '오름차순' : '내림차순'}>
+                        <IconButton
+                            size="small"
+                            onClick={() => setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                            sx={{ color: '#2955FF' }}
+                        >
+                            {sortDirection === 'asc' ? <ArrowUpwardIcon sx={{ fontSize: 18 }} /> : <ArrowDownwardIcon sx={{ fontSize: 18 }} />}
+                        </IconButton>
+                    </Tooltip>
+                )}
+            </Box>
+
+            <DndContext
+                sensors={sensors}
+                collisionDetection={pointerWithin}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+            >
+                <Box sx={{ display: 'flex', gap: 2, overflowX: 'auto', pb: 2, height: 'calc(100vh - 220px)' }}>
+                    {COLUMNS.map((col) => {
+                        const colTasks = sortTasks(tasks?.filter((t) => t.status === col.id) || []);
 
                     return (
                         <Box
@@ -230,17 +317,18 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                 })}
             </Box>
 
-            {/* Drag Overlay */}
-            <DragOverlay>
-                {activeTask ? (
-                    <TaskCard
-                        task={activeTask}
-                        onClick={() => { }}
-                        style={{ boxShadow: '0 8px 24px rgba(0,0,0,0.15)', transform: 'rotate(3deg)' }}
-                    />
-                ) : null}
-            </DragOverlay>
-        </DndContext>
+                {/* Drag Overlay */}
+                <DragOverlay>
+                    {activeTask ? (
+                        <TaskCard
+                            task={activeTask}
+                            onClick={() => { }}
+                            style={{ boxShadow: '0 8px 24px rgba(0,0,0,0.15)', transform: 'rotate(3deg)' }}
+                        />
+                    ) : null}
+                </DragOverlay>
+            </DndContext>
+        </Box>
     );
 };
 

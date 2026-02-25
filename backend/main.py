@@ -425,13 +425,17 @@ def get_tasks(project_id: Optional[int] = None, assignee_id: Optional[int] = Non
             # Check project membership
             members = data.get("project_members", [])
             user_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
+            owned_project_ids = set()
             for p in data.get("projects", []):
                 if p.get("owner_id") == user_id:
                     user_project_ids.add(p["id"])
+                    owned_project_ids.add(p["id"])
             tasks = [
                 t for t in tasks
                 if t.get("project_id") in user_project_ids and (
-                    not t.get("assignee_ids") or user_id in t.get("assignee_ids", [])
+                    not t.get("assignee_ids")
+                    or user_id in t.get("assignee_ids", [])
+                    or t.get("project_id") in owned_project_ids
                 )
             ]
     return {"tasks": tasks}
@@ -1132,7 +1136,15 @@ def get_stats(user_id: Optional[int] = None):
 
     my_tasks = []
     if user_id:
-        my_tasks = [t for t in tasks if user_id in t.get("assignee_ids", [])]
+        owned_pids = set(
+            p["id"] for p in data.get("projects", [])
+            if p.get("owner_id") == user_id
+        )
+        my_tasks = [
+            t for t in tasks
+            if user_id in t.get("assignee_ids", [])
+            or t.get("project_id") in owned_pids
+        ]
 
     return {
         "total": total,

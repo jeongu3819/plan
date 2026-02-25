@@ -1,7 +1,11 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import {
     Box, Typography, TextField, MenuItem, Paper, Chip, CircularProgress,
+    Button, Dialog, DialogTitle, DialogContent, DialogActions, Tooltip,
 } from '@mui/material';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
+import AddIcon from '@mui/icons-material/Add';
 import ReactFlow, {
     Background,
     Controls,
@@ -11,8 +15,9 @@ import ReactFlow, {
     Position,
 } from 'react-flow-renderer';
 import dagre from 'dagre';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
+import { useAppStore } from '../../stores/useAppStore';
 import { GraphNode, GraphEdge } from '../../types';
 
 interface NodeGraphViewProps {
@@ -64,11 +69,44 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
 const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
     const [filterType, setFilterType] = useState('all');
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    const queryClient = useQueryClient();
+    const openDrawer = useAppStore((state) => state.openDrawer);
+
+    // Subproject creation dialog state
+    const [showSubProjectDialog, setShowSubProjectDialog] = useState(false);
+    const [newSubProjectName, setNewSubProjectName] = useState('');
+    const [newSubProjectDesc, setNewSubProjectDesc] = useState('');
+    const [parentSubProjectId, setParentSubProjectId] = useState<number | null>(null);
 
     const { data: graphData, isLoading } = useQuery({
         queryKey: ['graph', projectId],
         queryFn: () => api.getProjectGraph(projectId),
+        refetchOnWindowFocus: true,
     });
+
+    // Subproject creation mutation
+    const createSubProjectMutation = useMutation({
+        mutationFn: (data: { name: string; description?: string; parent_id?: number | null }) =>
+            api.createSubProject(projectId, data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['graph', projectId] });
+            setShowSubProjectDialog(false);
+            setNewSubProjectName('');
+            setNewSubProjectDesc('');
+            setParentSubProjectId(null);
+        },
+    });
+
+    // Available subprojects for parent selection
+    const subProjectOptions = useMemo(() => {
+        if (!graphData) return [];
+        return graphData.nodes
+            .filter((n: GraphNode) => n.type === 'subproject')
+            .map((n: GraphNode) => ({
+                id: parseInt(n.id.replace('subproject-', '')),
+                label: n.label,
+            }));
+    }, [graphData]);
 
     // Find all connected node IDs for the selected node
     const connectedIds = useMemo(() => {
@@ -237,6 +275,36 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                     <MenuItem value="attachment">Attachments</MenuItem>
                 </TextField>
 
+                {/* Creation buttons */}
+                <Tooltip title="Create Subproject">
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<AccountTreeIcon />}
+                        onClick={() => setShowSubProjectDialog(true)}
+                        sx={{
+                            fontSize: '0.75rem', textTransform: 'none', borderColor: '#8B5CF6', color: '#8B5CF6',
+                            '&:hover': { borderColor: '#7C3AED', bgcolor: '#F5F3FF' },
+                        }}
+                    >
+                        Subproject
+                    </Button>
+                </Tooltip>
+                <Tooltip title="Create Task">
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<TaskAltIcon />}
+                        onClick={() => openDrawer(null, projectId)}
+                        sx={{
+                            fontSize: '0.75rem', textTransform: 'none', borderColor: '#22C55E', color: '#16A34A',
+                            '&:hover': { borderColor: '#16A34A', bgcolor: '#F0FDF4' },
+                        }}
+                    >
+                        Task
+                    </Button>
+                </Tooltip>
+
                 {/* Selected node info panel */}
                 {selectedInfo && (
                     <Paper sx={{
@@ -268,6 +336,33 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                                 '&:hover': { bgcolor: '#D1D5DB' },
                             }}
                         />
+                        {/* Node-specific action buttons */}
+                        {selectedInfo.type === 'subproject' && (
+                            <Tooltip title="Add Task to this Subproject">
+                                <Button
+                                    size="small"
+                                    startIcon={<AddIcon />}
+                                    onClick={() => openDrawer(null, projectId)}
+                                    sx={{ fontSize: '0.65rem', textTransform: 'none', ml: 0.5 }}
+                                >
+                                    Add Task
+                                </Button>
+                            </Tooltip>
+                        )}
+                        {selectedInfo.type === 'task' && (
+                            <Tooltip title="Edit Task">
+                                <Button
+                                    size="small"
+                                    onClick={() => {
+                                        const taskId = parseInt(selectedNodeId!.replace('task-', ''));
+                                        openDrawer({ id: taskId } as any, projectId);
+                                    }}
+                                    sx={{ fontSize: '0.65rem', textTransform: 'none', ml: 0.5 }}
+                                >
+                                    Edit
+                                </Button>
+                            </Tooltip>
+                        )}
                     </Paper>
                 )}
 
@@ -324,6 +419,83 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                     </ReactFlow>
                 )}
             </Paper>
+
+            {/* Subproject Creation Dialog */}
+            <Dialog
+                open={showSubProjectDialog}
+                onClose={() => setShowSubProjectDialog(false)}
+                maxWidth="sm"
+                fullWidth
+            >
+                <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <AccountTreeIcon sx={{ color: '#8B5CF6' }} />
+                        Create Subproject
+                    </Box>
+                </DialogTitle>
+                <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
+                    <TextField
+                        label="Name"
+                        size="small"
+                        value={newSubProjectName}
+                        onChange={(e) => setNewSubProjectName(e.target.value)}
+                        fullWidth
+                        autoFocus
+                    />
+                    <TextField
+                        label="Description"
+                        size="small"
+                        value={newSubProjectDesc}
+                        onChange={(e) => setNewSubProjectDesc(e.target.value)}
+                        fullWidth
+                        multiline
+                        rows={2}
+                    />
+                    <TextField
+                        select
+                        label="Parent Subproject (optional)"
+                        size="small"
+                        value={parentSubProjectId ?? ''}
+                        onChange={(e) => setParentSubProjectId(e.target.value ? Number(e.target.value) : null)}
+                        fullWidth
+                    >
+                        <MenuItem value="">None (directly under Project)</MenuItem>
+                        {subProjectOptions.map((sp) => (
+                            <MenuItem key={sp.id} value={sp.id}>{sp.label}</MenuItem>
+                        ))}
+                    </TextField>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button
+                        onClick={() => {
+                            setShowSubProjectDialog(false);
+                            setNewSubProjectName('');
+                            setNewSubProjectDesc('');
+                            setParentSubProjectId(null);
+                        }}
+                        sx={{ textTransform: 'none', color: '#6B7280' }}
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="contained"
+                        disabled={!newSubProjectName.trim() || createSubProjectMutation.isPending}
+                        onClick={() => {
+                            createSubProjectMutation.mutate({
+                                name: newSubProjectName.trim(),
+                                description: newSubProjectDesc.trim() || undefined,
+                                parent_id: parentSubProjectId,
+                            });
+                        }}
+                        sx={{
+                            textTransform: 'none', bgcolor: '#8B5CF6',
+                            '&:hover': { bgcolor: '#7C3AED' },
+                        }}
+                    >
+                        {createSubProjectMutation.isPending ? 'Creating...' : 'Create'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     );
 };

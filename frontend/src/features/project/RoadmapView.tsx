@@ -144,7 +144,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         return (
             <React.Fragment key={item.id}>
                 <Box sx={{
-                    display: 'flex', minHeight: 40, borderBottom: '1px solid #F3F4F6',
+                    display: 'flex', minHeight: 44, borderBottom: '1px solid #F3F4F6',
                     '&:hover': { bgcolor: '#FAFBFF' }, transition: 'background 0.1s',
                 }}>
                     <Box sx={{
@@ -161,13 +161,17 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                             <Box sx={{ width: 22 }} />
                         )}
                         {typeIcon}
-                        <Typography variant="body2" sx={{
-                            fontWeight: item.type === 'task' ? 500 : 700, fontSize: '0.8rem',
-                            flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            color: item.overdue ? '#EF4444' : '#1A1D29',
-                        }}>
-                            {item.name}
-                        </Typography>
+                        <Tooltip title={item.name} placement="top-start" disableHoverListener={item.name.length < 40}>
+                            <Typography variant="body2" sx={{
+                                fontWeight: item.type === 'task' ? 500 : 700, fontSize: '0.8rem',
+                                flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis',
+                                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                                color: item.overdue ? '#EF4444' : '#1A1D29',
+                                lineHeight: 1.4, wordBreak: 'break-word',
+                            }}>
+                                {item.name}
+                            </Typography>
+                        </Tooltip>
                         {item.overdue && (
                             <Tooltip title="Overdue">
                                 <WarningAmberIcon sx={{ fontSize: 14, color: '#EF4444' }} />
