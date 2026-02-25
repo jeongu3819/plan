@@ -2338,7 +2338,7 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
             sp = next((s for s in p_sub_projects if s["id"] == t["sub_project_id"]), None)
             sp_name = sp["name"] if sp else ""
         task_lines.append(
-            f'- {t["title"]} | 상태:{t["status"]} | 진척도:{t.get("progress",0)}% '
+            f'- [ID:{t["id"]}] {t["title"]} | 상태:{t["status"]} | 진척도:{t.get("progress",0)}% '
             f'| 우선순위:{t.get("priority","medium")} | 마감:{t.get("due_date", "미정")} | 담당자:{assignee_str}'
         )
         task_details_for_response.append({
@@ -2375,8 +2375,9 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
 
 위 컨텍스트를 분석하여 사용자의 요청에 알맞은 답변을 작성해주세요.
 반드시 아래와 같은 형식으로 빈 줄 없이 연달아 답변하세요:
+[관련Task] 질문과 직접 관련된 Task의 ID만 쉼표로 나열 (예: 1,3,5). 질문에 해당하지 않는 Task는 절대 포함하지 마세요.
 [한줄요약] 사용자의 요청에 대한 전체적인 요약 한 줄
-[상세내용] 질문의 의도에 맞춘 상세 데이터/일정/진행상황 정리
+[상세내용] 질문의 의도에 맞춘 상세 데이터/일정/진행상황 정리 (관련 Task만 언급)
 [핵심일정] 질의와 관련된 지연 가능성이나 핵심 일정
 [다음액션] 해당 질의 내용을 바탕으로 제안하는 방향이나 다음 액션
 """
@@ -2390,12 +2391,16 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
             "key_schedule": "",
             "next_actions": "",
         }
+        relevant_task_ids_str = ""
 
         # 파싱 — 멀티라인 지원
         current_key = ""
         for line in content.split('\n'):
             prefix = line.strip()
-            if prefix.startswith("[한줄요약]"):
+            if prefix.startswith("[관련Task]"):
+                relevant_task_ids_str = prefix.replace("[관련Task]", "").strip()
+                current_key = "_skip"
+            elif prefix.startswith("[한줄요약]"):
                 current_key = "one_liner"
                 parsed_summary[current_key] = prefix.replace("[한줄요약]", "").strip()
             elif prefix.startswith("[상세내용]"):
@@ -2407,23 +2412,32 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
             elif prefix.startswith("[다음액션]"):
                 current_key = "next_actions"
                 parsed_summary[current_key] = prefix.replace("[다음액션]", "").strip()
-            elif current_key and prefix:
+            elif current_key and current_key != "_skip" and prefix:
                 parsed_summary[current_key] += "\n" + prefix
+
+        # Filter tasks to only relevant ones based on AI response
+        relevant_ids = set()
+        for part in re.split(r'[,\s]+', relevant_task_ids_str):
+            part = part.strip()
+            if part.isdigit():
+                relevant_ids.add(int(part))
+
+        filtered_tasks = [t for t in task_details_for_response if t["id"] in relevant_ids] if relevant_ids else task_details_for_response
 
         queries_list = data.setdefault("project_ai_queries", [])
         query_id = next_id(queries_list)
 
-        # Compute progress stats
-        active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
-        done_count = len([t for t in p_tasks if t.get("status") == "done"])
-        ip_count = len([t for t in p_tasks if t.get("status") == "in_progress"])
-        todo_count = len([t for t in p_tasks if t.get("status") == "todo"])
-        hold_count = len([t for t in p_tasks if t.get("status") == "hold"])
-        if len(active_tasks) > 0:
-            progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
-            overall_progress = round(progress_sum / len(active_tasks), 1)
+        # Compute progress stats for filtered tasks
+        filtered_active = [t for t in filtered_tasks if t["status"] != "hold"]
+        filtered_done = len([t for t in filtered_tasks if t["status"] == "done"])
+        filtered_ip = len([t for t in filtered_tasks if t["status"] == "in_progress"])
+        filtered_todo = len([t for t in filtered_tasks if t["status"] == "todo"])
+        filtered_hold = len([t for t in filtered_tasks if t["status"] == "hold"])
+        if len(filtered_active) > 0:
+            fprogress = sum(100 if t["status"] == "done" else t.get("progress", 0) for t in filtered_active)
+            filtered_progress = round(fprogress / len(filtered_active), 1)
         else:
-            overall_progress = 0.0
+            filtered_progress = 0.0
 
         query_record = {
             "id": query_id,
@@ -2437,10 +2451,10 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
             "context": {
                 "project_name": project.get("name", ""),
                 "members": member_names,
-                "tasks": task_details_for_response,
+                "tasks": filtered_tasks,
                 "status_breakdown": {
-                    "total": len(p_tasks), "done": done_count, "in_progress": ip_count,
-                    "todo": todo_count, "hold": hold_count, "overall_progress": overall_progress,
+                    "total": len(filtered_tasks), "done": filtered_done, "in_progress": filtered_ip,
+                    "todo": filtered_todo, "hold": filtered_hold, "overall_progress": filtered_progress,
                 },
             },
         }
