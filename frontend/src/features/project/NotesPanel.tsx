@@ -148,11 +148,17 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ projectId }) => {
                                             {note.created_at ? format(new Date(note.created_at), 'yyyy-MM-dd HH:mm') : ''}
                                         </Typography>
                                     </Box>
-                                    <Typography variant="body2" sx={{
+                                    <Typography variant="body2" component="div" sx={{
                                         color: '#374151', fontSize: '0.9rem', lineHeight: 1.6,
                                         whiteSpace: 'pre-wrap',
                                     }}>
-                                        {note.content}
+                                        {note.content.split(/(@\S+)/g).map((part, i) =>
+                                            part.match(/^@\S+/) ? (
+                                                <span key={i} style={{ color: '#2955FF', fontWeight: 600 }}>{part}</span>
+                                            ) : (
+                                                <React.Fragment key={i}>{part}</React.Fragment>
+                                            )
+                                        )}
                                     </Typography>
                                 </Box>
                                 <IconButton

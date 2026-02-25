@@ -1,11 +1,12 @@
 import axios from 'axios';
-import { Task, Note, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge, ProjectFile, SearchResultProject, SearchSummaryResult, ProjectAiQueryResponse } from '../types';
+import { Task, Note, MentionNote, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge, ProjectFile, SearchResultProject, SearchSummaryResult, ProjectAiQueryResponse } from '../types';
 
-const API_URL = 'http://localhost:8000/api';
+const API_URL = `http://${window.location.hostname}:8000/api`;
 
 const client = axios.create({
     baseURL: API_URL,
     headers: { 'Content-Type': 'application/json' },
+    timeout: 180000, // 3 minutes for AI requests
 });
 
 // ─── Types ───
@@ -177,6 +178,12 @@ export const api = {
         await client.delete(`/notes/${id}`);
     },
 
+    // Mentions
+    getMentions: async (userId: number): Promise<MentionNote[]> => {
+        const res = await client.get('/mentions', { params: { user_id: userId } });
+        return res.data.mentions || [];
+    },
+
     // Attachments
     getAttachments: async (taskId: number): Promise<Attachment[]> => {
         const res = await client.get(`/tasks/${taskId}/attachments`);
@@ -201,6 +208,11 @@ export const api = {
     }): Promise<{ view: string; items: RoadmapItem[] }> => {
         const res = await client.get('/roadmap', { params });
         return res.data;
+    },
+
+    // Roadmap Order
+    saveRoadmapOrder: async (projectId: number, order: string[], parentKey?: string): Promise<void> => {
+        await client.put(`/projects/${projectId}/roadmap-order`, { order, parent_key: parentKey || null });
     },
 
     // Project Members
@@ -231,6 +243,10 @@ export const api = {
     },
 
     // Report
+    getReportData: async (projectId: number) => {
+        const res = await client.get(`/report/data/${projectId}`);
+        return res.data;
+    },
     generateReport: async (projectId: number): Promise<{ report: string; model: string }> => {
         const res = await client.post('/report/generate', { project_id: projectId });
         return res.data;
@@ -276,6 +292,9 @@ export const api = {
         const res = await client.get('/roadmap/global', { params: { user_id: userId, view } });
         return res.data;
     },
+    saveGlobalRoadmapOrder: async (userId: number, order: string[], parentKey?: string): Promise<void> => {
+        await client.put(`/roadmap/global/order?user_id=${userId}`, { order, parent_key: parentKey || null });
+    },
 
     // Shortcuts
     getShortcuts: async (): Promise<Shortcut[]> => {
@@ -301,6 +320,10 @@ export const api = {
     },
     toggleUserActive: async (targetId: number, userId: number): Promise<User> => {
         const res = await client.patch(`/admin/users/${targetId}/toggle-active?user_id=${userId}`);
+        return res.data;
+    },
+    updateUserRole: async (targetId: number, role: string, userId: number): Promise<User> => {
+        const res = await client.patch(`/admin/users/${targetId}/role?user_id=${userId}`, { role });
         return res.data;
     },
 

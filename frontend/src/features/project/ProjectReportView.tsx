@@ -1,5 +1,5 @@
 // src/features/project/ProjectReportView.tsx
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
     Box,
     Typography,
@@ -36,6 +36,7 @@ import EventAvailableIcon from "@mui/icons-material/EventAvailable";
 
 import { api } from "../../api/client";
 import { ProjectAiQueryResponse } from "../../types";
+import { useAppStore } from "../../stores/useAppStore";
 
 /* ─────────────────────────────────────────────────────────────
    ✅ Executive Summary Utilities
@@ -338,13 +339,22 @@ const priorityColor: Record<string, string> = {
 ───────────────────────────────────────────────────────────── */
 
 const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
+    const currentUserId = useAppStore(state => state.currentUserId);
     const [tabVal, setTabVal] = useState(0);
 
-    // Old Report State
-    const [data, setData] = useState<ReportData | null>(null);
+    // Structured data (loaded instantly on mount)
+    const [structuredData, setStructuredData] = useState<ReportData["structured"] | null>(null);
+    const [structuredLoading, setStructuredLoading] = useState(true);
+
+    // AI summary state (loaded on demand)
+    const [aiSections, setAiSections] = useState<ReportData["sections"] | null>(null);
+    const [aiModel, setAiModel] = useState<string>("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const reportRef = useRef<HTMLDivElement>(null);
+
+    // Legacy compat: build a combined "data" object for PDF/Word export
+    const data = structuredData ? { structured: structuredData, sections: aiSections, model: aiModel, report: "" } as unknown as ReportData : null;
 
     // New AI Query State
     const [queryData, setQueryData] = useState<ProjectAiQueryResponse | null>(null);
@@ -353,12 +363,31 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
     const [queryError, setQueryError] = useState<string | null>(null);
     const queryReportRef = useRef<HTMLDivElement>(null);
 
+    // Load structured data instantly on mount
+    useEffect(() => {
+        let cancelled = false;
+        setStructuredLoading(true);
+        api.getReportData(projectId).then((result: any) => {
+            if (!cancelled) {
+                setStructuredData(result.structured);
+                setStructuredLoading(false);
+            }
+        }).catch(() => {
+            if (!cancelled) setStructuredLoading(false);
+        });
+        return () => { cancelled = true; };
+    }, [projectId]);
+
     const handleGenerate = async () => {
         setLoading(true);
         setError(null);
         try {
             const result = await api.generateReport(projectId);
-            setData(result as unknown as ReportData);
+            const rd = result as unknown as ReportData;
+            setAiSections(rd.sections);
+            setAiModel(rd.model);
+            // Also refresh structured data from AI response
+            if (rd.structured) setStructuredData(rd.structured);
         } catch (err: any) {
             const detail = err?.response?.data?.detail || err.message || "Failed to generate report";
             setError(detail);
@@ -372,7 +401,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
         setQueryLoading(true);
         setQueryError(null);
         try {
-            const result = await api.queryProjectAi(projectId, queryText, 1);
+            const result = await api.queryProjectAi(projectId, queryText, currentUserId);
             setQueryData(result);
         } catch (err: any) {
             const detail = err?.response?.data?.detail || err.message || "Failed to query AI";
@@ -456,7 +485,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                         </Box>
 
                         <Box sx={{ display: "flex", gap: 1 }}>
-                            {data && (
+                            {structuredData && (
                                 <>
                                     <Button
                                         variant="outlined"
@@ -480,43 +509,43 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                             )}
                             <Button
                                 variant="contained"
-                                startIcon={loading ? <CircularProgress size={16} color="inherit" /> : data ? <RefreshIcon /> : <AutoAwesomeIcon />}
+                                startIcon={loading ? <CircularProgress size={16} color="inherit" /> : aiSections ? <RefreshIcon /> : <AutoAwesomeIcon />}
                                 onClick={handleGenerate}
                                 disabled={loading}
                                 size="small"
                                 sx={{ bgcolor: "#2955FF", px: 2, borderRadius: 2 }}
                             >
-                                {loading ? "Generating..." : data ? "Regenerate" : "Generate Report"}
+                                {loading ? "AI 분석 중..." : aiSections ? "AI 재분석" : "AI 분석 생성"}
                             </Button>
                         </Box>
                     </Box>
 
                     {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-                    {!data && !loading && !error && (
-                        <Paper sx={{ p: 6, textAlign: "center", borderRadius: 3, border: "2px dashed #E5E7EB", bgcolor: "#FAFBFC" }}>
-                            <AutoAwesomeIcon sx={{ fontSize: "3rem", color: "#CBD5E1", mb: 1 }} />
-                            <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.5 }}>No Report Generated Yet</Typography>
-                            <Typography variant="body2" sx={{ color: "#9CA3AF" }}>"Generate Report" 버튼을 클릭하여 보고서를 생성하세요.</Typography>
+                    {structuredLoading && (
+                        <Paper sx={{ p: 6, textAlign: "center", borderRadius: 3, border: "1px solid #E5E7EB" }}>
+                            <CircularProgress size={32} sx={{ color: "#2955FF", mb: 1 }} />
+                            <Typography variant="body2" sx={{ color: "#6B7280" }}>데이터 로딩 중...</Typography>
                         </Paper>
                     )}
 
                     {loading && (
-                        <Paper sx={{ p: 6, textAlign: "center", borderRadius: 3, border: "1px solid #E5E7EB" }}>
-                            <CircularProgress size={40} sx={{ color: "#2955FF", mb: 2 }} />
-                            <Typography variant="h6" sx={{ fontWeight: 700 }}>Generating Report...</Typography>
-                        </Paper>
+                        <Alert severity="info" icon={<CircularProgress size={18} />} sx={{ mb: 2, borderRadius: 2 }}>
+                            AI 분석 보고서 생성 중... (1~2분 소요될 수 있습니다)
+                        </Alert>
                     )}
                     {/* ═══ Report Content ═══ */}
-                    {data && s && sb && !loading && (
+                    {s && sb && !structuredLoading && (
                         <Box ref={reportRef}>
                             {/* Model badge */}
                             <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1 }}>
-                                <Chip
-                                    label={`Generated by ${data.model}`}
-                                    size="small"
-                                    sx={{ bgcolor: "#EEF2FF", color: "#2955FF", fontWeight: 600, fontSize: "0.7rem" }}
-                                />
+                                {aiModel && (
+                                    <Chip
+                                        label={`AI: ${aiModel}`}
+                                        size="small"
+                                        sx={{ bgcolor: "#EEF2FF", color: "#2955FF", fontWeight: 600, fontSize: "0.7rem" }}
+                                    />
+                                )}
                                 <Chip
                                     label={`전체 진행률: ${sb.overall_progress}%`}
                                     size="small"

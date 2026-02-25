@@ -21,7 +21,7 @@ const AiSettingsPage: React.FC = () => {
     const currentUser = users.find(u => u.id === currentUserId) || users[0];
 
     // Admin guard – block non-admin direct URL access
-    if (currentUser && currentUser.role !== 'admin') {
+    if (currentUser && currentUser.role !== 'admin' && currentUser.role !== 'super_admin') {
         return (
             <Box sx={{ p: 4, textAlign: 'center' }}>
                 <BlockIcon sx={{ fontSize: 48, color: '#EF4444', mb: 2 }} />
@@ -106,7 +106,7 @@ const AiSettingsPage: React.FC = () => {
                             }}
                         />
                         <Typography variant="caption" sx={{ color: '#9CA3AF', mt: 0.5, display: 'block' }}>
-                            OpenAI-compatible API endpoint (e.g., LM Studio, Ollama, OpenAI)
+                            지원: OpenAI, Anthropic Claude, Zhipu(GLM), DeepSeek, Ollama, LM Studio 등
                         </Typography>
                     </Box>
 

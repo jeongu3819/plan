@@ -71,6 +71,11 @@ export interface Note {
     updated_at?: string;
     author_name?: string;
     author_color?: string;
+    mentioned_user_ids?: number[];
+}
+
+export interface MentionNote extends Note {
+    project_name?: string;
 }
 
 export interface Attachment {

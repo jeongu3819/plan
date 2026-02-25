@@ -8,6 +8,7 @@ import json
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime, date
+import re
 
 app = FastAPI(title="Antigravity Schedule Platform API")
 
@@ -117,6 +118,10 @@ class MemberApproval(BaseModel):
     user_id: int
     action: str  # "approve" or "reject"
 
+class RoadmapOrderUpdate(BaseModel):
+    order: List[str]
+    parent_key: Optional[str] = None  # None = root children, "subproject-N" = subproject children
+
 class SearchRequest(BaseModel):
     query: str = ""
     status: Optional[str] = None
@@ -164,6 +169,7 @@ DEFAULT_DATA = {
     "ai_summaries": [],
     "search_feedback": [],
     "project_ai_queries": [],
+    "roadmap_orders": {},
 }
 
 def load_data() -> Dict[str, Any]:
@@ -197,6 +203,10 @@ def load_data() -> Dict[str, Any]:
                 t["sub_project_id"] = None
             if "progress" not in t:
                 t["progress"] = 0
+
+        # Migrate roadmap_orders
+        if "roadmap_orders" not in data:
+            data["roadmap_orders"] = {}
 
         # Ensure project_members has at least owner for project 1
         if not data.get("project_members"):
@@ -233,18 +243,18 @@ def get_user_project_ids(data: dict, user_id: int) -> set:
     return pids
 
 def require_admin(data: dict, user_id: int):
-    """Raise 403 if user is not admin."""
+    """Raise 403 if user is not admin or super_admin."""
     user = next((u for u in data.get("users", []) if u["id"] == user_id), None)
-    if not user or user.get("role") != "admin":
+    if not user or user.get("role") not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
 def check_project_access(data: dict, project_id: int, user_id: int):
     """Check if user has access to project. Raises 403 if not."""
-    # Admin users always have access
+    # Admin/super_admin users always have access
     users = data.get("users", [])
     user = next((u for u in users if u["id"] == user_id), None)
-    if user and user.get("role") == "admin":
+    if user and user.get("role") in ("admin", "super_admin"):
         return True
 
     # Check project visibility
@@ -273,8 +283,8 @@ def check_project_permission(data: dict, project_id: int, user_id: int, permissi
     """Check if user has a specific permission on a project. Raises 403 if not."""
     users = data.get("users", [])
     user = next((u for u in users if u["id"] == user_id), None)
-    # Admin always passes
-    if user and user.get("role") == "admin":
+    # Admin/super_admin always passes
+    if user and user.get("role") in ("admin", "super_admin"):
         return True
 
     project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
@@ -292,7 +302,7 @@ def check_project_permission(data: dict, project_id: int, user_id: int, permissi
         return True
 
     if perm_value == "admin":
-        if user and user.get("role") == "admin":
+        if user and user.get("role") in ("admin", "super_admin"):
             return True
         raise HTTPException(status_code=403, detail=f"권한이 없습니다: {permission_key} 은(는) 관리자만 가능합니다")
 
@@ -318,18 +328,27 @@ def get_all_data(user_id: Optional[int] = None):
         # Filter tasks: only tasks where user is assignee or is member of the project
         users = data.get("users", [])
         user = next((u for u in users if u["id"] == user_id), None)
-        is_admin = user and user.get("role") == "admin"
+        is_admin = user and user.get("role") in ("admin", "super_admin")
         if not is_admin:
+            is_manager = user and user.get("role") == "manager"
             members = data.get("project_members", [])
             user_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
+            owned_project_ids = set()
+            manager_project_ids = set()
             # Also include projects owned by user
             for p in data.get("projects", []):
                 if p.get("owner_id") == user_id:
                     user_project_ids.add(p["id"])
+                    owned_project_ids.add(p["id"])
+            if is_manager:
+                manager_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
             data["tasks"] = [
                 t for t in data.get("tasks", [])
                 if t.get("project_id") in user_project_ids and (
-                    not t.get("assignee_ids") or user_id in t.get("assignee_ids", [])
+                    not t.get("assignee_ids")
+                    or user_id in t.get("assignee_ids", [])
+                    or t.get("project_id") in owned_project_ids
+                    or t.get("project_id") in manager_project_ids
                 )
             ]
     return data
@@ -420,22 +439,28 @@ def get_tasks(project_id: Optional[int] = None, assignee_id: Optional[int] = Non
     if user_id:
         users = data.get("users", [])
         user = next((u for u in users if u["id"] == user_id), None)
-        is_admin = user and user.get("role") == "admin"
+        is_admin = user and user.get("role") in ("admin", "super_admin")
         if not is_admin:
+            is_manager = user and user.get("role") == "manager"
             # Check project membership
             members = data.get("project_members", [])
             user_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
             owned_project_ids = set()
+            manager_project_ids = set()
             for p in data.get("projects", []):
                 if p.get("owner_id") == user_id:
                     user_project_ids.add(p["id"])
                     owned_project_ids.add(p["id"])
+            # Manager sees all tasks in projects they are a member of
+            if is_manager:
+                manager_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
             tasks = [
                 t for t in tasks
                 if t.get("project_id") in user_project_ids and (
                     not t.get("assignee_ids")
                     or user_id in t.get("assignee_ids", [])
                     or t.get("project_id") in owned_project_ids
+                    or t.get("project_id") in manager_project_ids
                 )
             ]
     return {"tasks": tasks}
@@ -936,6 +961,27 @@ def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=
     new_note["created_at"] = datetime.now().isoformat()
     new_note["updated_at"] = datetime.now().isoformat()
 
+    # Parse @mentions
+    mentioned_user_ids = []
+    tokens = re.findall(r'@(\S+)', note.content)
+    if tokens:
+        users = data.get("users", [])
+        for token in tokens:
+            token_lower = token.lower()
+            # Match by username first, then loginid
+            matched = next(
+                (u for u in users if u.get("username", "").lower() == token_lower),
+                None
+            )
+            if not matched:
+                matched = next(
+                    (u for u in users if u.get("loginid", "").lower() == token_lower),
+                    None
+                )
+            if matched and matched["id"] not in mentioned_user_ids:
+                mentioned_user_ids.append(matched["id"])
+    new_note["mentioned_user_ids"] = mentioned_user_ids
+
     notes.append(new_note)
     data["notes"] = notes
     save_data(data)
@@ -948,6 +994,35 @@ def delete_note(note_id: int):
     data["notes"] = [n for n in notes if n["id"] != note_id]
     save_data(data)
     return {"message": "Note deleted"}
+
+@app.get("/api/mentions")
+def get_mentions(user_id: int = Query(...)):
+    data = load_data()
+    notes = data.get("notes", [])
+    users = {u["id"]: u for u in data.get("users", [])}
+    projects = {p["id"]: p for p in data.get("projects", [])}
+
+    result = []
+    for n in notes:
+        if user_id not in n.get("mentioned_user_ids", []):
+            continue
+        pid = n.get("project_id")
+        # Check project access (skip if user cannot access)
+        try:
+            check_project_access(data, pid, user_id)
+        except HTTPException:
+            continue
+        project = projects.get(pid, {})
+        author = users.get(n.get("author_id"), {})
+        result.append({
+            **n,
+            "project_name": project.get("name", "Unknown"),
+            "author_name": author.get("username", "Unknown"),
+            "author_color": author.get("avatar_color", "#ccc"),
+        })
+
+    result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"mentions": result}
 
 # ─── Roadmap (Gantt) API ───
 
@@ -1082,12 +1157,53 @@ def get_roadmap(
             "assignee_ids": t.get("assignee_ids", []),
         })
 
+    # Apply saved roadmap order if exists
+    saved_orders = data.get("roadmap_orders", {})
+
+    def apply_order(children_list, order_key):
+        saved_order = saved_orders.get(order_key)
+        if not saved_order:
+            return children_list
+        ordered = []
+        remaining = {c["id"]: c for c in children_list}
+        for item_id in saved_order:
+            if item_id in remaining:
+                ordered.append(remaining.pop(item_id))
+        # Append any new items not in saved order
+        for c in children_list:
+            if c["id"] in remaining:
+                ordered.append(c)
+        return ordered
+
+    # Apply order to subproject children first
+    for child in project_item["children"]:
+        if child.get("type") == "subproject" and child.get("children"):
+            sp_key = f"{project_id}:{child['id']}"
+            child["children"] = apply_order(child["children"], sp_key)
+
+    # Apply order to project root children
+    project_item["children"] = apply_order(project_item["children"], str(project_id))
+
     return {
         "view": view,
         "from": from_date,
         "to": to_date,
         "items": [project_item],
     }
+
+@app.put("/api/projects/{project_id}/roadmap-order")
+def save_roadmap_order(project_id: int, body: RoadmapOrderUpdate):
+    data = load_data()
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if "roadmap_orders" not in data:
+        data["roadmap_orders"] = {}
+    # Key: "{project_id}" for root, "{project_id}:{parent_key}" for subproject children
+    storage_key = str(project_id) if not body.parent_key else f"{project_id}:{body.parent_key}"
+    data["roadmap_orders"][storage_key] = body.order
+    save_data(data)
+    return {"message": "Roadmap order saved"}
 
 # ─── Dashboard Stats ───
 
@@ -1140,10 +1256,17 @@ def get_stats(user_id: Optional[int] = None):
             p["id"] for p in data.get("projects", [])
             if p.get("owner_id") == user_id
         )
+        # Manager sees all tasks in their member projects
+        user_obj = next((u for u in data.get("users", []) if u["id"] == user_id), None)
+        manager_pids = set()
+        if user_obj and user_obj.get("role") == "manager":
+            members = data.get("project_members", [])
+            manager_pids = set(m["project_id"] for m in members if m["user_id"] == user_id)
         my_tasks = [
             t for t in tasks
             if user_id in t.get("assignee_ids", [])
             or t.get("project_id") in owned_pids
+            or t.get("project_id") in manager_pids
         ]
 
     return {
@@ -1218,6 +1341,123 @@ class AiSettingsUpdate(BaseModel):
 class ReportRequest(BaseModel):
     project_id: int
 
+
+# ─── Shared LLM API Helper ───
+
+def call_llm_api(api_url: str, model_name: str, api_key: str, system_prompt: str, user_prompt: str, max_tokens: int = 4096, temperature: float = 0.3) -> str:
+    """Call external LLM API with multi-provider support.
+    Supports: Anthropic Claude, OpenAI-compatible, HuggingFace, Zhipu, DeepSeek, etc.
+    Returns the generated text content.
+    """
+    import httpx
+
+    endpoint = api_url.rstrip("/")
+    headers = {"Content-Type": "application/json"}
+
+    is_anthropic = "anthropic.com" in endpoint
+    is_huggingface = "huggingface.co" in endpoint or "hf.space" in endpoint
+
+    if is_anthropic:
+        # ── Anthropic Claude API ──
+        if not endpoint.endswith("/messages"):
+            if endpoint.endswith("/v1"):
+                endpoint += "/messages"
+            else:
+                endpoint += "/v1/messages"
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+        payload = {
+            "model": model_name,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+            "temperature": temperature,
+        }
+    elif is_huggingface:
+        # ── HuggingFace ──
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {
+            "model": model_name,
+            "inputs": f"{system_prompt}\n\n{user_prompt}",
+            "parameters": {
+                "max_new_tokens": max_tokens,
+                "temperature": temperature,
+                "return_full_text": False,
+            },
+        }
+    else:
+        # ── OpenAI-compatible (OpenAI, Zhipu, DeepSeek, Ollama, LM Studio, etc.) ──
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if not endpoint.endswith("/chat/completions"):
+            # Detect version path like /v1, /v2, /v3, /v4 etc.
+            if re.search(r"/v\d+$", endpoint):
+                endpoint += "/chat/completions"
+            else:
+                endpoint += "/v1/chat/completions"
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        # Disable reasoning/thinking mode for models that support it (e.g. glm-4.7)
+        # Reasoning tokens consume max_tokens budget and slow down responses
+        if "glm" in model_name.lower():
+            payload["thinking"] = {"enable": False}
+
+    try:
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(endpoint, json=payload, headers=headers)
+            if response.status_code != 200:
+                error_text = response.text[:500]
+                # Provide actionable error messages
+                if response.status_code == 429:
+                    raise HTTPException(status_code=502, detail=f"AI API 요청 한도 초과 또는 잔액 부족입니다. API 제공자의 잔액/한도를 확인해주세요. (HTTP 429: {error_text})")
+                elif response.status_code == 401:
+                    raise HTTPException(status_code=502, detail=f"AI API 인증 실패입니다. API Key를 확인해주세요. (HTTP 401: {error_text})")
+                elif response.status_code == 403:
+                    raise HTTPException(status_code=502, detail=f"AI API 접근이 거부되었습니다. API Key와 권한을 확인해주세요. (HTTP 403: {error_text})")
+                else:
+                    raise HTTPException(status_code=502, detail=f"AI API 오류 (HTTP {response.status_code}): {error_text}")
+            result = response.json()
+
+            # ── Extract content based on provider ──
+            if is_anthropic:
+                content_blocks = result.get("content", [])
+                content = ""
+                for block in content_blocks:
+                    if block.get("type") == "text":
+                        content += block.get("text", "")
+                if not content:
+                    content = str(result)
+            elif is_huggingface:
+                if isinstance(result, list) and len(result) > 0:
+                    content = result[0].get("generated_text", "")
+                else:
+                    content = result.get("generated_text", str(result))
+            else:
+                # OpenAI-compatible
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            if not content:
+                raise HTTPException(status_code=502, detail="AI API가 빈 응답을 반환했습니다. 모델 이름과 API URL을 확인해주세요.")
+
+            return content
+
+    except HTTPException:
+        raise
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail=f"AI 모델 서버({endpoint})에 연결할 수 없습니다. API URL을 확인해주세요.")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=502, detail=f"AI 모델 서버 응답 시간이 초과되었습니다 (120초). 모델 또는 서버 상태를 확인해주세요.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI API 호출 실패: {str(e)}")
+
 @app.get("/api/settings/ai")
 def get_ai_settings():
     data = load_data()
@@ -1233,6 +1473,83 @@ def save_ai_settings(body: AiSettingsUpdate):
     }
     save_data(data)
     return {"message": "AI settings saved", "settings": data["ai_settings"]}
+
+@app.get("/api/report/data/{project_id}")
+def get_report_data(project_id: int):
+    """Return structured project data instantly (no AI call)."""
+    data = load_data()
+    project = None
+    for p in data.get("projects", []):
+        if p["id"] == project_id:
+            project = p
+            break
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    tasks = [t for t in data.get("tasks", []) if t.get("project_id") == project_id and not t.get("archived_at")]
+    sub_projects = [sp for sp in data.get("sub_projects", []) if sp.get("project_id") == project_id]
+    all_attachments = data.get("attachments", [])
+    raw_members = data.get("project_members", [])
+    if isinstance(raw_members, list):
+        members = [m for m in raw_members if m.get("project_id") == project_id]
+    elif isinstance(raw_members, dict):
+        members = raw_members.get(str(project_id), [])
+    else:
+        members = []
+    users = {u["id"]: u for u in data.get("users", [])}
+    project_files = [f for f in data.get("project_files", []) if f.get("project_id") == project_id]
+
+    active_tasks = [t for t in tasks if t.get("status") != "hold"]
+    hold_tasks = [t for t in tasks if t.get("status") == "hold"]
+    done_tasks = [t for t in tasks if t.get("status") == "done"]
+    in_progress_tasks = [t for t in tasks if t.get("status") == "in_progress"]
+    todo_tasks = [t for t in tasks if t.get("status") == "todo"]
+
+    if len(active_tasks) > 0:
+        progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
+        overall_progress = round(progress_sum / len(active_tasks), 1)
+    else:
+        overall_progress = 0.0
+
+    task_details = []
+    for t in tasks:
+        assignees = [users.get(a, {}).get("username", f"User {a}") for a in t.get("assignee_ids", [])]
+        sp_name = ""
+        if t.get("sub_project_id"):
+            sp = next((s for s in sub_projects if s["id"] == t["sub_project_id"]), None)
+            sp_name = sp["name"] if sp else ""
+        task_attachments = [a for a in all_attachments if a.get("task_id") == t["id"]]
+        task_details.append({
+            "id": t["id"], "title": t.get("title", ""), "description": t.get("description", ""),
+            "status": t.get("status", "todo"), "priority": t.get("priority", "medium"),
+            "progress": t.get("progress", 0) or 0, "start_date": t.get("start_date"),
+            "due_date": t.get("due_date"),
+            "assignees": assignees, "sub_project": sp_name, "tags": t.get("tags", []),
+            "attachments": [{"id": a["id"], "filename": a.get("filename", ""), "url": a.get("url", ""), "type": a.get("type", "url")} for a in task_attachments],
+        })
+
+    member_names = []
+    for m in members:
+        uid = m.get("user_id", m) if isinstance(m, dict) else m
+        user = users.get(uid)
+        if user:
+            member_names.append(f'{user["username"]} ({user.get("role", "member")})')
+
+    return {
+        "structured": {
+            "project": {"name": project.get("name", ""), "description": project.get("description", ""), "created_at": project.get("created_at", "")},
+            "status_breakdown": {
+                "total": len(tasks), "active": len(active_tasks), "done": len(done_tasks),
+                "in_progress": len(in_progress_tasks), "todo": len(todo_tasks), "hold": len(hold_tasks),
+                "overall_progress": overall_progress,
+            },
+            "tasks": task_details,
+            "sub_projects": [{"name": sp.get("name", ""), "description": sp.get("description", "")} for sp in sub_projects],
+            "members": member_names,
+            "project_files": [{"id": pf["id"], "filename": pf.get("filename", ""), "size": pf.get("size", 0), "created_at": pf.get("created_at", "")} for pf in project_files],
+        },
+    }
+
 
 @app.post("/api/report/generate")
 def generate_report(body: ReportRequest):
@@ -1366,131 +1683,66 @@ def generate_report(body: ReportRequest):
             f'| 설명: {t["description"] or "없음"}{att_info}'
         )
 
-    prompt = f"""당신은 전문 프로젝트 매니저 보조 AI입니다. 아래 프로젝트 데이터를 분석하여 스토리형 종합 보고서를 작성해주세요.
+    # ── Build concise task summary (limit detail to keep prompt short) ──
+    task_summary_lines = []
+    for t in task_details:
+        task_summary_lines.append(
+            f'- {t["title"]} | {t["status"]} | {t["priority"]} | {t["progress"]}% | 마감: {t["due_date"] or "미정"}'
+        )
 
-## 프로젝트 정보
-- 이름: {project["name"]}
-- 설명: {project.get("description", "없음")}
-- 생성일: {project.get("created_at", "N/A")}
-- 팀원: {", ".join(member_names) if member_names else "미배정"}
+    prompt = f"""프로젝트 "{project["name"]}" 분석 보고서를 작성하세요.
 
-## 진행 현황
-- 전체 Task 수: {len(tasks)}개
-- 활성 Task(Hold 제외): {len(active_tasks)}개
-- 완료: {len(done_tasks)}개 | 진행 중: {len(in_progress_tasks)}개 | 대기: {len(todo_tasks)}개 | 보류: {len(hold_tasks)}개
-- 전체 진행률(Hold 제외): {overall_progress}%
+프로젝트 설명: {project.get("description", "없음")}
+진행률: {overall_progress}% (완료 {len(done_tasks)}, 진행중 {len(in_progress_tasks)}, 대기 {len(todo_tasks)}, 보류 {len(hold_tasks)})
+Task 목록:
+{chr(10).join(task_summary_lines) if task_summary_lines else "Task 없음"}
 
-## Task 상세 목록
-{chr(10).join(task_lines) if task_lines else "Task 없음"}
+아래 4개 섹션으로 간결하게 작성하세요. 각 섹션 2~4문장. 마크다운 문법 사용 금지. 일반 텍스트만.
 
-## 서브프로젝트
-{chr(10).join([f'- {sp["name"]}: {sp.get("description", "")}' for sp in sub_projects]) if sub_projects else "없음"}
+[섹션1: 프로젝트 개요] 프로젝트 목적과 현재 진행 상태 요약.
+[섹션2: Task별 분석] 핵심 Task 위주로 현재 상태와 진행도를 간략히 설명.
+[섹션3: 종합 현황 분석] 전체 프로젝트 단계, 핵심 이슈, 지연 항목 정리.
+[섹션4: 다음 단계 제언] 우선 처리할 작업과 권장 순서.
 
-## 프로젝트 첨부파일
-{chr(10).join([f'- {pf.get("filename", "")} (크기: {round(pf.get("size", 0)/1024, 1)}KB, 업로드일: {pf.get("created_at", "N/A")})' for pf in project_files]) if project_files else "첨부파일 없음"}
+반드시 한국어로 작성하세요."""
 
----
-아래 4개 섹션으로 나눠서 분석 보고서를 작성해주세요. 마크다운 문법(#, **, -, ```)을 사용하지 마세요. 일반 텍스트로만 작성하세요.
-
-[섹션1: 프로젝트 개요]
-프로젝트의 전체 목적을 한 문장으로 요약하고, 현재 전체 진행률과 상태를 설명하세요.
-
-[섹션2: Task별 분석]
-각 Task에 대해 현재 상태, 진행률, 그리고 현재까지 어떤 단계까지 진행되었는지를 설명하세요.
-첨부 자료가 있는 경우, 해당 자료가 Task 진행에서 어떤 역할을 하는지도 설명하세요.
-
-[섹션3: 종합 현황 분석]
-현재 프로젝트가 어떤 단계에 있는지, 핵심 진행 작업, 완료 작업, 지연/보류 작업을 정리하세요.
-프로젝트에 첨부파일이 있으면, 어떤 파일이 포함되어 있는지 간략히 안내하세요.
-
-[섹션4: 다음 단계 제언]
-다음으로 가장 중요한 작업이 무엇인지, 어떤 순서로 진행하면 좋을지 제안하세요.
-
-각 섹션은 [섹션1], [섹션2] 등의 태그로 시작해주세요. 반드시 한국어로 작성하세요."""
-
-    # ── Call external LLM API ──
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    endpoint = api_url.rstrip("/")
-    is_huggingface = "huggingface.co" in endpoint or "hf.space" in endpoint
-
-    if is_huggingface:
-        payload = {
-            "model": model_name,
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 4096,
-                "temperature": 0.3,
-                "return_full_text": False,
-            },
-        }
-    else:
-        if not endpoint.endswith("/chat/completions"):
-            if endpoint.endswith("/v1"):
-                endpoint += "/chat/completions"
-            elif not endpoint.endswith("/v1/chat/completions"):
-                endpoint += "/v1/chat/completions"
-
-        payload = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": "You are a professional project management report generator. Always respond in Korean. Do not use markdown syntax."},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 4096,
-        }
-
+    # ── Call LLM API via shared helper ──
+    system_prompt = "You are a professional project management report generator. Always respond in Korean. Do not use markdown syntax. Be concise."
     try:
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(endpoint, json=payload, headers=headers)
-            response.raise_for_status()
-            result = response.json()
+        content = call_llm_api(api_url, model_name, api_key, system_prompt, prompt, max_tokens=4096, temperature=0.2)
 
-            if is_huggingface:
-                if isinstance(result, list) and len(result) > 0:
-                    content = result[0].get("generated_text", "Report generation failed.")
-                else:
-                    content = result.get("generated_text", str(result))
-            else:
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "Report generation failed.")
+        # ── Parse sections ──
+        sections = {"overview": "", "task_analysis": "", "status_analysis": "", "next_steps": ""}
+        current_section = ""
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if "[섹션1" in stripped:
+                current_section = "overview"
+                continue
+            elif "[섹션2" in stripped:
+                current_section = "task_analysis"
+                continue
+            elif "[섹션3" in stripped:
+                current_section = "status_analysis"
+                continue
+            elif "[섹션4" in stripped:
+                current_section = "next_steps"
+                continue
+            if current_section:
+                sections[current_section] += line + "\n"
 
-            # ── Parse sections ──
-            sections = {"overview": "", "task_analysis": "", "status_analysis": "", "next_steps": ""}
-            current_section = ""
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if "[섹션1" in stripped:
-                    current_section = "overview"
-                    continue
-                elif "[섹션2" in stripped:
-                    current_section = "task_analysis"
-                    continue
-                elif "[섹션3" in stripped:
-                    current_section = "status_analysis"
-                    continue
-                elif "[섹션4" in stripped:
-                    current_section = "next_steps"
-                    continue
-                if current_section:
-                    sections[current_section] += line + "\n"
+        # If no sections detected, put everything in overview
+        if not any(sections.values()):
+            sections["overview"] = content
 
-            # If no sections detected, put everything in overview
-            if not any(sections.values()):
-                sections["overview"] = content
-
-            return {
-                "report": content,
-                "sections": sections,
-                "structured": structured,
-                "model": model_name,
-            }
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to AI model at {endpoint}. Please check the API URL.")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"AI API returned error {e.response.status_code}: {e.response.text[:300]}")
+        return {
+            "report": content,
+            "sections": sections,
+            "structured": structured,
+            "model": model_name,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
@@ -1580,7 +1832,47 @@ def get_global_roadmap(user_id: int = Query(...), view: str = Query(default="mon
 
         items.append(project_item)
 
+    # Apply saved roadmap orders
+    saved_orders = data.get("roadmap_orders", {})
+
+    def apply_order(children_list, order_key):
+        saved_order = saved_orders.get(order_key)
+        if not saved_order:
+            return children_list
+        ordered = []
+        remaining = {c["id"]: c for c in children_list}
+        for item_id in saved_order:
+            if item_id in remaining:
+                ordered.append(remaining.pop(item_id))
+        for c in children_list:
+            if c["id"] in remaining:
+                ordered.append(c)
+        return ordered
+
+    # Apply per-project children and subproject children order
+    for project_item in items:
+        pid = project_item["id"].replace("project-", "")
+        for child in project_item.get("children", []):
+            if child.get("type") == "subproject" and child.get("children"):
+                sp_key = f"{pid}:{child['id']}"
+                child["children"] = apply_order(child["children"], sp_key)
+        project_item["children"] = apply_order(project_item.get("children", []), pid)
+
+    # Apply global project order (user-specific)
+    items = apply_order(items, f"global:{user_id}")
+
     return {"view": view, "items": items}
+
+
+@app.put("/api/roadmap/global/order")
+def save_global_roadmap_order(body: RoadmapOrderUpdate, user_id: int = Query(...)):
+    data = load_data()
+    if "roadmap_orders" not in data:
+        data["roadmap_orders"] = {}
+    storage_key = f"global:{user_id}" if not body.parent_key else f"global:{user_id}:{body.parent_key}"
+    data["roadmap_orders"][storage_key] = body.order
+    save_data(data)
+    return {"message": "Global roadmap order saved"}
 
 
 # ─── Admin Endpoints ───
@@ -1602,6 +1894,31 @@ def admin_toggle_user_active(target_id: int, user_id: int = Query(...)):
     user["is_active"] = not user.get("is_active", True)
     save_data(data)
     return user
+
+class RoleUpdate(BaseModel):
+    role: str
+
+@app.patch("/api/admin/users/{target_id}/role")
+def admin_update_user_role(target_id: int, body: RoleUpdate, user_id: int = Query(...)):
+    data = load_data()
+    require_admin(data, user_id)
+    valid_roles = ("member", "manager", "admin", "super_admin")
+    if body.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
+    users = data.get("users", [])
+    target = next((u for u in users if u["id"] == target_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Prevent changing own role
+    if target_id == user_id:
+        raise HTTPException(status_code=400, detail="자신의 역할은 변경할 수 없습니다")
+    # Only super_admin can assign super_admin or admin roles
+    caller = next((u for u in users if u["id"] == user_id), None)
+    if body.role in ("admin", "super_admin") and (not caller or caller.get("role") != "super_admin"):
+        raise HTTPException(status_code=403, detail="admin/super_admin 역할은 super_admin만 부여할 수 있습니다")
+    target["role"] = body.role
+    save_data(data)
+    return target
 
 
 # ─── Group Endpoints ───
@@ -1902,101 +2219,76 @@ def generate_search_summary(req: SearchSummaryRequest, user_id: int = Query(...)
 [다음액션] 향후 조치사항
 """
 
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    endpoint = api_url.rstrip("/")
-    if not endpoint.endswith("/chat/completions"):
-        if endpoint.endswith("/v1"):
-            endpoint += "/chat/completions"
-        elif not endpoint.endswith("/v1/chat/completions"):
-            endpoint += "/v1/chat/completions"
-
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 4096,
-    }
-
     try:
-        import httpx
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(endpoint, json=payload, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            content = result.get("choices", [{}])[0].get("message", {}).get("content", "Report generation failed.")
-            
-            project_summaries = []
-            current_pid = None
-            current_summary = None
-            
-            for line in content.split('\n'):
-                prefix = line.strip()
-                if prefix.startswith("[프로젝트ID:"):
-                    if current_summary:
-                        project_summaries.append(current_summary)
-                    try:
-                        pid_str = prefix.split(":")[1].replace("]", "").strip()
-                        current_pid = int(pid_str)
-                    except:
-                        current_pid = -1
-                    current_summary = {
-                        "project_id": current_pid,
-                        "project_name": next((p["name"] for p in projects_to_summarize if p["id"] == current_pid), "Unknown"),
-                        "one_liner": "",
-                        "status_text": "",
-                        "key_schedule": "",
-                        "sub_project_summary": "",
-                        "related_materials": "",
-                        "risks": "",
-                        "next_actions": ""
-                    }
-                elif current_summary:
-                    if prefix.startswith("[한줄요약]"): current_summary["one_liner"] = prefix.replace("[한줄요약]", "").strip()
-                    elif prefix.startswith("[진행상황]"): current_summary["status_text"] = prefix.replace("[진행상황]", "").strip()
-                    elif prefix.startswith("[핵심일정]"): current_summary["key_schedule"] = prefix.replace("[핵심일정]", "").strip()
-                    elif prefix.startswith("[하위프로젝트]"): current_summary["sub_project_summary"] = prefix.replace("[하위프로젝트]", "").strip()
-                    elif prefix.startswith("[관련자료]"): current_summary["related_materials"] = prefix.replace("[관련자료]", "").strip()
-                    elif prefix.startswith("[리스크]"): current_summary["risks"] = prefix.replace("[리스크]", "").strip()
-                    elif prefix.startswith("[다음액션]"): current_summary["next_actions"] = prefix.replace("[다음액션]", "").strip()
-            
-            if current_summary:
-                project_summaries.append(current_summary)
-                
-            summaries_list = data.setdefault("ai_summaries", [])
-            summary_id = next_id(summaries_list)
-            
-            summary_record = {
-                "id": summary_id,
-                "query": req.query,
-                "overall_summary": content,
-                "project_summaries": project_summaries,
-                "model": model_name,
-                "created_at": datetime.datetime.now().isoformat(),
-                "user_id": user_id,
-                "is_corrected": False
-            }
-            summaries_list.append(summary_record)
-            save_data(data)
-            
-            return summary_record
-            
+        content = call_llm_api(api_url, model_name, api_key, system_prompt, user_prompt)
+
+        project_summaries = []
+        current_pid = None
+        current_summary = None
+
+        for line in content.split('\n'):
+            prefix = line.strip()
+            if prefix.startswith("[프로젝트ID:"):
+                if current_summary:
+                    project_summaries.append(current_summary)
+                try:
+                    pid_str = prefix.split(":")[1].replace("]", "").strip()
+                    current_pid = int(pid_str)
+                except:
+                    current_pid = -1
+                current_summary = {
+                    "project_id": current_pid,
+                    "project_name": next((p["name"] for p in projects_to_summarize if p["id"] == current_pid), "Unknown"),
+                    "one_liner": "",
+                    "status_text": "",
+                    "key_schedule": "",
+                    "sub_project_summary": "",
+                    "related_materials": "",
+                    "risks": "",
+                    "next_actions": ""
+                }
+            elif current_summary:
+                if prefix.startswith("[한줄요약]"): current_summary["one_liner"] = prefix.replace("[한줄요약]", "").strip()
+                elif prefix.startswith("[진행상황]"): current_summary["status_text"] = prefix.replace("[진행상황]", "").strip()
+                elif prefix.startswith("[핵심일정]"): current_summary["key_schedule"] = prefix.replace("[핵심일정]", "").strip()
+                elif prefix.startswith("[하위프로젝트]"): current_summary["sub_project_summary"] = prefix.replace("[하위프로젝트]", "").strip()
+                elif prefix.startswith("[관련자료]"): current_summary["related_materials"] = prefix.replace("[관련자료]", "").strip()
+                elif prefix.startswith("[리스크]"): current_summary["risks"] = prefix.replace("[리스크]", "").strip()
+                elif prefix.startswith("[다음액션]"): current_summary["next_actions"] = prefix.replace("[다음액션]", "").strip()
+
+        if current_summary:
+            project_summaries.append(current_summary)
+
+        summaries_list = data.setdefault("ai_summaries", [])
+        summary_id = next_id(summaries_list)
+
+        summary_record = {
+            "id": summary_id,
+            "query": req.query,
+            "overall_summary": content,
+            "project_summaries": project_summaries,
+            "model": model_name,
+            "created_at": datetime.datetime.now().isoformat(),
+            "user_id": user_id,
+            "is_corrected": False
+        }
+        summaries_list.append(summary_record)
+        save_data(data)
+
+        return summary_record
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search summary generation failed: {str(e)}")
 
 @app.post("/api/projects/{project_id}/ai-query")
 def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_id: int = Query(...)):
-    import httpx
     import datetime
-    
+
     data = load_data()
     check_project_access(data, project_id, user_id)
-    
+
     ai_settings = data.get("ai_settings", {})
     api_url = ai_settings.get("api_url", "")
     model_name = ai_settings.get("model_name", "")
@@ -2004,7 +2296,7 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
 
     if not api_url or not model_name:
         raise HTTPException(status_code=400, detail="AI settings not configured. Please set API URL and model name in Settings.")
-        
+
     project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -2012,20 +2304,20 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
     # Gather Context
     all_tasks = data.get("tasks", [])
     p_tasks = [t for t in all_tasks if t.get("project_id") == project_id and not t.get("archived_at")]
-    
+
     all_sub_projects = data.get("sub_projects", [])
     p_sub_projects = [sp for sp in all_sub_projects if sp.get("project_id") == project_id]
-    
+
     all_notes = data.get("notes", [])
     p_notes = [n for n in all_notes if n.get("project_id") == project_id]
-    
+
     task_lines = []
     for t in p_tasks:
         task_lines.append(f'- {t["title"]} | 상태:{t["status"]} | 진척도:{t.get("progress",0)}% | 우선순위:{t.get("priority","medium")} | 마감:{t.get("due_date", "미정")}')
-        
+
     sp_lines = [f'- {sp["name"]}: {sp.get("description", "")}' for sp in p_sub_projects]
     note_lines = [f'- {n["content"]}' for n in p_notes]
-    
+
     context_str = f"""[프로젝트: {project["name"]}]
 - 설명: {project.get("description", "없음")}
 - 작성일: {project.get("created_at", "")}
@@ -2041,7 +2333,7 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
 """
 
     system_prompt = "당신은 전문 프로젝트 매니저 보조 AI입니다. 주어진 프로젝트 컨텍스트만을 바탕으로 사용자의 질문이나 요청 사항을 명확하고 구조적으로 답변하세요. 답변은 마크다운 문법(#, **, - 등)을 사용하지 않고 일반 텍스트로만 구조화하여 작성해야 합니다. 정보가 없으면 추측하지 말고 '제공된 컨텍스트에 해당 정보가 없습니다'라고 답하세요."
-    
+
     user_prompt = f"""[현재 프로젝트 컨텍스트]
 {context_str}
 
@@ -2055,68 +2347,55 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
 [다음액션] 해당 질의 내용을 바탕으로 제안하는 방향이나 다음 액션
 """
 
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    endpoint = api_url.rstrip("/")
-    if not endpoint.endswith("/chat/completions"):
-        if endpoint.endswith("/v1"):
-            endpoint += "/chat/completions"
-        elif not endpoint.endswith("/v1/chat/completions"):
-            endpoint += "/v1/chat/completions"
-
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 4096,
-    }
-
     try:
-        import httpx
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(endpoint, json=payload, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            content = result.get("choices", [{}])[0].get("message", {}).get("content", "응답 생성에 실패했습니다.")
-            
-            parsed_summary = {
-                "one_liner": "",
-                "details": "",
-                "key_schedule": "",
-                "next_actions": "",
-            }
-            
-            # 파싱
-            for line in content.split('\\n'):
-                prefix = line.strip()
-                if prefix.startswith("[한줄요약]"): parsed_summary["one_liner"] = prefix.replace("[한줄요약]", "").strip()
-                elif prefix.startswith("[상세내용]"): parsed_summary["details"] = prefix.replace("[상세내용]", "").strip()
-                elif prefix.startswith("[핵심일정]"): parsed_summary["key_schedule"] = prefix.replace("[핵심일정]", "").strip()
-                elif prefix.startswith("[다음액션]"): parsed_summary["next_actions"] = prefix.replace("[다음액션]", "").strip()
-                
-            queries_list = data.setdefault("project_ai_queries", [])
-            query_id = next_id(queries_list)
-            
-            query_record = {
-                "id": query_id,
-                "project_id": project_id,
-                "user_id": user_id,
-                "query": req.query,
-                "parsed_response": parsed_summary,
-                "raw_response": content,
-                "model": model_name,
-                "created_at": datetime.datetime.now().isoformat()
-            }
-            queries_list.append(query_record)
-            save_data(data)
-            
-            return query_record
-            
+        content = call_llm_api(api_url, model_name, api_key, system_prompt, user_prompt)
+
+        parsed_summary = {
+            "one_liner": "",
+            "details": "",
+            "key_schedule": "",
+            "next_actions": "",
+        }
+
+        # 파싱 — 멀티라인 지원
+        current_key = ""
+        for line in content.split('\n'):
+            prefix = line.strip()
+            if prefix.startswith("[한줄요약]"):
+                current_key = "one_liner"
+                parsed_summary[current_key] = prefix.replace("[한줄요약]", "").strip()
+            elif prefix.startswith("[상세내용]"):
+                current_key = "details"
+                parsed_summary[current_key] = prefix.replace("[상세내용]", "").strip()
+            elif prefix.startswith("[핵심일정]"):
+                current_key = "key_schedule"
+                parsed_summary[current_key] = prefix.replace("[핵심일정]", "").strip()
+            elif prefix.startswith("[다음액션]"):
+                current_key = "next_actions"
+                parsed_summary[current_key] = prefix.replace("[다음액션]", "").strip()
+            elif current_key and prefix:
+                parsed_summary[current_key] += "\n" + prefix
+
+        queries_list = data.setdefault("project_ai_queries", [])
+        query_id = next_id(queries_list)
+
+        query_record = {
+            "id": query_id,
+            "project_id": project_id,
+            "user_id": user_id,
+            "query": req.query,
+            "parsed_response": parsed_summary,
+            "raw_response": content,
+            "model": model_name,
+            "created_at": datetime.datetime.now().isoformat()
+        }
+        queries_list.append(query_record)
+        save_data(data)
+
+        return query_record
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI query generation failed: {str(e)}")
 

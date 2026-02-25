@@ -20,6 +20,7 @@ import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -174,8 +175,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                         { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
                         { text: 'Kanban Board', icon: <ViewKanbanIcon />, path: projects.length > 0 ? `/project/${projects[0].id}` : '/' },
                         { text: '전체 로드맵', icon: <TimelineIcon />, path: '/roadmap' },
+                        { text: '@나를 언급', icon: <AlternateEmailIcon />, path: '/mentions' },
                         { text: 'AI Settings', icon: <AutoAwesomeIcon />, path: '/ai-settings', adminOnly: true },
-                    ].filter(item => !item.adminOnly || currentUser?.role === 'admin').map((item) => {
+                    ].filter(item => !item.adminOnly || currentUser?.role === 'admin' || currentUser?.role === 'super_admin').map((item) => {
                         const isActive = item.path === '/' ? location.pathname === '/' : location.pathname + location.search === item.path;
                         return (
                             <ListItem key={item.text} disablePadding sx={{ mb: 0.3 }}>
@@ -243,7 +245,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
 
                     {/* Admin + Trash */}
                     <List sx={{ px: 1, py: 0.5 }}>
-                        {currentUser?.role === 'admin' && (
+                        {(currentUser?.role === 'admin' || currentUser?.role === 'super_admin') && (
                             <ListItem disablePadding sx={{ mb: 0.3 }}>
                                 <ListItemButton onClick={() => navigate('/admin')} sx={{ borderRadius: 1.5, py: 0.8, px: 1.5, color: location.pathname === '/admin' ? theme.sidebarText : theme.sidebarMuted, bgcolor: location.pathname === '/admin' ? theme.sidebarHover : 'transparent', '&:hover': { bgcolor: theme.sidebarHover } }}>
                                     <ListItemIcon sx={{ color: location.pathname === '/admin' ? '#2955FF' : theme.sidebarMuted, minWidth: 36 }}><AdminPanelSettingsIcon /></ListItemIcon>

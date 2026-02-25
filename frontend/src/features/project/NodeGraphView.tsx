@@ -6,6 +6,7 @@ import {
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ReactFlow, {
     Background,
     Controls,
@@ -78,6 +79,9 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
     const [newSubProjectDesc, setNewSubProjectDesc] = useState('');
     const [parentSubProjectId, setParentSubProjectId] = useState<number | null>(null);
 
+    // Subproject delete dialog state
+    const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
+
     const { data: graphData, isLoading } = useQuery({
         queryKey: ['graph', projectId],
         queryFn: () => api.getProjectGraph(projectId),
@@ -94,6 +98,19 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
             setNewSubProjectName('');
             setNewSubProjectDesc('');
             setParentSubProjectId(null);
+        },
+    });
+
+    // Subproject deletion mutation
+    const deleteSubProjectMutation = useMutation({
+        mutationFn: (subId: number) => api.deleteSubProject(subId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['graph', projectId] });
+            queryClient.invalidateQueries({ queryKey: ['tasks', projectId] });
+            queryClient.invalidateQueries({ queryKey: ['roadmap', projectId] });
+            queryClient.invalidateQueries({ queryKey: ['subprojects', projectId] });
+            setDeleteTarget(null);
+            setSelectedNodeId(null);
         },
     });
 
@@ -338,16 +355,32 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                         />
                         {/* Node-specific action buttons */}
                         {selectedInfo.type === 'subproject' && (
-                            <Tooltip title="Add Task to this Subproject">
-                                <Button
-                                    size="small"
-                                    startIcon={<AddIcon />}
-                                    onClick={() => openDrawer(null, projectId)}
-                                    sx={{ fontSize: '0.65rem', textTransform: 'none', ml: 0.5 }}
-                                >
-                                    Add Task
-                                </Button>
-                            </Tooltip>
+                            <>
+                                <Tooltip title="Add Task to this Subproject">
+                                    <Button
+                                        size="small"
+                                        startIcon={<AddIcon />}
+                                        onClick={() => openDrawer(null, projectId)}
+                                        sx={{ fontSize: '0.65rem', textTransform: 'none', ml: 0.5 }}
+                                    >
+                                        Add Task
+                                    </Button>
+                                </Tooltip>
+                                <Tooltip title="Delete Subproject">
+                                    <Button
+                                        size="small"
+                                        startIcon={<DeleteOutlineIcon />}
+                                        onClick={() => setDeleteTarget({ id: selectedInfo.id, label: selectedInfo.label })}
+                                        sx={{
+                                            fontSize: '0.65rem', textTransform: 'none',
+                                            color: '#EF4444',
+                                            '&:hover': { bgcolor: '#FEF2F2' },
+                                        }}
+                                    >
+                                        Delete
+                                    </Button>
+                                </Tooltip>
+                            </>
                         )}
                         {selectedInfo.type === 'task' && (
                             <Tooltip title="Edit Task">
@@ -493,6 +526,48 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                         }}
                     >
                         {createSubProjectMutation.isPending ? 'Creating...' : 'Create'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* Subproject Delete Confirmation Dialog */}
+            <Dialog
+                open={!!deleteTarget}
+                onClose={() => setDeleteTarget(null)}
+                maxWidth="xs"
+                fullWidth
+                PaperProps={{ sx: { borderRadius: 3 } }}
+            >
+                <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', color: '#EF4444' }}>
+                    Subproject 삭제
+                </DialogTitle>
+                <DialogContent>
+                    <Typography variant="body2" sx={{ color: '#374151', fontSize: '0.9rem' }}>
+                        <strong>"{deleteTarget?.label}"</strong> 을(를) 삭제하시겠습니까?
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.85rem', mt: 1 }}>
+                        하위 Task는 삭제되지 않고 프로젝트 직속으로 이동됩니다.
+                    </Typography>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setDeleteTarget(null)} sx={{ textTransform: 'none', color: '#6B7280' }}>
+                        취소
+                    </Button>
+                    <Button
+                        variant="contained"
+                        onClick={() => {
+                            if (deleteTarget) {
+                                const numericId = parseInt(deleteTarget.id.replace('subproject-', ''), 10);
+                                deleteSubProjectMutation.mutate(numericId);
+                            }
+                        }}
+                        disabled={deleteSubProjectMutation.isPending}
+                        sx={{
+                            textTransform: 'none', bgcolor: '#EF4444',
+                            '&:hover': { bgcolor: '#DC2626' },
+                        }}
+                    >
+                        {deleteSubProjectMutation.isPending ? '삭제 중...' : '삭제'}
                     </Button>
                 </DialogActions>
             </Dialog>

@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
     Box, Typography, ToggleButtonGroup, ToggleButton, Chip,
     IconButton, Collapse, LinearProgress, Tooltip, TextField,
-    MenuItem, Paper,
+    MenuItem, Paper, Dialog, DialogTitle, DialogContent,
+    DialogContentText, DialogActions, Button,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -12,9 +13,14 @@ import FolderIcon from '@mui/icons-material/Folder';
 import FolderSpecialIcon from '@mui/icons-material/FolderSpecial';
 import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import { useQuery } from '@tanstack/react-query';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { RoadmapItem } from '../../types';
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import {
     format, differenceInDays, startOfMonth, endOfMonth,
     startOfWeek, endOfWeek, eachDayOfInterval, startOfYear, endOfYear,
@@ -41,18 +47,174 @@ const statusLabels: Record<string, string> = {
 
 type ViewMode = 'month' | 'week' | 'quarter';
 
+const SortableRoadmapRow: React.FC<{
+    id: string;
+    children: (handleListeners: Record<string, any>) => React.ReactNode;
+}> = ({ id, children }) => {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+    const style: React.CSSProperties = {
+        transform: CSS.Transform.toString(transform),
+        transition: transition ? transition.replace(/(\d+)ms/g, '150ms') : undefined,
+        opacity: isDragging ? 0.5 : 1,
+        zIndex: isDragging ? 10 : undefined,
+    };
+    return (
+        <div ref={setNodeRef} style={style}>
+            {children({ ...attributes, ...listeners })}
+        </div>
+    );
+};
+
 const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
+    const queryClient = useQueryClient();
     const [viewMode, setViewMode] = useState<ViewMode>('month');
     const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
     const [filterStatus, setFilterStatus] = useState('all');
     const [showFilters, setShowFilters] = useState(false);
     const timelineScrollRef = useRef<HTMLDivElement>(null);
     const currentMarkerRef = useRef<HTMLDivElement>(null);
+    const [nameColumnWidth, setNameColumnWidth] = useState(360);
+    const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+
+    const deleteSubProjectMutation = useMutation({
+        mutationFn: (subId: number) => api.deleteSubProject(subId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['roadmap', projectId] });
+            queryClient.invalidateQueries({ queryKey: ['tasks', projectId] });
+            setDeleteTarget(null);
+        },
+    });
+
+    const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = nameColumnWidth;
+        const onMouseMove = (ev: MouseEvent) => {
+            const newWidth = Math.min(600, Math.max(200, startWidth + (ev.clientX - startX)));
+            setNameColumnWidth(newWidth);
+        };
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+    }, [nameColumnWidth]);
+
+    // ── Drag reorder state ──
+    const [localItems, setLocalItems] = useState<RoadmapItem[]>([]);
+    const localDragRef = useRef(false); // true while a drag-save is in flight
+
+    const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
     const { data: roadmapData, isLoading } = useQuery({
         queryKey: ['roadmap', projectId, viewMode],
         queryFn: () => api.getRoadmap({ project_id: projectId, view: viewMode }),
     });
+
+    // Sync local items when API data changes — skip if we just did a local drag
+    useEffect(() => {
+        if (localDragRef.current) return;
+        setLocalItems(roadmapData?.items || []);
+    }, [roadmapData]);
+
+    const findSiblings = useCallback((items: RoadmapItem[], id: string): RoadmapItem[] | null => {
+        for (const item of items) {
+            if (item.id === id) return items;
+            if (item.children) {
+                const found = findSiblings(item.children, id);
+                if (found) return found;
+            }
+        }
+        return null;
+    }, []);
+
+    const reorderInTree = useCallback((items: RoadmapItem[], activeId: string, overId: string): RoadmapItem[] | null => {
+        const activeIdx = items.findIndex(i => i.id === activeId);
+        const overIdx = items.findIndex(i => i.id === overId);
+        if (activeIdx !== -1 && overIdx !== -1) {
+            return arrayMove(items, activeIdx, overIdx);
+        }
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].children) {
+                const result = reorderInTree(items[i].children!, activeId, overId);
+                if (result) {
+                    const newItems = [...items];
+                    newItems[i] = { ...newItems[i], children: result };
+                    return newItems;
+                }
+            }
+        }
+        return null;
+    }, []);
+
+    const saveOrderMutation = useMutation({
+        mutationFn: ({ order, parentKey }: { order: string[]; parentKey?: string }) =>
+            api.saveRoadmapOrder(projectId, order, parentKey),
+        onSettled: () => {
+            // After save completes (success or error), allow future server syncs
+            localDragRef.current = false;
+        },
+    });
+
+    // Find the parent item that contains the given id
+    const findParent = useCallback((items: RoadmapItem[], id: string, parent?: RoadmapItem): RoadmapItem | null => {
+        for (const item of items) {
+            if (item.id === id) return parent || null;
+            if (item.children) {
+                const found = findParent(item.children, id, item);
+                if (found !== undefined && found !== null) return found;
+                if (item.children.some(c => c.id === id)) return item;
+            }
+        }
+        return null;
+    }, []);
+
+    const handleDragEnd = useCallback((event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over || active.id === over.id) return;
+        const activeId = String(active.id);
+        const overId = String(over.id);
+
+        // Only reorder if in same sibling group
+        const activeSiblings = findSiblings(localItems, activeId);
+        const overSiblings = findSiblings(localItems, overId);
+        if (!activeSiblings || !overSiblings || activeSiblings !== overSiblings) return;
+
+        const result = reorderInTree(localItems, activeId, overId);
+        if (result) {
+            // 1. Instant local update
+            localDragRef.current = true;
+            setLocalItems(result);
+
+            // 2. Optimistically update query cache so future reads see the new order
+            queryClient.setQueryData(['roadmap', projectId, viewMode], (old: any) => {
+                if (!old) return old;
+                return { ...old, items: result };
+            });
+
+            // 3. Persist to server in background
+            const parentItem = findParent(result, activeId);
+            if (parentItem && parentItem.children) {
+                const order = parentItem.children.map(c => c.id);
+                if (parentItem.type === 'project') {
+                    saveOrderMutation.mutate({ order });
+                } else {
+                    saveOrderMutation.mutate({ order, parentKey: parentItem.id });
+                }
+            } else {
+                const projectItem = result[0];
+                if (projectItem?.children) {
+                    const order = projectItem.children.map(c => c.id);
+                    saveOrderMutation.mutate({ order });
+                }
+            }
+        }
+    }, [localItems, findSiblings, reorderInTree, findParent, saveOrderMutation, queryClient, projectId, viewMode]);
 
     const today = new Date();
 
@@ -122,6 +284,21 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         };
     };
 
+    // Flatten visible item IDs for SortableContext
+    const flatVisibleIds = useMemo(() => {
+        const ids: string[] = [];
+        const collect = (items: RoadmapItem[]) => {
+            items.forEach(item => {
+                ids.push(item.id);
+                if (item.children && expandedIds.has(item.id)) {
+                    collect(item.children);
+                }
+            });
+        };
+        collect(localItems);
+        return ids;
+    }, [localItems, expandedIds]);
+
     const renderRow = (item: RoadmapItem, depth: number = 0): React.ReactNode => {
         const hasChildren = item.children && item.children.length > 0;
         const isExpanded = expandedIds.has(item.id);
@@ -142,120 +319,156 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         const barRadius = item.type === 'task' ? 8 : 5;
 
         return (
-            <React.Fragment key={item.id}>
-                <Box sx={{
-                    display: 'flex', minHeight: 44, borderBottom: '1px solid #F3F4F6',
-                    '&:hover': { bgcolor: '#FAFBFF' }, transition: 'background 0.1s',
-                }}>
-                    <Box sx={{
-                        width: 360, minWidth: 360, flexShrink: 0,
-                        display: 'flex', alignItems: 'center', gap: 0.5,
-                        pl: 1 + depth * 2.5, pr: 1,
-                        borderRight: '1px solid #E5E7EB',
-                    }}>
-                        {hasChildren ? (
-                            <IconButton size="small" onClick={() => toggleExpand(item.id)} sx={{ p: 0.3 }}>
-                                {isExpanded ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
-                            </IconButton>
-                        ) : (
-                            <Box sx={{ width: 22 }} />
-                        )}
-                        {typeIcon}
-                        <Tooltip title={item.name} placement="top-start" disableHoverListener={item.name.length < 40}>
-                            <Typography variant="body2" sx={{
-                                fontWeight: item.type === 'task' ? 500 : 700, fontSize: '0.8rem',
-                                flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis',
-                                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-                                color: item.overdue ? '#EF4444' : '#1A1D29',
-                                lineHeight: 1.4, wordBreak: 'break-word',
+            <SortableRoadmapRow key={item.id} id={item.id}>
+                {(handleListeners) => (
+                    <>
+                        <Box sx={{
+                            display: 'flex', minHeight: 44, borderBottom: '1px solid #F3F4F6',
+                            '&:hover': { bgcolor: '#FAFBFF' },
+                            '&:hover .subproject-delete-btn': { opacity: 1 },
+                            transition: 'background 0.1s',
+                        }}>
+                            <Box sx={{
+                                width: nameColumnWidth, minWidth: nameColumnWidth, flexShrink: 0,
+                                display: 'flex', alignItems: 'center', gap: 0.5,
+                                pl: 0.5 + depth * 2.5, pr: 1,
+                                borderRight: '1px solid #E5E7EB',
                             }}>
-                                {item.name}
-                            </Typography>
-                        </Tooltip>
-                        {item.overdue && (
-                            <Tooltip title="Overdue">
-                                <WarningAmberIcon sx={{ fontSize: 14, color: '#EF4444' }} />
-                            </Tooltip>
-                        )}
-                        <Chip
-                            label={statusLabels[item.status] || item.status}
-                            size="small"
-                            sx={{
-                                height: 18, fontSize: '0.6rem', fontWeight: 600,
-                                bgcolor: `${statusColors[item.status]}15`,
-                                color: statusColors[item.status],
-                            }}
-                        />
-                        <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem', minWidth: 32, textAlign: 'right' }}>
-                            {displayProgress}%
-                        </Typography>
-                    </Box>
-
-                    <Box sx={{ flexGrow: 1, position: 'relative', overflow: 'hidden' }}>
-                        {/* Today marker */}
-                        {(() => {
-                            const todayOffset = differenceInDays(today, rangeStart);
-                            if (todayOffset >= 0 && todayOffset < totalDays) {
-                                return (
-                                    <Box sx={{
-                                        position: 'absolute', top: 0, bottom: 0,
-                                        left: `${(todayOffset / totalDays) * 100}%`,
-                                        width: 2, bgcolor: '#EF4444', zIndex: 2, opacity: 0.6,
-                                    }} />
-                                );
-                            }
-                            return null;
-                        })()}
-
-                        {/* Progress gauge bar */}
-                        {barPos && (
-                            <Tooltip title={`${item.name}: ${displayProgress}%`} arrow placement="top">
-                                <Box sx={{
-                                    position: 'absolute',
-                                    top: '50%', transform: 'translateY(-50%)',
-                                    left: barPos.left, width: barPos.width,
-                                    height: barHeight,
-                                    bgcolor: '#E5E7EB',
-                                    borderRadius: `${barRadius}px`,
-                                    minWidth: 6,
-                                    zIndex: 1,
-                                    overflow: 'hidden',
-                                    border: `1px solid ${barColor}30`,
-                                }}>
-                                    {/* Filled portion = progress */}
-                                    <Box sx={{
-                                        width: `${displayProgress}%`,
-                                        height: '100%',
-                                        bgcolor: barColor,
-                                        borderRadius: `${barRadius}px`,
-                                        transition: 'width 0.5s ease',
-                                        opacity: item.status === 'done' ? 0.7 : 0.9,
-                                    }} />
-                                    {/* Progress label on bar */}
-                                    {item.type === 'task' && (
-                                        <Typography sx={{
-                                            position: 'absolute', top: '50%', left: '50%',
-                                            transform: 'translate(-50%, -50%)',
-                                            fontSize: '0.5rem', fontWeight: 700,
-                                            color: displayProgress > 50 ? '#fff' : '#374151',
-                                            lineHeight: 1, whiteSpace: 'nowrap',
-                                            textShadow: displayProgress > 50 ? '0 0 2px rgba(0,0,0,0.3)' : 'none',
-                                        }}>
-                                            {displayProgress}%
-                                        </Typography>
-                                    )}
+                                <Box
+                                    component="span"
+                                    {...handleListeners}
+                                    sx={{
+                                        cursor: 'grab', display: 'flex', alignItems: 'center',
+                                        flexShrink: 0, '&:active': { cursor: 'grabbing' },
+                                    }}
+                                >
+                                    <DragIndicatorIcon sx={{ fontSize: 16, color: '#C0C4CC' }} />
                                 </Box>
-                            </Tooltip>
-                        )}
-                    </Box>
-                </Box>
+                                {hasChildren ? (
+                                    <IconButton size="small" onClick={() => toggleExpand(item.id)} sx={{ p: 0.3 }}>
+                                        {isExpanded ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                                    </IconButton>
+                                ) : (
+                                    <Box sx={{ width: 22 }} />
+                                )}
+                                {typeIcon}
+                                <Tooltip title={item.name} placement="top-start" disableHoverListener={item.name.length < 40}>
+                                    <Typography variant="body2" sx={{
+                                        fontWeight: item.type === 'task' ? 500 : 700, fontSize: '0.8rem',
+                                        flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis',
+                                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                                        color: item.overdue ? '#EF4444' : '#1A1D29',
+                                        lineHeight: 1.4, wordBreak: 'break-word',
+                                    }}>
+                                        {item.name}
+                                    </Typography>
+                                </Tooltip>
+                                {item.overdue && (
+                                    <Tooltip title="Overdue">
+                                        <WarningAmberIcon sx={{ fontSize: 14, color: '#EF4444' }} />
+                                    </Tooltip>
+                                )}
+                                {item.type === 'subproject' && (
+                                    <Tooltip title="Subproject 삭제">
+                                        <IconButton
+                                            size="small"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setDeleteTarget({ id: item.id, name: item.name });
+                                            }}
+                                            sx={{
+                                                p: 0.3, color: '#D1D5DB',
+                                                opacity: 0, '.MuiBox-root:hover > &, &:focus': { opacity: 1 },
+                                                '&:hover': { color: '#EF4444' },
+                                                transition: 'opacity 0.15s, color 0.15s',
+                                            }}
+                                            className="subproject-delete-btn"
+                                        >
+                                            <DeleteOutlineIcon sx={{ fontSize: 15 }} />
+                                        </IconButton>
+                                    </Tooltip>
+                                )}
+                                <Chip
+                                    label={statusLabels[item.status] || item.status}
+                                    size="small"
+                                    sx={{
+                                        height: 18, fontSize: '0.6rem', fontWeight: 600,
+                                        bgcolor: `${statusColors[item.status]}15`,
+                                        color: statusColors[item.status],
+                                    }}
+                                />
+                                <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem', minWidth: 32, textAlign: 'right' }}>
+                                    {displayProgress}%
+                                </Typography>
+                            </Box>
 
-                {hasChildren && (
-                    <Collapse in={isExpanded}>
-                        {item.children!.map(child => renderRow(child, depth + 1))}
-                    </Collapse>
+                            <Box sx={{ flexGrow: 1, position: 'relative', overflow: 'hidden' }}>
+                                {/* Today marker */}
+                                {(() => {
+                                    const todayOffset = differenceInDays(today, rangeStart);
+                                    if (todayOffset >= 0 && todayOffset < totalDays) {
+                                        return (
+                                            <Box sx={{
+                                                position: 'absolute', top: 0, bottom: 0,
+                                                left: `${(todayOffset / totalDays) * 100}%`,
+                                                width: 2, bgcolor: '#EF4444', zIndex: 2, opacity: 0.6,
+                                            }} />
+                                        );
+                                    }
+                                    return null;
+                                })()}
+
+                                {/* Progress gauge bar */}
+                                {barPos && (
+                                    <Tooltip title={`${item.name}: ${displayProgress}%`} arrow placement="top">
+                                        <Box sx={{
+                                            position: 'absolute',
+                                            top: '50%', transform: 'translateY(-50%)',
+                                            left: barPos.left, width: barPos.width,
+                                            height: barHeight,
+                                            bgcolor: '#E5E7EB',
+                                            borderRadius: `${barRadius}px`,
+                                            minWidth: 6,
+                                            zIndex: 1,
+                                            overflow: 'hidden',
+                                            border: `1px solid ${barColor}30`,
+                                        }}>
+                                            {/* Filled portion = progress */}
+                                            <Box sx={{
+                                                width: `${displayProgress}%`,
+                                                height: '100%',
+                                                bgcolor: barColor,
+                                                borderRadius: `${barRadius}px`,
+                                                transition: 'width 0.5s ease',
+                                                opacity: item.status === 'done' ? 0.7 : 0.9,
+                                            }} />
+                                            {/* Progress label on bar */}
+                                            {item.type === 'task' && (
+                                                <Typography sx={{
+                                                    position: 'absolute', top: '50%', left: '50%',
+                                                    transform: 'translate(-50%, -50%)',
+                                                    fontSize: '0.5rem', fontWeight: 700,
+                                                    color: displayProgress > 50 ? '#fff' : '#374151',
+                                                    lineHeight: 1, whiteSpace: 'nowrap',
+                                                    textShadow: displayProgress > 50 ? '0 0 2px rgba(0,0,0,0.3)' : 'none',
+                                                }}>
+                                                    {displayProgress}%
+                                                </Typography>
+                                            )}
+                                        </Box>
+                                    </Tooltip>
+                                )}
+                            </Box>
+                        </Box>
+
+                        {hasChildren && (
+                            <Collapse in={isExpanded}>
+                                {item.children!.map(child => renderRow(child, depth + 1))}
+                            </Collapse>
+                        )}
+                    </>
                 )}
-            </React.Fragment>
+            </SortableRoadmapRow>
         );
     };
 
@@ -358,7 +571,8 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         );
     }
 
-    const items = roadmapData?.items || [];
+    // Use localItems (drag-reordered) with fallback to API data
+    const displayItems = localItems.length > 0 ? localItems : (roadmapData?.items || []);
 
     // Min width per column for scrollable week view
     const minColWidth = viewMode === 'week' ? 100 : undefined;
@@ -411,10 +625,20 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
             <Paper sx={{ borderRadius: 2, border: '1px solid #E5E7EB', overflow: 'hidden' }} elevation={0}>
                 {/* Header */}
                 <Box sx={{ display: 'flex', borderBottom: '2px solid #E5E7EB', bgcolor: '#FAFBFC' }}>
-                    <Box sx={{ width: 360, minWidth: 360, flexShrink: 0, borderRight: '1px solid #E5E7EB', px: 2, py: 1 }}>
+                    <Box sx={{ width: nameColumnWidth, minWidth: nameColumnWidth, flexShrink: 0, borderRight: '1px solid #E5E7EB', px: 2, py: 1, position: 'relative' }}>
                         <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', textTransform: 'uppercase', fontSize: '0.7rem' }}>
                             Task Name
                         </Typography>
+                        {/* Resize handle */}
+                        <Box
+                            onMouseDown={handleResizeMouseDown}
+                            sx={{
+                                position: 'absolute', top: 0, right: 0, bottom: 0,
+                                width: 5, cursor: 'col-resize',
+                                '&:hover': { bgcolor: 'rgba(41, 85, 255, 0.3)' },
+                                transition: 'background-color 0.15s',
+                            }}
+                        />
                     </Box>
                     <Box ref={timelineScrollRef} sx={{
                         flexGrow: 1, overflowX: viewMode === 'week' ? 'auto' : 'hidden',
@@ -468,15 +692,55 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
 
                 {/* Body rows */}
                 <Box sx={{ maxHeight: 'calc(100vh - 320px)', overflowY: 'auto' }}>
-                    {items.length === 0 ? (
+                    {displayItems.length === 0 ? (
                         <Box sx={{ p: 6, textAlign: 'center' }}>
                             <Typography variant="body2" color="textSecondary">No roadmap data. Add tasks with start/due dates to see the roadmap.</Typography>
                         </Box>
                     ) : (
-                        items.map(item => renderRow(item))
+                        <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                            <SortableContext items={flatVisibleIds} strategy={verticalListSortingStrategy}>
+                                {displayItems.map(item => renderRow(item))}
+                            </SortableContext>
+                        </DndContext>
                     )}
                 </Box>
             </Paper>
+
+            {/* Subproject Delete Confirmation Dialog */}
+            <Dialog
+                open={!!deleteTarget}
+                onClose={() => setDeleteTarget(null)}
+                maxWidth="xs"
+                fullWidth
+                PaperProps={{ sx: { borderRadius: 3 } }}
+            >
+                <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', color: '#EF4444' }}>
+                    Subproject 삭제
+                </DialogTitle>
+                <DialogContent>
+                    <DialogContentText sx={{ color: '#374151', fontSize: '0.9rem' }}>
+                        <strong>"{deleteTarget?.name}"</strong> 을(를) 삭제하시겠습니까?
+                        <br /><br />
+                        하위 Task는 삭제되지 않고 프로젝트 직속으로 이동됩니다.
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setDeleteTarget(null)} sx={{ color: '#6B7280' }}>취소</Button>
+                    <Button
+                        variant="contained"
+                        onClick={() => {
+                            if (deleteTarget) {
+                                const numericId = parseInt(deleteTarget.id.replace('subproject-', ''), 10);
+                                deleteSubProjectMutation.mutate(numericId);
+                            }
+                        }}
+                        disabled={deleteSubProjectMutation.isPending}
+                        sx={{ bgcolor: '#EF4444', '&:hover': { bgcolor: '#DC2626' } }}
+                    >
+                        삭제
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     );
 };

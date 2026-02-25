@@ -3,6 +3,7 @@ import {
     Box, Typography, Tabs, Tab, Table, TableBody, TableCell, TableContainer,
     TableHead, TableRow, Paper, Switch, Chip, TextField, Button, IconButton,
     Dialog, DialogTitle, DialogContent, DialogActions, Tooltip, Alert, FormControlLabel,
+    Select, MenuItem,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -15,6 +16,13 @@ import { api, User, Shortcut, Group } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
 
 const ICON_COLORS = ['#2955FF', '#22C55E', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#6366F1', '#0EA5E9'];
+
+const ROLE_CONFIG: Record<string, { label: string; color: string; bgcolor: string }> = {
+    super_admin: { label: 'Super Admin', color: '#9333EA', bgcolor: '#F3E8FF' },
+    admin: { label: 'Admin', color: '#2955FF', bgcolor: '#DBEAFE' },
+    manager: { label: '중간관리자', color: '#F59E0B', bgcolor: '#FEF3C7' },
+    member: { label: 'Member', color: '#6B7280', bgcolor: '#F3F4F6' },
+};
 
 const AdminPage: React.FC = () => {
     const currentUserId = useAppStore(state => state.currentUserId);
@@ -37,11 +45,27 @@ const AdminPage: React.FC = () => {
 
 
     // ─── Mutations ───
+    // Current user's role (to determine if role changes are allowed)
+    const currentAdminUser = adminUsers.find(u => u.id === currentUserId);
+    const canChangeRoles = currentAdminUser?.role === 'admin' || currentAdminUser?.role === 'super_admin';
+    const isSuperAdmin = currentAdminUser?.role === 'super_admin';
+
     const toggleActiveMut = useMutation({
         mutationFn: (targetId: number) => api.toggleUserActive(targetId, currentUserId),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
             queryClient.invalidateQueries({ queryKey: ['users'] });
+        },
+    });
+
+    const updateRoleMut = useMutation({
+        mutationFn: ({ targetId, role }: { targetId: number; role: string }) => api.updateUserRole(targetId, role, currentUserId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
+            queryClient.invalidateQueries({ queryKey: ['users'] });
+        },
+        onError: (err: any) => {
+            alert(err?.response?.data?.detail || '역할 변경 실패');
         },
     });
 
@@ -183,7 +207,39 @@ const AdminPage: React.FC = () => {
                                                 {user.group_name || '-'}
                                             </Typography>
                                         </TableCell>
-                                        <TableCell><Chip label={user.role || 'member'} size="small" sx={{ fontWeight: 600, fontSize: '0.7rem', bgcolor: user.role === 'admin' ? '#DBEAFE' : '#F3F4F6', color: user.role === 'admin' ? '#2955FF' : '#6B7280' }} /></TableCell>
+                                        <TableCell>
+                                            {canChangeRoles && user.id !== currentUserId ? (
+                                                <Select
+                                                    value={user.role || 'member'}
+                                                    size="small"
+                                                    onChange={(e) => updateRoleMut.mutate({ targetId: user.id, role: e.target.value })}
+                                                    sx={{
+                                                        height: 28, fontSize: '0.75rem', fontWeight: 600,
+                                                        bgcolor: ROLE_CONFIG[user.role || 'member']?.bgcolor || '#F3F4F6',
+                                                        color: ROLE_CONFIG[user.role || 'member']?.color || '#6B7280',
+                                                        '& .MuiSelect-select': { py: 0.3, px: 1 },
+                                                        '& .MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' },
+                                                        '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#C7D2FE' },
+                                                        borderRadius: 2,
+                                                    }}
+                                                >
+                                                    <MenuItem value="member" sx={{ fontSize: '0.8rem' }}>Member</MenuItem>
+                                                    <MenuItem value="manager" sx={{ fontSize: '0.8rem' }}>중간관리자</MenuItem>
+                                                    {isSuperAdmin && <MenuItem value="admin" sx={{ fontSize: '0.8rem' }}>Admin</MenuItem>}
+                                                    {isSuperAdmin && <MenuItem value="super_admin" sx={{ fontSize: '0.8rem' }}>Super Admin</MenuItem>}
+                                                </Select>
+                                            ) : (
+                                                <Chip
+                                                    label={ROLE_CONFIG[user.role || 'member']?.label || user.role || 'member'}
+                                                    size="small"
+                                                    sx={{
+                                                        fontWeight: 600, fontSize: '0.7rem',
+                                                        bgcolor: ROLE_CONFIG[user.role || 'member']?.bgcolor || '#F3F4F6',
+                                                        color: ROLE_CONFIG[user.role || 'member']?.color || '#6B7280',
+                                                    }}
+                                                />
+                                            )}
+                                        </TableCell>
                                         <TableCell>
                                             <Chip label={user.is_active !== false ? '활성' : '비활성'} size="small" sx={{ fontWeight: 600, fontSize: '0.7rem', bgcolor: user.is_active !== false ? '#DCFCE7' : '#FEE2E2', color: user.is_active !== false ? '#22C55E' : '#EF4444' }} />
                                         </TableCell>
@@ -191,7 +247,7 @@ const AdminPage: React.FC = () => {
                                             <Switch
                                                 checked={user.is_active !== false}
                                                 onChange={() => toggleActiveMut.mutate(user.id)}
-                                                disabled={user.role === 'admin'}
+                                                disabled={user.role === 'admin' || user.role === 'super_admin'}
                                                 size="small"
                                             />
                                         </TableCell>
