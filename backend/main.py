@@ -2304,6 +2304,7 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
     # Gather Context
     all_tasks = data.get("tasks", [])
     p_tasks = [t for t in all_tasks if t.get("project_id") == project_id and not t.get("archived_at")]
+    users = {u["id"]: u for u in data.get("users", [])}
 
     all_sub_projects = data.get("sub_projects", [])
     p_sub_projects = [sp for sp in all_sub_projects if sp.get("project_id") == project_id]
@@ -2311,9 +2312,41 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
     all_notes = data.get("notes", [])
     p_notes = [n for n in all_notes if n.get("project_id") == project_id]
 
+    # Project members
+    raw_members = data.get("project_members", [])
+    if isinstance(raw_members, list):
+        members = [m for m in raw_members if m.get("project_id") == project_id]
+    elif isinstance(raw_members, dict):
+        members = raw_members.get(str(project_id), [])
+    else:
+        members = []
+    member_names = []
+    for m in members:
+        uid = m.get("user_id", m) if isinstance(m, dict) else m
+        user = users.get(uid)
+        if user:
+            member_names.append(f'{user["username"]} ({user.get("role", "member")})')
+
+    # Build task lines with assignee info
     task_lines = []
+    task_details_for_response = []
     for t in p_tasks:
-        task_lines.append(f'- {t["title"]} | 상태:{t["status"]} | 진척도:{t.get("progress",0)}% | 우선순위:{t.get("priority","medium")} | 마감:{t.get("due_date", "미정")}')
+        assignees = [users.get(a, {}).get("username", f"User {a}") for a in t.get("assignee_ids", [])]
+        assignee_str = ", ".join(assignees) if assignees else "미배정"
+        sp_name = ""
+        if t.get("sub_project_id"):
+            sp = next((s for s in p_sub_projects if s["id"] == t["sub_project_id"]), None)
+            sp_name = sp["name"] if sp else ""
+        task_lines.append(
+            f'- {t["title"]} | 상태:{t["status"]} | 진척도:{t.get("progress",0)}% '
+            f'| 우선순위:{t.get("priority","medium")} | 마감:{t.get("due_date", "미정")} | 담당자:{assignee_str}'
+        )
+        task_details_for_response.append({
+            "id": t["id"], "title": t.get("title", ""), "status": t.get("status", "todo"),
+            "priority": t.get("priority", "medium"), "progress": t.get("progress", 0) or 0,
+            "due_date": t.get("due_date"), "assignees": assignees, "sub_project": sp_name,
+            "description": t.get("description", ""),
+        })
 
     sp_lines = [f'- {sp["name"]}: {sp.get("description", "")}' for sp in p_sub_projects]
     note_lines = [f'- {n["content"]}' for n in p_notes]
@@ -2321,11 +2354,12 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
     context_str = f"""[프로젝트: {project["name"]}]
 - 설명: {project.get("description", "없음")}
 - 작성일: {project.get("created_at", "")}
+- 프로젝트 멤버: {", ".join(member_names) if member_names else "미배정"}
 
 [하위프로젝트]
 {chr(10).join(sp_lines) if sp_lines else "없음"}
 
-[결부된 일정/Task 목록]
+[결부된 일정/Task 목록 (담당자 포함)]
 {chr(10).join(task_lines) if task_lines else "Task 없음"}
 
 [관련 노트 및 자료]
@@ -2379,6 +2413,18 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
         queries_list = data.setdefault("project_ai_queries", [])
         query_id = next_id(queries_list)
 
+        # Compute progress stats
+        active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
+        done_count = len([t for t in p_tasks if t.get("status") == "done"])
+        ip_count = len([t for t in p_tasks if t.get("status") == "in_progress"])
+        todo_count = len([t for t in p_tasks if t.get("status") == "todo"])
+        hold_count = len([t for t in p_tasks if t.get("status") == "hold"])
+        if len(active_tasks) > 0:
+            progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
+            overall_progress = round(progress_sum / len(active_tasks), 1)
+        else:
+            overall_progress = 0.0
+
         query_record = {
             "id": query_id,
             "project_id": project_id,
@@ -2387,7 +2433,16 @@ def generate_project_ai_query(project_id: int, req: ProjectAiQueryRequest, user_
             "parsed_response": parsed_summary,
             "raw_response": content,
             "model": model_name,
-            "created_at": datetime.datetime.now().isoformat()
+            "created_at": datetime.datetime.now().isoformat(),
+            "context": {
+                "project_name": project.get("name", ""),
+                "members": member_names,
+                "tasks": task_details_for_response,
+                "status_breakdown": {
+                    "total": len(p_tasks), "done": done_count, "in_progress": ip_count,
+                    "todo": todo_count, "hold": hold_count, "overall_progress": overall_progress,
+                },
+            },
         }
         queries_list.append(query_record)
         save_data(data)

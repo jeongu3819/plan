@@ -1042,6 +1042,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                                 <Typography variant="caption" sx={{ color: "#6B7280", fontWeight: 600 }}>Q. {queryData.query}</Typography>
                             </Box>
 
+                            {/* AI 요약 */}
                             <Paper sx={{ p: 3, mb: 2, borderRadius: 3, border: "1px solid #E5E7EB", bgcolor: "#EEF2FF" }}>
                                 <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
                                     <AutoAwesomeIcon sx={{ color: "#2955FF", fontSize: "1.2rem" }} />
@@ -1052,6 +1053,101 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                                 </Typography>
                             </Paper>
 
+                            {/* 프로젝트 현황 카드 */}
+                            {queryData.context && (
+                                <Paper sx={{ p: 3, mb: 2, borderRadius: 3, border: "1px solid #E5E7EB" }}>
+                                    <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+                                        <AssignmentIcon sx={{ color: "#8B5CF6", fontSize: "1.2rem" }} />
+                                        <Typography variant="h6" sx={{ fontWeight: 700, color: "#1A1D29", fontSize: "1rem" }}>프로젝트 현황</Typography>
+                                    </Box>
+
+                                    {/* Progress + Stats */}
+                                    <Box sx={{ mb: 2 }}>
+                                        <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
+                                            <Typography variant="caption" sx={{ fontWeight: 600, color: "#374151", fontSize: "0.75rem" }}>전체 진행률</Typography>
+                                            <Typography variant="caption" sx={{ fontWeight: 700, color: "#2955FF", fontSize: "0.85rem" }}>{queryData.context.status_breakdown.overall_progress}%</Typography>
+                                        </Box>
+                                        <LinearProgress variant="determinate" value={queryData.context.status_breakdown.overall_progress} sx={{ height: 8, borderRadius: 4, bgcolor: "#EEF2FF", "& .MuiLinearProgress-bar": { borderRadius: 4, bgcolor: queryData.context.status_breakdown.overall_progress >= 80 ? "#22C55E" : queryData.context.status_breakdown.overall_progress >= 50 ? "#2955FF" : "#F59E0B" } }} />
+                                    </Box>
+                                    <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap" }}>
+                                        {[
+                                            { label: "전체", value: queryData.context.status_breakdown.total, color: "#374151", bg: "#F3F4F6" },
+                                            { label: "완료", value: queryData.context.status_breakdown.done, color: "#22C55E", bg: "#DCFCE7" },
+                                            { label: "진행 중", value: queryData.context.status_breakdown.in_progress, color: "#2955FF", bg: "#EEF2FF" },
+                                            { label: "대기", value: queryData.context.status_breakdown.todo, color: "#6B7280", bg: "#F3F4F6" },
+                                            { label: "보류", value: queryData.context.status_breakdown.hold, color: "#F59E0B", bg: "#FEF3C7" },
+                                        ].map((item) => (
+                                            <Box key={item.label} sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 1.5, py: 0.5, borderRadius: 2, bgcolor: item.bg }}>
+                                                <Typography variant="caption" sx={{ fontWeight: 600, color: item.color, fontSize: "0.7rem" }}>{item.label}</Typography>
+                                                <Typography variant="caption" sx={{ fontWeight: 800, color: item.color, fontSize: "0.9rem" }}>{item.value}</Typography>
+                                            </Box>
+                                        ))}
+                                    </Box>
+
+                                    {/* Members */}
+                                    {queryData.context.members.length > 0 && (
+                                        <Box sx={{ mb: 2 }}>
+                                            <Typography variant="caption" sx={{ fontWeight: 600, color: "#6B7280", fontSize: "0.7rem", mb: 0.5, display: "block" }}>팀원</Typography>
+                                            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                                                {queryData.context.members.map((m, i) => (
+                                                    <Chip key={i} label={m} size="small" sx={{ bgcolor: "#EEF2FF", color: "#2955FF", fontSize: "0.7rem", fontWeight: 500, height: 24 }} />
+                                                ))}
+                                            </Box>
+                                        </Box>
+                                    )}
+
+                                    {/* Task Table */}
+                                    <TableContainer sx={{ borderRadius: 2, border: "1px solid #E5E7EB" }}>
+                                        <Table size="small">
+                                            <TableHead>
+                                                <TableRow sx={{ bgcolor: "#F8FAFC" }}>
+                                                    <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", color: "#374151", py: 1 }}>Task</TableCell>
+                                                    <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", color: "#374151", py: 1 }}>상태</TableCell>
+                                                    <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", color: "#374151", py: 1 }}>우선순위</TableCell>
+                                                    <TableCell align="right" sx={{ fontWeight: 700, fontSize: "0.75rem", color: "#374151", py: 1 }}>진행률</TableCell>
+                                                    <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", color: "#374151", py: 1 }}>마감일</TableCell>
+                                                    <TableCell sx={{ fontWeight: 700, fontSize: "0.75rem", color: "#374151", py: 1 }}>담당자</TableCell>
+                                                </TableRow>
+                                            </TableHead>
+                                            <TableBody>
+                                                {queryData.context.tasks.map((task) => (
+                                                    <TableRow key={task.id} sx={{ "&:hover": { bgcolor: "#FAFBFF" }, bgcolor: task.status === "hold" ? "#FFFBEB" : "transparent" }}>
+                                                        <TableCell sx={{ py: 1 }}>
+                                                            <Typography variant="body2" sx={{ fontWeight: 600, fontSize: "0.8rem", color: "#1A1D29" }}>{task.title}</Typography>
+                                                            {task.description && (
+                                                                <Typography variant="caption" sx={{ color: "#9CA3AF", fontSize: "0.7rem", display: "block", mt: 0.2 }}>
+                                                                    {task.description.length > 60 ? task.description.slice(0, 60) + "..." : task.description}
+                                                                </Typography>
+                                                            )}
+                                                            {task.sub_project && <Chip label={task.sub_project} size="small" sx={{ mt: 0.3, height: 18, fontSize: "0.6rem", bgcolor: "#F3E8FF", color: "#8B5CF6" }} />}
+                                                        </TableCell>
+                                                        <TableCell sx={{ py: 1 }}>
+                                                            <Chip label={statusLabel[task.status] || task.status} size="small" sx={{ height: 22, fontSize: "0.65rem", fontWeight: 700, bgcolor: `${statusColor[task.status] || "#6B7280"}15`, color: statusColor[task.status] || "#6B7280" }} />
+                                                        </TableCell>
+                                                        <TableCell sx={{ py: 1 }}>
+                                                            <Chip label={task.priority} size="small" sx={{ height: 20, fontSize: "0.6rem", fontWeight: 600, bgcolor: `${priorityColor[task.priority] || "#6B7280"}12`, color: priorityColor[task.priority] || "#6B7280", textTransform: "capitalize" }} />
+                                                        </TableCell>
+                                                        <TableCell align="right" sx={{ py: 1 }}>
+                                                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, justifyContent: "flex-end" }}>
+                                                                <LinearProgress variant="determinate" value={task.status === "done" ? 100 : task.progress} sx={{ width: 50, height: 6, borderRadius: 3, bgcolor: "#F3F4F6", "& .MuiLinearProgress-bar": { borderRadius: 3, bgcolor: statusColor[task.status] || "#6B7280" } }} />
+                                                                <Typography variant="caption" sx={{ fontWeight: 700, color: "#374151", fontSize: "0.75rem", minWidth: 35, textAlign: "right" }}>{task.status === "done" ? 100 : task.progress}%</Typography>
+                                                            </Box>
+                                                        </TableCell>
+                                                        <TableCell sx={{ py: 1 }}>
+                                                            <Typography variant="caption" sx={{ color: "#6B7280", fontSize: "0.75rem" }}>{task.due_date || "미정"}</Typography>
+                                                        </TableCell>
+                                                        <TableCell sx={{ py: 1 }}>
+                                                            <Typography variant="caption" sx={{ color: "#6B7280", fontSize: "0.75rem" }}>{task.assignees.length > 0 ? task.assignees.join(", ") : "미배정"}</Typography>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                    </TableContainer>
+                                </Paper>
+                            )}
+
+                            {/* 상세 내용 */}
                             <Paper sx={{ p: 3, mb: 2, borderRadius: 3, border: "1px solid #E5E7EB" }}>
                                 <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
                                     <SummarizeIcon sx={{ color: "#4B5563", fontSize: "1.2rem" }} />
@@ -1060,6 +1156,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                                 {parseMarkdownToParagraphs(queryData.parsed_response.details)}
                             </Paper>
 
+                            {/* 핵심 일정 */}
                             <Paper sx={{ p: 3, mb: 2, borderRadius: 3, border: "1px solid #E5E7EB" }}>
                                 <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
                                     <EventAvailableIcon sx={{ color: "#14B8A6", fontSize: "1.2rem" }} />
@@ -1068,6 +1165,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                                 {parseMarkdownToParagraphs(queryData.parsed_response.key_schedule)}
                             </Paper>
 
+                            {/* 다음 액션 */}
                             <Paper sx={{ p: 3, borderRadius: 3, border: "1px solid #E5E7EB" }}>
                                 <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1.5 }}>
                                     <CheckCircleOutlineIcon sx={{ color: "#F59E0B", fontSize: "1.2rem" }} />

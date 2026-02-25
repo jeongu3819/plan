@@ -176,4 +176,27 @@ export interface ProjectAiQueryResponse {
     raw_response: string;
     model: string;
     created_at: string;
+    context?: {
+        project_name: string;
+        members: string[];
+        tasks: {
+            id: number;
+            title: string;
+            status: string;
+            priority: string;
+            progress: number;
+            due_date: string | null;
+            assignees: string[];
+            sub_project: string;
+            description: string;
+        }[];
+        status_breakdown: {
+            total: number;
+            done: number;
+            in_progress: number;
+            todo: number;
+            hold: number;
+            overall_progress: number;
+        };
+    };
 }
