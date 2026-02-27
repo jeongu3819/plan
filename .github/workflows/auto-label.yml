@@ -1,0 +1,79 @@
+name: PR Auto Label
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Label by PR title prefix
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+            const prefixMap = {
+              'feat:': 'type: feat',
+              'fix:': 'type: fix',
+              'refactor:': 'type: refactor',
+              'docs:': 'type: docs',
+              'test:': 'type: chore',
+              'chore:': 'type: chore',
+            };
+
+            const labelsToAdd = [];
+            for (const [prefix, label] of Object.entries(prefixMap)) {
+              if (title.toLowerCase().startsWith(prefix)) {
+                labelsToAdd.push(label);
+                break;
+              }
+            }
+
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: labelsToAdd,
+              });
+            }
+
+      - name: Label by changed files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const filenames = files.map(f => f.filename);
+            const hasFrontend = filenames.some(f => f.startsWith('frontend/'));
+            const hasBackend = filenames.some(f => f.startsWith('backend/'));
+
+            const labelsToAdd = [];
+            if (hasFrontend && hasBackend) {
+              labelsToAdd.push('area: both');
+            } else if (hasFrontend) {
+              labelsToAdd.push('area: frontend');
+            } else if (hasBackend) {
+              labelsToAdd.push('area: backend');
+            }
+
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: labelsToAdd,
+              });
+            }

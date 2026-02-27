@@ -1,0 +1,84 @@
+name: "기능 요청 (Feature Request)"
+description: "새로운 기능을 요청합니다"
+labels: ["type: feat", "status: planned"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: "영역 (Area)"
+      options:
+        - Frontend
+        - Backend
+        - Both
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: "우선순위 (Priority)"
+      options:
+        - "High"
+        - "Medium"
+        - "Low"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "기능 설명"
+      description: "추가하고자 하는 기능을 설명해주세요"
+      placeholder: "어떤 기능이 필요한지 상세히 작성해주세요"
+    validations:
+      required: true
+
+  - type: textarea
+    id: as-is
+    attributes:
+      label: "현재 동작 (As-Is)"
+      description: "현재 어떻게 동작하는지 설명해주세요"
+    validations:
+      required: true
+
+  - type: textarea
+    id: to-be
+    attributes:
+      label: "목표 동작 (To-Be)"
+      description: "기능 추가 후 어떻게 동작해야 하는지 설명해주세요"
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: "세부 작업 체크리스트"
+      description: "구현에 필요한 세부 작업을 체크리스트로 작성해주세요"
+      value: |
+        - [ ] 작업 1
+        - [ ] 작업 2
+        - [ ] 작업 3
+
+  - type: textarea
+    id: affected-files
+    attributes:
+      label: "영향 범위 (수정 파일)"
+      description: "수정이 예상되는 파일 목록을 작성해주세요"
+      placeholder: |
+        - `backend/main.py`
+        - `frontend/src/...`
+
+  - type: checkboxes
+    id: non-destructive
+    attributes:
+      label: "비파괴적 개발 원칙 확인"
+      description: "아래 원칙을 준수하는지 확인해주세요"
+      options:
+        - label: "기존 기능을 삭제하지 않습니다"
+          required: true
+        - label: "기존 API/화면/라우팅 동작을 유지합니다"
+          required: true
+        - label: "필요한 부분만 최소 수정 + 추가 기능 확장합니다"
+          required: true
+        - label: "기존 권한 로직을 대체하지 않고 조건 추가 방식으로 확장합니다"
+          required: true
