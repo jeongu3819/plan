@@ -21,6 +21,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
+import GitHubIcon from '@mui/icons-material/GitHub';
 
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -176,6 +177,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                         { text: 'Kanban Board', icon: <ViewKanbanIcon />, path: projects.length > 0 ? `/project/${projects[0].id}` : '/' },
                         { text: '전체 로드맵', icon: <TimelineIcon />, path: '/roadmap' },
                         { text: '@나를 언급', icon: <AlternateEmailIcon />, path: '/mentions' },
+                        { text: 'GitHub 현황', icon: <GitHubIcon />, path: '/github' },
                         { text: 'AI Settings', icon: <AutoAwesomeIcon />, path: '/ai-settings', adminOnly: true },
                     ].filter(item => !item.adminOnly || currentUser?.role === 'admin' || currentUser?.role === 'super_admin').map((item) => {
                         const isActive = item.path === '/' ? location.pathname === '/' : location.pathname + location.search === item.path;

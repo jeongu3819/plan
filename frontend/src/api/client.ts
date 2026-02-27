@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Task, Note, MentionNote, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge, ProjectFile, SearchResultProject, SearchSummaryResult, ProjectAiQueryResponse } from '../types';
+import { Task, Note, MentionNote, Attachment, SubProject, RoadmapItem, ProjectMember, GraphNode, GraphEdge, ProjectFile, SearchResultProject, SearchSummaryResult, ProjectAiQueryResponse, GitHubAuthStatus, GitHubProjectStatus, GitHubDashboardProject } from '../types';
 
 const API_URL = `http://${window.location.hostname}:8000/api`;
 
@@ -42,6 +42,7 @@ export interface Project {
     created_at?: string;
     require_approval?: boolean;
     permissions?: Record<string, string>;
+    github_repo?: string;
 }
 
 export interface User {
@@ -368,5 +369,23 @@ export const api = {
     queryProjectAi: async (projectId: number, query: string, userId: number): Promise<ProjectAiQueryResponse> => {
         const res = await client.post(`/projects/${projectId}/ai-query?user_id=${userId}`, { query });
         return res.data;
-    }
+    },
+
+    // ─── GitHub Integration ───
+    getGitHubAuthStatus: async (): Promise<GitHubAuthStatus> => {
+        const res = await client.get('/github/auth-status');
+        return res.data;
+    },
+    syncGitHub: async (projectId: number): Promise<{ message: string; stats: { pulled: number; pushed: number; updated: number } }> => {
+        const res = await client.post(`/projects/${projectId}/github/sync`);
+        return res.data;
+    },
+    getGitHubProjectStatus: async (projectId: number): Promise<GitHubProjectStatus> => {
+        const res = await client.get(`/projects/${projectId}/github/status`);
+        return res.data;
+    },
+    getGitHubDashboard: async (): Promise<{ projects: GitHubDashboardProject[] }> => {
+        const res = await client.get('/github/dashboard');
+        return res.data;
+    },
 };

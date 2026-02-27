@@ -3,12 +3,15 @@ import {
     Box, Typography, Paper, Button, Avatar, IconButton,
     Divider, Switch, FormControlLabel, Select, FormControl,
     InputLabel, Chip, Dialog, DialogTitle, DialogContent,
-    DialogActions, Checkbox, Tooltip,
+    DialogActions, Checkbox, Tooltip, TextField, CircularProgress,
+    Alert,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SecurityIcon from '@mui/icons-material/Security';
 import GroupIcon from '@mui/icons-material/Group';
+import GitHubIcon from '@mui/icons-material/GitHub';
+import SyncIcon from '@mui/icons-material/Sync';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, User } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
@@ -53,6 +56,10 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         }
     );
 
+    // GitHub state
+    const [githubRepo, setGithubRepo] = useState(project?.github_repo ?? '');
+    const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
     // Sync state when project data loads
     React.useEffect(() => {
         if (project) {
@@ -61,6 +68,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                 post_write: 'all', post_edit: 'all', post_view: 'all',
                 comment_write: 'all', file_view: 'all', file_download: 'all',
             });
+            setGithubRepo(project.github_repo ?? '');
         }
     }, [project]);
 
@@ -87,6 +95,36 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         },
     });
 
+    const saveGithubRepoMutation = useMutation({
+        mutationFn: (repo: string) => api.updateProject(projectId, { github_repo: repo } as any),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['projects'] });
+            setSyncMessage({ type: 'success', text: 'GitHub repo 저장 완료' });
+            setTimeout(() => setSyncMessage(null), 3000);
+        },
+        onError: (err: any) => {
+            setSyncMessage({ type: 'error', text: err?.response?.data?.detail || 'repo 저장 실패' });
+        },
+    });
+
+    const syncGithubMutation = useMutation({
+        mutationFn: () => api.syncGitHub(projectId),
+        onSuccess: (result) => {
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            queryClient.invalidateQueries({ queryKey: ['projects'] });
+            queryClient.invalidateQueries({ queryKey: ['stats'] });
+            setSyncMessage({ type: 'success', text: result.message });
+            setTimeout(() => setSyncMessage(null), 5000);
+        },
+        onError: (err: any) => {
+            setSyncMessage({ type: 'error', text: err?.response?.data?.detail || '동기화 실패' });
+        },
+    });
+
+    const handleSaveGithubRepo = () => {
+        saveGithubRepoMutation.mutate(githubRepo.trim());
+    };
+
     const handleSavePermissions = () => {
         updateProjectMutation.mutate({ require_approval: requireApproval, permissions });
     };
@@ -106,6 +144,71 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
 
     return (
         <Box sx={{ maxWidth: 800, mx: 'auto', py: 2 }}>
+            {/* ─── GitHub Integration Section ─── */}
+            <Paper sx={{
+                p: 3, mb: 3, borderRadius: 3,
+                border: '1px solid #E5E7EB',
+                boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+            }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5 }}>
+                    <GitHubIcon sx={{ color: '#24292F', fontSize: '1.3rem' }} />
+                    <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', color: '#1A1D29' }}>
+                        GitHub 연동
+                    </Typography>
+                </Box>
+
+                <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.8rem', mb: 2 }}>
+                    GitHub Repository를 연결하면 Issue/Task를 양방향 동기화할 수 있습니다.
+                </Typography>
+
+                <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', mb: 2 }}>
+                    <TextField
+                        fullWidth
+                        size="small"
+                        label="GitHub Repository"
+                        placeholder="owner/repo 또는 https://github.com/owner/repo"
+                        value={githubRepo}
+                        onChange={(e) => setGithubRepo(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && githubRepo.trim()) handleSaveGithubRepo(); }}
+                        sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+                    />
+                    <Button
+                        variant="contained"
+                        onClick={handleSaveGithubRepo}
+                        disabled={saveGithubRepoMutation.isPending}
+                        sx={{ bgcolor: '#24292F', fontWeight: 600, whiteSpace: 'nowrap', minWidth: 80, '&:hover': { bgcolor: '#1B1F23' } }}
+                    >
+                        {saveGithubRepoMutation.isPending ? '...' : '저장'}
+                    </Button>
+                </Box>
+
+                {project?.github_repo && (
+                    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', mb: 1 }}>
+                        <Chip
+                            label={project.github_repo}
+                            size="small"
+                            sx={{ bgcolor: '#F3F4F6', fontWeight: 600, fontSize: '0.75rem' }}
+                        />
+                        <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={syncGithubMutation.isPending ? <CircularProgress size={14} /> : <SyncIcon />}
+                            onClick={() => syncGithubMutation.mutate()}
+                            disabled={syncGithubMutation.isPending}
+                            sx={{ fontWeight: 600, fontSize: '0.8rem', borderColor: '#2955FF', color: '#2955FF' }}
+                        >
+                            {syncGithubMutation.isPending ? '동기화 중...' : '동기화'}
+                        </Button>
+                    </Box>
+                )}
+
+                {syncMessage && (
+                    <Alert severity={syncMessage.type} sx={{ mt: 1.5, fontSize: '0.8rem' }} onClose={() => setSyncMessage(null)}>
+                        {syncMessage.text}
+                    </Alert>
+                )}
+            </Paper>
+
             {/* ─── Members Section ─── */}
             <Paper sx={{
                 p: 3, mb: 3, borderRadius: 3,

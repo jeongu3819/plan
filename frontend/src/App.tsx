@@ -12,6 +12,7 @@ import GlobalRoadmapPage from './pages/GlobalRoadmapPage';
 import AdminPage from './pages/AdminPage';
 import SearchPage from './pages/SearchPage';
 import MentionsPage from './pages/MentionsPage';
+import GitHubDashboardPage from './pages/GitHubDashboardPage';
 import { MainLayout } from './layouts/MainLayout';
 import TaskDrawer from './components/TaskDrawer';
 
@@ -126,6 +127,7 @@ const App: React.FC = () => {
                                 <Route path="/roadmap" element={<GlobalRoadmapPage />} />
                                 <Route path="/search" element={<SearchPage />} />
                                 <Route path="/mentions" element={<MentionsPage />} />
+                                <Route path="/github" element={<GitHubDashboardPage />} />
                                 <Route path="/admin" element={<AdminPage />} />
                             </Routes>
                         </MainLayout>

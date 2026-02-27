@@ -23,6 +23,7 @@ export interface Project {
         file_view?: string;
         file_download?: string;
     };
+    github_repo?: string;
 }
 
 export interface ProjectFile {
@@ -60,6 +61,8 @@ export interface Task {
     archived_at?: string | null;
     created_at?: string;
     updated_at?: string;
+    github_issue_number?: number | null;
+    github_synced_at?: string | null;
 }
 
 export interface Note {
@@ -160,6 +163,73 @@ export interface SearchSummaryResult {
     project_summaries: AiProjectSummary[];
     model: string;
     created_at: string;
+}
+
+export interface GitHubAuthStatus {
+    authenticated: boolean;
+    username: string;
+    message: string;
+}
+
+export interface GitHubIssue {
+    number: number;
+    title: string;
+    state: string;
+    status: string;
+    priority: string;
+    created_at: string;
+    updated_at: string;
+    closed_at?: string | null;
+    milestone?: string | null;
+    html_url: string;
+}
+
+export interface GitHubPR {
+    number: number;
+    title: string;
+    state: string;
+    merged: boolean;
+    merged_at?: string | null;
+    created_at: string;
+    html_url: string;
+}
+
+export interface GitHubMilestone {
+    number: number;
+    title: string;
+    state: string;
+    open_issues: number;
+    closed_issues: number;
+    description: string;
+}
+
+export interface GitHubProjectStatus {
+    connected: boolean;
+    repo: string;
+    issues: GitHubIssue[];
+    pull_requests: GitHubPR[];
+    milestones: GitHubMilestone[];
+}
+
+export interface GitHubDashboardProject {
+    project_id: number;
+    project_name: string;
+    repo: string;
+    tasks: {
+        id: number;
+        title: string;
+        status: string;
+        priority: string;
+        github_issue_number?: number | null;
+        due_date?: string | null;
+        created_at: string;
+    }[];
+    status_counts: { done: number; in_progress: number; todo: number; hold: number };
+    total: number;
+    progress: number;
+    milestones: GitHubMilestone[];
+    pull_requests: GitHubPR[];
+    cached_at?: string | null;
 }
 
 export interface ProjectAiQueryResponse {
