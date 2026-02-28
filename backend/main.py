@@ -2537,7 +2537,7 @@ def github_api(method: str, url: str, token: str, json_body: dict = None) -> dic
     """Make a GitHub API request."""
     headers = {
         "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
+        "Accept": "application/vnd.github+json",
         "User-Agent": "plan-app"
     }
     with httpx.Client(timeout=30) as client:
@@ -2684,10 +2684,11 @@ def github_sync(project_id: int):
         issues_page = github_api("GET", f"{base}/issues?state=all&per_page=100&page={page}&sort=created&direction=asc", token)
         if not issues_page:
             break
+        page_len = len(issues_page)
         # Filter out pull requests (GitHub API returns PRs as issues too)
         issues_page = [i for i in issues_page if "pull_request" not in i]
         all_issues.extend(issues_page)
-        if len(issues_page) < 100:
+        if page_len < 100:
             break
         page += 1
 
@@ -2701,6 +2702,7 @@ def github_sync(project_id: int):
             issue_task_map[t["github_issue_number"]] = t
 
     sync_stats = {"pulled": 0, "pushed": 0, "updated": 0}
+    sync_errors = []
     now = datetime.now().isoformat()
 
     # ── Milestones → SubProjects ──
@@ -2798,8 +2800,16 @@ def github_sync(project_id: int):
             task_synced = t.get("github_synced_at", "")
 
             if task_updated > task_synced:
-                # Build labels
-                labels = []
+                # Preserve custom labels: fetch existing, remove only status/priority, add new
+                managed_labels = set(STATUS_TO_LABEL.values()) | set(PRIORITY_TO_LABEL.values())
+                try:
+                    existing_issue = github_api("GET", f"{base}/issues/{issue_number}", token)
+                    existing_labels = [l["name"] for l in existing_issue.get("labels", [])]
+                except Exception as e:
+                    existing_labels = []
+                    sync_errors.append(f"Issue #{issue_number} 라벨 조회 실패: {str(e)}")
+                # Keep user's custom labels, remove managed ones
+                labels = [l for l in existing_labels if l not in managed_labels]
                 status_label = STATUS_TO_LABEL.get(t.get("status", "todo"))
                 if status_label:
                     labels.append(status_label)
@@ -2818,8 +2828,8 @@ def github_sync(project_id: int):
                     })
                     t["github_synced_at"] = now
                     sync_stats["updated"] += 1
-                except Exception:
-                    pass  # Don't fail sync for individual issue errors
+                except Exception as e:
+                    sync_errors.append(f"Issue #{issue_number} 업데이트 실패: {str(e)}")
         else:
             # New task — create GitHub Issue
             labels = []
@@ -2855,20 +2865,22 @@ def github_sync(project_id: int):
                 if t.get("status") == "done" and created_issue.get("number"):
                     try:
                         github_api("PATCH", f"{base}/issues/{created_issue['number']}", token, {"state": "closed"})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        sync_errors.append(f"Issue #{created_issue['number']} close 실패: {str(e)}")
 
                 sync_stats["pushed"] += 1
-            except Exception:
-                pass  # Don't fail sync for individual issue errors
+            except Exception as e:
+                sync_errors.append(f"Task '{t.get('title', '')}' Push 실패: {str(e)}")
 
     data["tasks"] = tasks
     data["sub_projects"] = sub_projects
     save_data(data)
 
+    error_suffix = f" (경고 {len(sync_errors)}건)" if sync_errors else ""
     return {
-        "message": f"동기화 완료: GitHub→Plan {sync_stats['pulled']}건 생성, Plan→GitHub {sync_stats['pushed']}건 생성, {sync_stats['updated']}건 업데이트",
+        "message": f"동기화 완료: GitHub→Plan {sync_stats['pulled']}건 생성, Plan→GitHub {sync_stats['pushed']}건 생성, {sync_stats['updated']}건 업데이트{error_suffix}",
         "stats": sync_stats,
+        "errors": sync_errors,
     }
 
 
@@ -2895,9 +2907,10 @@ def github_project_status(project_id: int):
         issues_page = github_api("GET", f"{base}/issues?state=all&per_page=100&page={page}", token)
         if not issues_page:
             break
+        page_len = len(issues_page)
         issues_page = [i for i in issues_page if "pull_request" not in i]
         all_issues.extend(issues_page)
-        if len(issues_page) < 100:
+        if page_len < 100:
             break
         page += 1
 

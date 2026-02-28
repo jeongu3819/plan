@@ -376,7 +376,7 @@ export const api = {
         const res = await client.get('/github/auth-status');
         return res.data;
     },
-    syncGitHub: async (projectId: number): Promise<{ message: string; stats: { pulled: number; pushed: number; updated: number } }> => {
+    syncGitHub: async (projectId: number): Promise<{ message: string; stats: { pulled: number; pushed: number; updated: number }; errors?: string[] }> => {
         const res = await client.post(`/projects/${projectId}/github/sync`);
         return res.data;
     },

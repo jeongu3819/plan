@@ -112,7 +112,8 @@ const GitHubDashboardPage: React.FC = () => {
 
 const ProjectCard: React.FC<{ project: GitHubDashboardProject; queryClient: any }> = ({ project, queryClient }) => {
     const [expanded, setExpanded] = useState(true);
-    const [syncMsg, setSyncMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const [syncMsg, setSyncMsg] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+    const [syncErrors, setSyncErrors] = useState<string[]>([]);
 
     const syncMutation = useMutation({
         mutationFn: () => api.syncGitHub(project.project_id),
@@ -120,11 +121,13 @@ const ProjectCard: React.FC<{ project: GitHubDashboardProject; queryClient: any 
             queryClient.invalidateQueries({ queryKey: ['github-dashboard'] });
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
-            setSyncMsg({ type: 'success', text: result.message });
+            setSyncMsg({ type: result.errors?.length ? 'warning' : 'success', text: result.message });
+            setSyncErrors(result.errors || []);
             setTimeout(() => setSyncMsg(null), 5000);
         },
         onError: (err: any) => {
             setSyncMsg({ type: 'error', text: err?.response?.data?.detail || '동기화 실패' });
+            setSyncErrors([]);
         },
     });
 
@@ -213,6 +216,11 @@ const ProjectCard: React.FC<{ project: GitHubDashboardProject; queryClient: any 
             {syncMsg && (
                 <Alert severity={syncMsg.type} sx={{ mx: 2, mt: 1, fontSize: '0.8rem' }} onClose={() => setSyncMsg(null)}>
                     {syncMsg.text}
+                </Alert>
+            )}
+            {syncErrors.length > 0 && (
+                <Alert severity="warning" sx={{ mx: 2, mt: 0.5, fontSize: '0.75rem' }} onClose={() => setSyncErrors([])}>
+                    {syncErrors.map((err, i) => <div key={i}>{err}</div>)}
                 </Alert>
             )}
 

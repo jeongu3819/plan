@@ -107,17 +107,21 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         },
     });
 
+    const [syncErrors, setSyncErrors] = useState<string[]>([]);
+
     const syncGithubMutation = useMutation({
         mutationFn: () => api.syncGitHub(projectId),
         onSuccess: (result) => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['projects'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
-            setSyncMessage({ type: 'success', text: result.message });
+            setSyncMessage({ type: result.errors?.length ? 'warning' as any : 'success', text: result.message });
+            setSyncErrors(result.errors || []);
             setTimeout(() => setSyncMessage(null), 5000);
         },
         onError: (err: any) => {
             setSyncMessage({ type: 'error', text: err?.response?.data?.detail || '동기화 실패' });
+            setSyncErrors([]);
         },
     });
 
@@ -205,6 +209,11 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                 {syncMessage && (
                     <Alert severity={syncMessage.type} sx={{ mt: 1.5, fontSize: '0.8rem' }} onClose={() => setSyncMessage(null)}>
                         {syncMessage.text}
+                    </Alert>
+                )}
+                {syncErrors.length > 0 && (
+                    <Alert severity="warning" sx={{ mt: 1, fontSize: '0.75rem' }} onClose={() => setSyncErrors([])}>
+                        {syncErrors.map((err, i) => <div key={i}>{err}</div>)}
                     </Alert>
                 )}
             </Paper>
