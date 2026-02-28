@@ -1,0 +1,80 @@
+name: Status Automation
+
+on:
+  pull_request:
+    types: [opened, closed]
+  issues:
+    types: [closed, reopened]
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  update-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update status labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const statusLabels = ['status: planned', 'status: in-progress', 'status: done'];
+
+            async function removeStatusLabels(owner, repo, issueNumber) {
+              const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+                owner, repo, issue_number: issueNumber,
+              });
+              for (const label of labels) {
+                if (statusLabels.includes(label.name)) {
+                  await github.rest.issues.removeLabel({
+                    owner, repo, issue_number: issueNumber, name: label.name,
+                  });
+                }
+              }
+            }
+
+            async function addLabel(owner, repo, issueNumber, label) {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: issueNumber, labels: [label],
+              });
+            }
+
+            const { owner, repo } = context.repo;
+
+            // PR events
+            if (context.eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              const body = pr.body || '';
+
+              // Extract issue numbers from "Closes #N" patterns
+              const closePattern = /(?:closes?|fixes?|resolves?)\s+#(\d+)/gi;
+              const issueNumbers = [];
+              let match;
+              while ((match = closePattern.exec(body)) !== null) {
+                issueNumbers.push(parseInt(match[1]));
+              }
+
+              for (const issueNumber of issueNumbers) {
+                await removeStatusLabels(owner, repo, issueNumber);
+
+                if (pr.merged) {
+                  // PR merged → status: done
+                  await addLabel(owner, repo, issueNumber, 'status: done');
+                } else if (context.payload.action === 'opened') {
+                  // PR opened → status: in-progress
+                  await addLabel(owner, repo, issueNumber, 'status: in-progress');
+                }
+              }
+            }
+
+            // Issue events
+            if (context.eventName === 'issues') {
+              const issue = context.payload.issue;
+              await removeStatusLabels(owner, repo, issue.number);
+
+              if (context.payload.action === 'closed') {
+                await addLabel(owner, repo, issue.number, 'status: done');
+              } else if (context.payload.action === 'reopened') {
+                await addLabel(owner, repo, issue.number, 'status: planned');
+              }
+            }

@@ -9,6 +9,8 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime, date
 import re
+import subprocess
+import httpx
 
 app = FastAPI(title="Antigravity Schedule Platform API")
 
@@ -37,6 +39,8 @@ class TaskBase(BaseModel):
     tags: List[str] = []
     sub_project_id: Optional[int] = None
     progress: Optional[int] = 0
+    github_issue_number: Optional[int] = None
+    github_synced_at: Optional[str] = None
 
 class TaskCreate(TaskBase):
     pass
@@ -52,6 +56,7 @@ class TaskUpdate(BaseModel):
     tags: Optional[List[str]] = None
     sub_project_id: Optional[int] = None
     progress: Optional[int] = None
+    github_issue_number: Optional[int] = None
 
 # Default permissions for new projects
 DEFAULT_PERMISSIONS = {
@@ -71,6 +76,7 @@ class ProjectCreate(BaseModel):
     require_approval: Optional[bool] = False
     permissions: Optional[Dict[str, str]] = None
     member_ids: Optional[List[int]] = None
+    github_repo: Optional[str] = None  # "owner/repo" format
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
@@ -78,6 +84,7 @@ class ProjectUpdate(BaseModel):
     visibility: Optional[str] = None
     require_approval: Optional[bool] = None
     permissions: Optional[Dict[str, str]] = None
+    github_repo: Optional[str] = None
 
 class UserCreate(BaseModel):
     username: str
@@ -170,6 +177,7 @@ DEFAULT_DATA = {
     "search_feedback": [],
     "project_ai_queries": [],
     "roadmap_orders": {},
+    "github_cache": {},
 }
 
 def load_data() -> Dict[str, Any]:
@@ -207,6 +215,10 @@ def load_data() -> Dict[str, Any]:
         # Migrate roadmap_orders
         if "roadmap_orders" not in data:
             data["roadmap_orders"] = {}
+
+        # Migrate github_cache
+        if "github_cache" not in data:
+            data["github_cache"] = {}
 
         # Ensure project_members has at least owner for project 1
         if not data.get("project_members"):
@@ -2505,6 +2517,526 @@ def save_summary_correction(correction: SummaryCorrectionSave, user_id: int = Qu
     summary["is_corrected"] = True
     save_data(data)
     return summary
+
+# ─── GitHub Integration ───
+
+def get_github_token() -> str:
+    """Get GitHub token from gh CLI at runtime (no stored tokens)."""
+    try:
+        result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="GitHub CLI 인증이 필요합니다. 서버에서 'gh auth login'을 실행해주세요.")
+        return result.stdout.strip()
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="GitHub CLI(gh)가 설치되어 있지 않습니다.")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="GitHub CLI 응답 시간 초과")
+
+
+def github_api(method: str, url: str, token: str, json_body: dict = None) -> dict:
+    """Make a GitHub API request."""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "plan-app"
+    }
+    with httpx.Client(timeout=30) as client:
+        if method == "GET":
+            resp = client.get(url, headers=headers)
+        elif method == "POST":
+            resp = client.post(url, headers=headers, json=json_body or {})
+        elif method == "PATCH":
+            resp = client.patch(url, headers=headers, json=json_body or {})
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+
+    if resp.status_code == 401:
+        raise HTTPException(status_code=401, detail="GitHub 인증이 만료되었습니다. 서버에서 'gh auth login'을 재실행해주세요.")
+    if resp.status_code == 403:
+        raise HTTPException(status_code=403, detail="이 repo에 접근 권한이 없습니다. 해당 repo에 콜라보레이터로 추가되어야 합니다.")
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="GitHub repo를 찾을 수 없습니다. repo 주소를 확인해주세요.")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=f"GitHub API 오류: {resp.text}")
+    if resp.status_code == 204:
+        return {}
+    return resp.json()
+
+
+# Status mapping: plan app ↔ GitHub labels
+STATUS_TO_LABEL = {
+    "todo": "status: planned",
+    "in_progress": "status: in-progress",
+    "done": "status: done",
+    "hold": "status: hold",
+}
+LABEL_TO_STATUS = {v: k for k, v in STATUS_TO_LABEL.items()}
+
+PRIORITY_TO_LABEL = {
+    "low": "priority: low",
+    "medium": "priority: medium",
+    "high": "priority: high",
+}
+LABEL_TO_PRIORITY = {v: k for k, v in PRIORITY_TO_LABEL.items()}
+
+
+def parse_github_repo(github_repo: str) -> str:
+    """Normalize 'owner/repo' from various formats."""
+    if not github_repo:
+        return ""
+    # Strip https://github.com/ prefix
+    repo = github_repo.strip()
+    repo = repo.rstrip("/")
+    if repo.startswith("https://github.com/"):
+        repo = repo[len("https://github.com/"):]
+    elif repo.startswith("http://github.com/"):
+        repo = repo[len("http://github.com/"):]
+    elif repo.startswith("github.com/"):
+        repo = repo[len("github.com/"):]
+    # Remove .git suffix
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return repo
+
+
+def issue_labels_to_status(labels: list) -> str:
+    """Extract plan status from GitHub issue labels."""
+    for lbl in labels:
+        name = lbl.get("name", "") if isinstance(lbl, dict) else str(lbl)
+        if name in LABEL_TO_STATUS:
+            return LABEL_TO_STATUS[name]
+    return "todo"
+
+
+def issue_labels_to_priority(labels: list) -> str:
+    """Extract plan priority from GitHub issue labels."""
+    for lbl in labels:
+        name = lbl.get("name", "") if isinstance(lbl, dict) else str(lbl)
+        if name in LABEL_TO_PRIORITY:
+            return LABEL_TO_PRIORITY[name]
+    return "medium"
+
+
+@app.get("/api/github/auth-status")
+def github_auth_status():
+    """Check if gh CLI is authenticated."""
+    try:
+        result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=10)
+        authenticated = result.returncode == 0
+        username = ""
+        if authenticated:
+            # Try to extract username
+            user_result = subprocess.run(["gh", "api", "user", "-q", ".login"], capture_output=True, text=True, timeout=10)
+            if user_result.returncode == 0:
+                username = user_result.stdout.strip()
+        return {
+            "authenticated": authenticated,
+            "username": username,
+            "message": "인증됨" if authenticated else "GitHub CLI 인증이 필요합니다. 서버에서 'gh auth login'을 실행해주세요."
+        }
+    except FileNotFoundError:
+        return {
+            "authenticated": False,
+            "username": "",
+            "message": "GitHub CLI(gh)가 설치되어 있지 않습니다."
+        }
+
+
+@app.post("/api/projects/{project_id}/github/sync")
+def github_sync(project_id: int):
+    """Bidirectional sync between plan tasks and GitHub issues."""
+    data = load_data()
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    raw_repo = project.get("github_repo", "")
+    repo = parse_github_repo(raw_repo)
+    if not repo or "/" not in repo:
+        raise HTTPException(status_code=400, detail="GitHub repo가 연결되지 않았습니다. 프로젝트 설정에서 repo를 입력해주세요.")
+
+    token = get_github_token()
+    base = f"https://api.github.com/repos/{repo}"
+
+    # ── Ensure labels exist ──
+    existing_labels_raw = github_api("GET", f"{base}/labels?per_page=100", token)
+    existing_label_names = set(l["name"] for l in existing_labels_raw)
+    needed_labels = {
+        "status: planned": "0E8A16",
+        "status: in-progress": "FBCA04",
+        "status: done": "5319E7",
+        "status: hold": "D93F0B",
+        "priority: low": "C5DEF5",
+        "priority: medium": "BFD4F2",
+        "priority: high": "B60205",
+    }
+    for label_name, color in needed_labels.items():
+        if label_name not in existing_label_names:
+            try:
+                github_api("POST", f"{base}/labels", token, {"name": label_name, "color": color})
+            except Exception:
+                pass  # Label may already exist from race condition
+
+    # ── Pull: GitHub Issues → plan Tasks ──
+    all_issues = []
+    page = 1
+    while True:
+        issues_page = github_api("GET", f"{base}/issues?state=all&per_page=100&page={page}&sort=created&direction=asc", token)
+        if not issues_page:
+            break
+        page_len = len(issues_page)
+        # Filter out pull requests (GitHub API returns PRs as issues too)
+        issues_page = [i for i in issues_page if "pull_request" not in i]
+        all_issues.extend(issues_page)
+        if page_len < 100:
+            break
+        page += 1
+
+    tasks = data.get("tasks", [])
+    sub_projects = data.get("sub_projects", [])
+
+    # Build lookup: github_issue_number → task
+    issue_task_map = {}
+    for t in tasks:
+        if t.get("project_id") == project_id and t.get("github_issue_number"):
+            issue_task_map[t["github_issue_number"]] = t
+
+    sync_stats = {"pulled": 0, "pushed": 0, "updated": 0}
+    sync_errors = []
+    now = datetime.now().isoformat()
+
+    # ── Milestones → SubProjects ──
+    milestones_raw = github_api("GET", f"{base}/milestones?state=all&per_page=100", token)
+    milestone_subproject_map = {}  # milestone_number → sub_project_id
+    for ms in milestones_raw:
+        ms_title = ms.get("title", "")
+        ms_number = ms.get("number")
+        # Check if subproject with this name already exists
+        existing_sp = next((sp for sp in sub_projects if sp.get("project_id") == project_id and sp.get("name") == ms_title), None)
+        if existing_sp:
+            milestone_subproject_map[ms_number] = existing_sp["id"]
+        else:
+            new_sp = {
+                "id": next_id(sub_projects),
+                "project_id": project_id,
+                "name": ms_title,
+                "description": ms.get("description", "") or "",
+                "parent_id": None,
+                "created_at": now,
+            }
+            sub_projects.append(new_sp)
+            milestone_subproject_map[ms_number] = new_sp["id"]
+
+    for issue in all_issues:
+        issue_number = issue["number"]
+        issue_state = issue.get("state", "open")
+        issue_labels = issue.get("labels", [])
+
+        # Determine status from labels + state
+        if issue_state == "closed":
+            status = "done"
+        else:
+            status = issue_labels_to_status(issue_labels)
+
+        priority = issue_labels_to_priority(issue_labels)
+
+        # Milestone → sub_project_id
+        ms = issue.get("milestone")
+        sp_id = None
+        if ms and ms.get("number") in milestone_subproject_map:
+            sp_id = milestone_subproject_map[ms["number"]]
+
+        if issue_number in issue_task_map:
+            # Update existing task (GitHub is source of truth for title/status if newer)
+            existing_task = issue_task_map[issue_number]
+            gh_updated = issue.get("updated_at", "")
+            task_synced = existing_task.get("github_synced_at", "")
+
+            if gh_updated > task_synced:
+                existing_task["title"] = issue.get("title", existing_task["title"])
+                existing_task["description"] = issue.get("body") or existing_task.get("description", "")
+                existing_task["status"] = status
+                existing_task["priority"] = priority
+                if sp_id:
+                    existing_task["sub_project_id"] = sp_id
+                existing_task["github_synced_at"] = now
+                existing_task["updated_at"] = now
+                sync_stats["updated"] += 1
+        else:
+            # Create new task from GitHub issue
+            new_task = {
+                "id": next_id(tasks),
+                "project_id": project_id,
+                "title": issue.get("title", "Untitled"),
+                "description": issue.get("body") or "",
+                "status": status,
+                "priority": priority,
+                "start_date": None,
+                "due_date": None,
+                "assignee_ids": [],
+                "tags": [],
+                "sub_project_id": sp_id,
+                "progress": 100 if status == "done" else 0,
+                "github_issue_number": issue_number,
+                "github_synced_at": now,
+                "created_at": issue.get("created_at", now),
+                "updated_at": now,
+                "archived_at": None,
+            }
+            tasks.append(new_task)
+            issue_task_map[issue_number] = new_task
+            sync_stats["pulled"] += 1
+
+    # ── Push: plan Tasks → GitHub Issues ──
+    for t in tasks:
+        if t.get("project_id") != project_id:
+            continue
+        if t.get("archived_at"):
+            continue
+        if t.get("github_issue_number"):
+            # Already linked — push status/title changes
+            issue_number = t["github_issue_number"]
+            task_updated = t.get("updated_at", "")
+            task_synced = t.get("github_synced_at", "")
+
+            if task_updated > task_synced:
+                # Preserve custom labels: fetch existing, remove only status/priority, add new
+                managed_labels = set(STATUS_TO_LABEL.values()) | set(PRIORITY_TO_LABEL.values())
+                try:
+                    existing_issue = github_api("GET", f"{base}/issues/{issue_number}", token)
+                    existing_labels = [l["name"] for l in existing_issue.get("labels", [])]
+                except Exception as e:
+                    existing_labels = []
+                    sync_errors.append(f"Issue #{issue_number} 라벨 조회 실패: {str(e)}")
+                # Keep user's custom labels, remove managed ones
+                labels = [l for l in existing_labels if l not in managed_labels]
+                status_label = STATUS_TO_LABEL.get(t.get("status", "todo"))
+                if status_label:
+                    labels.append(status_label)
+                priority_label = PRIORITY_TO_LABEL.get(t.get("priority", "medium"))
+                if priority_label:
+                    labels.append(priority_label)
+
+                issue_state = "closed" if t.get("status") == "done" else "open"
+
+                try:
+                    github_api("PATCH", f"{base}/issues/{issue_number}", token, {
+                        "title": t.get("title", ""),
+                        "body": t.get("description") or "",
+                        "state": issue_state,
+                        "labels": labels,
+                    })
+                    t["github_synced_at"] = now
+                    sync_stats["updated"] += 1
+                except Exception as e:
+                    sync_errors.append(f"Issue #{issue_number} 업데이트 실패: {str(e)}")
+        else:
+            # New task — create GitHub Issue
+            labels = []
+            status_label = STATUS_TO_LABEL.get(t.get("status", "todo"))
+            if status_label:
+                labels.append(status_label)
+            priority_label = PRIORITY_TO_LABEL.get(t.get("priority", "medium"))
+            if priority_label:
+                labels.append(priority_label)
+
+            # Find milestone number for sub_project
+            milestone_number = None
+            if t.get("sub_project_id"):
+                for ms_num, sp_id in milestone_subproject_map.items():
+                    if sp_id == t["sub_project_id"]:
+                        milestone_number = ms_num
+                        break
+
+            issue_body = {
+                "title": t.get("title", "Untitled"),
+                "body": t.get("description") or "",
+                "labels": labels,
+            }
+            if milestone_number:
+                issue_body["milestone"] = milestone_number
+
+            try:
+                created_issue = github_api("POST", f"{base}/issues", token, issue_body)
+                t["github_issue_number"] = created_issue.get("number")
+                t["github_synced_at"] = now
+
+                # Close if done
+                if t.get("status") == "done" and created_issue.get("number"):
+                    try:
+                        github_api("PATCH", f"{base}/issues/{created_issue['number']}", token, {"state": "closed"})
+                    except Exception as e:
+                        sync_errors.append(f"Issue #{created_issue['number']} close 실패: {str(e)}")
+
+                sync_stats["pushed"] += 1
+            except Exception as e:
+                sync_errors.append(f"Task '{t.get('title', '')}' Push 실패: {str(e)}")
+
+    data["tasks"] = tasks
+    data["sub_projects"] = sub_projects
+    save_data(data)
+
+    error_suffix = f" (경고 {len(sync_errors)}건)" if sync_errors else ""
+    return {
+        "message": f"동기화 완료: GitHub→Plan {sync_stats['pulled']}건 생성, Plan→GitHub {sync_stats['pushed']}건 생성, {sync_stats['updated']}건 업데이트{error_suffix}",
+        "stats": sync_stats,
+        "errors": sync_errors,
+    }
+
+
+@app.get("/api/projects/{project_id}/github/status")
+def github_project_status(project_id: int):
+    """Get GitHub status for a project (issues, PRs, milestones) with caching."""
+    data = load_data()
+    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    raw_repo = project.get("github_repo", "")
+    repo = parse_github_repo(raw_repo)
+    if not repo or "/" not in repo:
+        return {"connected": False, "repo": "", "issues": [], "pull_requests": [], "milestones": []}
+
+    token = get_github_token()
+    base = f"https://api.github.com/repos/{repo}"
+
+    # Fetch issues (not PRs)
+    all_issues = []
+    page = 1
+    while True:
+        issues_page = github_api("GET", f"{base}/issues?state=all&per_page=100&page={page}", token)
+        if not issues_page:
+            break
+        page_len = len(issues_page)
+        issues_page = [i for i in issues_page if "pull_request" not in i]
+        all_issues.extend(issues_page)
+        if page_len < 100:
+            break
+        page += 1
+
+    # Fetch PRs
+    prs = github_api("GET", f"{base}/pulls?state=all&per_page=50&sort=updated&direction=desc", token)
+
+    # Fetch milestones
+    milestones = github_api("GET", f"{base}/milestones?state=all&per_page=100", token)
+
+    # Format for frontend
+    formatted_issues = []
+    for issue in all_issues:
+        labels = issue.get("labels", [])
+        formatted_issues.append({
+            "number": issue["number"],
+            "title": issue.get("title", ""),
+            "state": issue.get("state", "open"),
+            "status": issue_labels_to_status(labels),
+            "priority": issue_labels_to_priority(labels),
+            "created_at": issue.get("created_at", ""),
+            "updated_at": issue.get("updated_at", ""),
+            "closed_at": issue.get("closed_at"),
+            "milestone": issue.get("milestone", {}).get("title") if issue.get("milestone") else None,
+            "html_url": issue.get("html_url", ""),
+        })
+
+    formatted_prs = []
+    for pr in prs:
+        formatted_prs.append({
+            "number": pr["number"],
+            "title": pr.get("title", ""),
+            "state": pr.get("state", "open"),
+            "merged": pr.get("merged_at") is not None,
+            "merged_at": pr.get("merged_at"),
+            "created_at": pr.get("created_at", ""),
+            "html_url": pr.get("html_url", ""),
+        })
+
+    formatted_milestones = []
+    for ms in milestones:
+        formatted_milestones.append({
+            "number": ms["number"],
+            "title": ms.get("title", ""),
+            "state": ms.get("state", "open"),
+            "open_issues": ms.get("open_issues", 0),
+            "closed_issues": ms.get("closed_issues", 0),
+            "description": ms.get("description", ""),
+        })
+
+    # Cache results
+    cache = data.get("github_cache", {})
+    cache[str(project_id)] = {
+        "repo": repo,
+        "issues": formatted_issues,
+        "pull_requests": formatted_prs,
+        "milestones": formatted_milestones,
+        "cached_at": datetime.now().isoformat(),
+    }
+    data["github_cache"] = cache
+    save_data(data)
+
+    return {
+        "connected": True,
+        "repo": repo,
+        "issues": formatted_issues,
+        "pull_requests": formatted_prs,
+        "milestones": formatted_milestones,
+    }
+
+
+@app.get("/api/github/dashboard")
+def github_dashboard():
+    """Get aggregated GitHub status across all connected projects."""
+    data = load_data()
+    projects = data.get("projects", [])
+    tasks = data.get("tasks", [])
+
+    dashboard_projects = []
+    for project in projects:
+        raw_repo = project.get("github_repo", "")
+        repo = parse_github_repo(raw_repo)
+        if not repo or "/" not in repo:
+            continue
+
+        # Get cached data or fetch live
+        cache = data.get("github_cache", {}).get(str(project["id"]), {})
+        cached_issues = cache.get("issues", [])
+        cached_prs = cache.get("pull_requests", [])
+        cached_milestones = cache.get("milestones", [])
+
+        # Get linked tasks for this project
+        project_tasks = [t for t in tasks if t.get("project_id") == project["id"] and not t.get("archived_at")]
+
+        # Count statuses
+        status_counts = {"done": 0, "in_progress": 0, "todo": 0, "hold": 0}
+        for t in project_tasks:
+            s = t.get("status", "todo")
+            if s in status_counts:
+                status_counts[s] += 1
+
+        total = sum(status_counts.values())
+        progress = round((status_counts["done"] / total * 100) if total > 0 else 0)
+
+        dashboard_projects.append({
+            "project_id": project["id"],
+            "project_name": project["name"],
+            "repo": repo,
+            "tasks": [{
+                "id": t["id"],
+                "title": t.get("title", ""),
+                "status": t.get("status", "todo"),
+                "priority": t.get("priority", "medium"),
+                "github_issue_number": t.get("github_issue_number"),
+                "due_date": t.get("due_date"),
+                "created_at": t.get("created_at", ""),
+            } for t in project_tasks],
+            "status_counts": status_counts,
+            "total": total,
+            "progress": progress,
+            "milestones": cached_milestones,
+            "pull_requests": cached_prs,
+            "cached_at": cache.get("cached_at"),
+        })
+
+    return {"projects": dashboard_projects}
+
 
 # Initialize stub data if file doesn't exist
 if not os.path.exists(DATA_FILE):

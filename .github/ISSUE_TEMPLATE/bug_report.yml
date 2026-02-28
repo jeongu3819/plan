@@ -1,0 +1,78 @@
+name: "버그 리포트 (Bug Report)"
+description: "버그를 신고합니다"
+labels: ["type: fix", "status: planned"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: "영역 (Area)"
+      options:
+        - Frontend
+        - Backend
+        - Both
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: "심각도 (Severity)"
+      options:
+        - "Critical - 서비스 불가"
+        - "High - 주요 기능 오류"
+        - "Medium - 부분 기능 오류"
+        - "Low - 사소한 문제"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "버그 설명"
+      description: "어떤 버그인지 간략히 설명해주세요"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: "재현 방법"
+      description: "버그를 재현하는 단계를 작성해주세요"
+      value: |
+        1. '...'로 이동
+        2. '...'를 클릭
+        3. 에러 발생
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "예상 동작"
+      description: "정상적으로 동작했을 때 어떻게 되어야 하는지 설명해주세요"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: "실제 동작"
+      description: "실제로 어떻게 동작하는지 설명해주세요"
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix-checklist
+    attributes:
+      label: "수정 체크리스트"
+      value: |
+        - [ ] 원인 분석
+        - [ ] 수정 구현
+        - [ ] 테스트 확인
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: "환경 정보"
+      description: "브라우저, OS 등 관련 환경 정보"
+      placeholder: "Chrome 120, macOS 14, Node 20"
