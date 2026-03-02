@@ -13,11 +13,14 @@ import {
   DialogContent,
   DialogActions,
   Tooltip,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import ReactFlow, {
   Background,
   Controls,
@@ -25,6 +28,7 @@ import ReactFlow, {
   Node,
   Edge,
   Position,
+  NodeDragHandler,
 } from 'react-flow-renderer';
 import dagre from 'dagre';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -81,6 +85,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
 const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
   const [filterType, setFilterType] = useState('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [focusMode, setFocusMode] = useState(false);
   const queryClient = useQueryClient();
   const openDrawer = useAppStore(state => state.openDrawer);
 
@@ -92,6 +97,10 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
 
   // Subproject delete dialog state
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
+
+  // v1.2: Drag-insert state & feedback
+  const [snackMsg, setSnackMsg] = useState<string | null>(null);
+  const [dragHighlight, setDragHighlight] = useState<string | null>(null); // node id to glow during drag
 
   const { data: graphData, isLoading } = useQuery({
     queryKey: ['graph', projectId],
@@ -125,6 +134,27 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
     },
   });
 
+  // v1.2: Mutation for reassigning a task's sub_project_id (drag-insert)
+  const reassignTaskMutation = useMutation({
+    mutationFn: ({ taskId, subProjectId }: { taskId: number; subProjectId: number | null }) =>
+      api.updateTask(taskId, { sub_project_id: subProjectId } as any),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['graph', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['roadmap', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['globalRoadmap'] });
+      if (vars.subProjectId === null) {
+        setSnackMsg('Task가 프로젝트 직속으로 이동되었습니다');
+      } else {
+        const spNode = graphData?.nodes.find((n: GraphNode) => n.id === `subproject-${vars.subProjectId}`);
+        setSnackMsg(`Task → "${spNode?.label || 'Subproject'}" 하위로 이동되었습니다`);
+      }
+    },
+    onError: () => {
+      setSnackMsg('Task 이동에 실패했습니다');
+    },
+  });
+
   // Available subprojects for parent selection
   const subProjectOptions = useMemo(() => {
     if (!graphData) return [];
@@ -148,21 +178,24 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       edgeMap.get(e.source)!.push(e.target);
       edgeMap.get(e.target)!.push(e.source);
     });
-    const queue = [selectedNodeId];
+    // v1.2: 2-hop BFS when focus mode is on, 1-hop otherwise
+    const maxDepth = focusMode ? 2 : 1;
+    const queue: { id: string; depth: number }[] = [{ id: selectedNodeId, depth: 0 }];
     const visited = new Set<string>([selectedNodeId]);
-    // Only traverse 1 level deep for clarity
     while (queue.length > 0) {
       const current = queue.shift()!;
-      const neighbors = edgeMap.get(current) || [];
+      if (current.depth >= maxDepth) continue;
+      const neighbors = edgeMap.get(current.id) || [];
       for (const n of neighbors) {
         if (!visited.has(n)) {
           visited.add(n);
           ids.add(n);
+          queue.push({ id: n, depth: current.depth + 1 });
         }
       }
     }
     return ids;
-  }, [selectedNodeId, graphData]);
+  }, [selectedNodeId, graphData, focusMode]);
 
   const { nodes, edges } = useMemo(() => {
     if (!graphData) return { nodes: [], edges: [] };
@@ -180,6 +213,12 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       });
       filteredNodes = filteredNodes.filter(n => typeNodes.has(n.id));
       filteredEdges = filteredEdges.filter(e => typeNodes.has(e.source) && typeNodes.has(e.target));
+    }
+
+    // v1.2: Focus Mode — hide non-connected nodes entirely
+    if (focusMode && selectedNodeId && connectedIds.size > 0) {
+      filteredNodes = filteredNodes.filter(n => connectedIds.has(n.id));
+      filteredEdges = filteredEdges.filter(e => connectedIds.has(e.source) && connectedIds.has(e.target));
     }
 
     const hasSelection = selectedNodeId !== null;
@@ -243,21 +282,24 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
           ),
         },
         position: { x: 0, y: 0 },
+        draggable: n.type !== 'project',
         style: {
           background: isDimmed ? '#F9FAFB' : colors.bg,
-          border: `${isSelected ? 3 : 2}px solid ${isDimmed ? '#E5E7EB' : colors.border}`,
+          border: `${isSelected ? 3 : dragHighlight === n.id ? 3 : 2}px solid ${isDimmed ? '#E5E7EB' : dragHighlight === n.id ? '#2955FF' : colors.border}`,
           borderRadius: 12,
           padding: '8px 12px',
           minWidth: 160,
           maxWidth: 220,
           opacity: isDimmed ? 0.35 : 1,
-          boxShadow: isSelected
-            ? `0 0 0 3px ${colors.border}40, 0 4px 16px ${colors.border}30`
-            : isConnected && hasSelection
-              ? `0 0 0 2px ${colors.border}25, 0 2px 8px rgba(0,0,0,0.08)`
-              : 'none',
-          transition: 'all 0.3s ease',
-          cursor: 'pointer',
+          boxShadow: dragHighlight === n.id
+            ? '0 0 0 4px rgba(41,85,255,0.3), 0 4px 20px rgba(41,85,255,0.25)'
+            : isSelected
+              ? `0 0 0 3px ${colors.border}40, 0 4px 16px ${colors.border}30`
+              : isConnected && hasSelection
+                ? `0 0 0 2px ${colors.border}25, 0 2px 8px rgba(0,0,0,0.08)`
+                : 'none',
+          transition: 'box-shadow 0.2s, border 0.2s, opacity 0.3s',
+          cursor: n.type === 'project' ? 'pointer' : 'grab',
         },
         sourcePosition: Position.Right,
         targetPosition: Position.Left,
@@ -285,7 +327,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
     });
 
     return getLayoutedElements(flowNodes, flowEdges);
-  }, [graphData, filterType, selectedNodeId, connectedIds]);
+  }, [graphData, filterType, selectedNodeId, connectedIds, focusMode, dragHighlight]);
 
   const onNodeClick = useCallback((_: any, node: Node) => {
     setSelectedNodeId(prev => (prev === node.id ? null : node.id));
@@ -294,6 +336,120 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);
   }, []);
+
+  // v1.2: Find closest drop target during drag for visual highlight
+  const onNodeDrag: NodeDragHandler = useCallback(
+    (_event, draggedNode) => {
+      if (!graphData) return;
+      const dragX = draggedNode.position.x + 100;
+      const dragY = draggedNode.position.y + 30;
+
+      if (draggedNode.id.startsWith('task-')) {
+        // Task is being dragged → highlight nearest subproject or project node
+        let bestId: string | null = null;
+        let bestDist = 150;
+        for (const node of nodes) {
+          if (node.id === draggedNode.id) continue;
+          if (!node.id.startsWith('subproject-') && !node.id.startsWith('project-')) continue;
+          const nx = node.position.x + 100;
+          const ny = node.position.y + 30;
+          const dist = Math.sqrt((dragX - nx) ** 2 + (dragY - ny) ** 2);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestId = node.id;
+          }
+        }
+        setDragHighlight(bestId);
+      } else if (draggedNode.id.startsWith('subproject-')) {
+        // Subproject is being dragged → highlight nearest task node connected to project directly
+        let bestId: string | null = null;
+        let bestDist = 150;
+        for (const edge of graphData.edges) {
+          if (!edge.source.startsWith('project-') || !edge.target.startsWith('task-')) continue;
+          const targetNode = nodes.find(n => n.id === edge.target);
+          if (!targetNode) continue;
+          const nx = targetNode.position.x + 100;
+          const ny = targetNode.position.y + 30;
+          const dist = Math.sqrt((dragX - nx) ** 2 + (dragY - ny) ** 2);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestId = edge.target;
+          }
+        }
+        setDragHighlight(bestId);
+      }
+    },
+    [graphData, nodes]
+  );
+
+  // v1.2: Handle drop — reassign task↔subproject
+  const onNodeDragStop: NodeDragHandler = useCallback(
+    (_event, draggedNode) => {
+      setDragHighlight(null);
+      if (!graphData) return;
+
+      const dragX = draggedNode.position.x + 100;
+      const dragY = draggedNode.position.y + 30;
+
+      // ── CASE 1: Task dropped onto/near a subproject → assign ──
+      if (draggedNode.id.startsWith('task-')) {
+        const taskId = parseInt(draggedNode.id.replace('task-', ''), 10);
+        let bestTarget: { id: string; dist: number } | null = null;
+
+        for (const node of nodes) {
+          if (node.id === draggedNode.id) continue;
+          if (!node.id.startsWith('subproject-') && !node.id.startsWith('project-')) continue;
+          const nx = node.position.x + 100;
+          const ny = node.position.y + 30;
+          const dist = Math.sqrt((dragX - nx) ** 2 + (dragY - ny) ** 2);
+          if (dist < 150 && (!bestTarget || dist < bestTarget.dist)) {
+            bestTarget = { id: node.id, dist };
+          }
+        }
+
+        if (bestTarget) {
+          if (bestTarget.id.startsWith('subproject-')) {
+            const subProjectId = parseInt(bestTarget.id.replace('subproject-', ''), 10);
+            // Check if task is already under this subproject
+            const currentEdge = graphData.edges.find(e => e.target === draggedNode.id);
+            if (currentEdge?.source !== bestTarget.id) {
+              reassignTaskMutation.mutate({ taskId, subProjectId });
+            }
+          } else if (bestTarget.id.startsWith('project-')) {
+            // Dropped near project → unassign from subproject (set sub_project_id = null)
+            const currentEdge = graphData.edges.find(e => e.target === draggedNode.id);
+            if (currentEdge?.source.startsWith('subproject-')) {
+              reassignTaskMutation.mutate({ taskId, subProjectId: null as any });
+            }
+          }
+        }
+        return;
+      }
+
+      // ── CASE 2: Subproject dropped near a direct project→task edge → assign task ──
+      if (draggedNode.id.startsWith('subproject-')) {
+        const subProjectId = parseInt(draggedNode.id.replace('subproject-', ''), 10);
+        let bestTask: { taskId: number; dist: number } | null = null;
+
+        for (const edge of graphData.edges) {
+          if (!edge.source.startsWith('project-') || !edge.target.startsWith('task-')) continue;
+          const targetNode = nodes.find(n => n.id === edge.target);
+          if (!targetNode) continue;
+          const nx = targetNode.position.x + 100;
+          const ny = targetNode.position.y + 30;
+          const dist = Math.sqrt((dragX - nx) ** 2 + (dragY - ny) ** 2);
+          if (dist < 150 && (!bestTask || dist < bestTask.dist)) {
+            bestTask = { taskId: parseInt(edge.target.replace('task-', ''), 10), dist };
+          }
+        }
+
+        if (bestTask) {
+          reassignTaskMutation.mutate({ taskId: bestTask.taskId, subProjectId });
+        }
+      }
+    },
+    [graphData, nodes, reassignTaskMutation]
+  );
 
   // Selected node info
   const selectedInfo = useMemo(() => {
@@ -372,6 +528,29 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
             }}
           >
             Task
+          </Button>
+        </Tooltip>
+
+        {/* v1.2: Focus Mode Toggle */}
+        <Tooltip title={focusMode ? 'Focus Mode ON — Click to show all nodes' : 'Focus Mode — Select a node then enable to zoom into its neighborhood'}>
+          <Button
+            variant={focusMode ? 'contained' : 'outlined'}
+            size="small"
+            startIcon={<CenterFocusStrongIcon />}
+            onClick={() => setFocusMode(!focusMode)}
+            sx={{
+              fontSize: '0.75rem',
+              textTransform: 'none',
+              borderColor: focusMode ? '#2955FF' : '#9CA3AF',
+              color: focusMode ? '#fff' : '#6B7280',
+              bgcolor: focusMode ? '#2955FF' : 'transparent',
+              '&:hover': {
+                borderColor: '#2955FF',
+                bgcolor: focusMode ? '#1E44CC' : '#EEF2FF',
+              },
+            }}
+          >
+            Focus
           </Button>
         </Tooltip>
 
@@ -543,6 +722,8 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
             edges={edges}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
+            onNodeDrag={onNodeDrag}
+            onNodeDragStop={onNodeDragStop}
             fitView
             attributionPosition="bottom-left"
           >
@@ -690,6 +871,22 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* v1.2: Drag-insert feedback snackbar */}
+      <Snackbar
+        open={!!snackMsg}
+        autoHideDuration={3000}
+        onClose={() => setSnackMsg(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSnackMsg(null)}
+          severity={snackMsg?.includes('실패') ? 'error' : 'success'}
+          sx={{ width: '100%' }}
+        >
+          {snackMsg}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

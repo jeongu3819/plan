@@ -479,36 +479,45 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                       </IconButton>
                     }
                   >
-                    <ListItemButton
-                      onClick={() => navigate(`/project/${project.id}`)}
-                      sx={{
-                        borderRadius: 1.5,
-                        py: 0.8,
-                        px: 1.5,
-                        color: isActive ? theme.sidebarText : theme.sidebarMuted,
-                        bgcolor: isActive ? theme.sidebarHover : 'transparent',
-                        '&:hover': { bgcolor: theme.sidebarHover },
-                      }}
-                    >
-                      <ListItemIcon sx={{ minWidth: 36 }}>
-                        <Box
-                          sx={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: '50%',
-                            bgcolor: isActive ? '#2955FF' : dotColor,
+                    <Tooltip title={project.name} placement="right" arrow>
+                      <ListItemButton
+                        onClick={() => navigate(`/project/${project.id}`)}
+                        sx={{
+                          borderRadius: 1.5,
+                          py: 0.8,
+                          px: 1.5,
+                          color: isActive ? theme.sidebarText : theme.sidebarMuted,
+                          bgcolor: isActive ? theme.sidebarHover : 'transparent',
+                          '&:hover': { bgcolor: theme.sidebarHover },
+                        }}
+                      >
+                        <ListItemIcon sx={{ minWidth: 36 }}>
+                          <Box
+                            sx={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: '50%',
+                              bgcolor: isActive ? '#2955FF' : dotColor,
+                            }}
+                          />
+                        </ListItemIcon>
+                        <ListItemText
+                          primary={project.name}
+                          primaryTypographyProps={{
+                            fontSize: '0.85rem',
+                            fontWeight: isActive ? 600 : 400,
+                            sx: {
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                              wordBreak: 'break-word',
+                              lineHeight: 1.4,
+                            },
                           }}
                         />
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={project.name}
-                        primaryTypographyProps={{
-                          fontSize: '0.85rem',
-                          fontWeight: isActive ? 600 : 400,
-                          noWrap: true,
-                        }}
-                      />
-                    </ListItemButton>
+                      </ListItemButton>
+                    </Tooltip>
                   </ListItem>
                 );
               })}

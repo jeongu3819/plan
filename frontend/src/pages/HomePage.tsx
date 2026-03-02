@@ -214,6 +214,7 @@ const HomePage: React.FC = () => {
   const [calExpanded, setCalExpanded] = useState(false);
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [upcomingExpanded, setUpcomingExpanded] = useState(false);
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['stats', currentUserId],
@@ -308,80 +309,104 @@ const HomePage: React.FC = () => {
         </Box>
       );
     }
-    return tasks.slice(0, 5).map(task => (
-      <Box
-        key={task.id}
-        onClick={() => openDrawer(task)}
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1.5,
-          py: 1,
-          px: 1.5,
-          borderRadius: 1.5,
-          cursor: 'pointer',
-          '&:hover': { bgcolor: '#F3F4F6' },
-          transition: 'all 0.15s',
-        }}
-      >
-        <Box
-          sx={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            bgcolor: statusColors[task.status] || '#6B7280',
-            flexShrink: 0,
-          }}
-        />
-        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography
-            variant="body2"
+    return (
+      <>
+        {(upcomingExpanded ? tasks : tasks.slice(0, 5)).map(task => (
+          <Box
+            key={task.id}
+            onClick={() => openDrawer(task)}
             sx={{
-              fontWeight: 600,
-              fontSize: '0.82rem',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.5,
+              py: 1,
+              px: 1.5,
+              borderRadius: 1.5,
+              cursor: 'pointer',
+              '&:hover': { bgcolor: '#F3F4F6' },
+              transition: 'all 0.15s',
             }}
           >
-            {task.title}
-          </Typography>
-          {task.due_date && (
-            <Typography
-              variant="caption"
+            <Box
               sx={{
-                color:
-                  differenceInDays(new Date(task.due_date), new Date()) < 0 ? '#EF4444' : '#9CA3AF',
-                fontSize: '0.7rem',
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                bgcolor: statusColors[task.status] || '#6B7280',
+                flexShrink: 0,
               }}
-            >
-              Due {format(new Date(task.due_date), 'MMM dd')}
-            </Typography>
-          )}
-        </Box>
-        <Chip
-          label={task.priority || 'medium'}
-          size="small"
-          sx={{
-            height: 18,
-            fontSize: '0.6rem',
-            fontWeight: 600,
-            bgcolor:
-              task.priority === 'high'
-                ? '#FEF2F2'
-                : task.priority === 'low'
-                  ? '#F3F4F6'
-                  : '#EFF6FF',
-            color:
-              task.priority === 'high'
-                ? '#EF4444'
-                : task.priority === 'low'
-                  ? '#6B7280'
-                  : '#3B82F6',
-          }}
-        />
-      </Box>
-    ));
+            />
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 600,
+                  fontSize: '0.82rem',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {task.title}
+              </Typography>
+              {task.due_date && (
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color:
+                      differenceInDays(new Date(task.due_date), new Date()) < 0 ? '#EF4444' : '#9CA3AF',
+                    fontSize: '0.7rem',
+                  }}
+                >
+                  Due {format(new Date(task.due_date), 'MMM dd')}
+                </Typography>
+              )}
+            </Box>
+            <Chip
+              label={task.priority || 'medium'}
+              size="small"
+              sx={{
+                height: 18,
+                fontSize: '0.6rem',
+                fontWeight: 600,
+                bgcolor:
+                  task.priority === 'high'
+                    ? '#FEF2F2'
+                    : task.priority === 'low'
+                      ? '#F3F4F6'
+                      : '#EFF6FF',
+                color:
+                  task.priority === 'high'
+                    ? '#EF4444'
+                    : task.priority === 'low'
+                      ? '#6B7280'
+                      : '#3B82F6',
+              }}
+            />
+          </Box>
+        ))}
+        {tasks.length > 5 && (
+          <Typography
+            onClick={(e: React.MouseEvent) => {
+              e.stopPropagation();
+              setUpcomingExpanded(!upcomingExpanded);
+            }}
+            sx={{
+              fontSize: '0.7rem',
+              color: '#2955FF',
+              fontWeight: 600,
+              cursor: 'pointer',
+              textAlign: 'center',
+              py: 0.5,
+              mt: 0.5,
+              '&:hover': { textDecoration: 'underline' },
+            }}
+          >
+            {upcomingExpanded ? '접기' : `더보기 (+${tasks.length - 5})`}
+          </Typography>
+        )}
+      </>
+    );
   };
 
   // ── Widget header ──
@@ -991,9 +1016,9 @@ const HomePage: React.FC = () => {
 
   return (
     <Box>
-      {/* ── Page Header ── */}
+      {/* ── Page Header with Shortcuts ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-        <Box>
+        <Box sx={{ flex: '0 0 auto' }}>
           <Typography
             variant="h4"
             sx={{ fontWeight: 800, color: '#1A1D29', letterSpacing: '-0.03em' }}
@@ -1004,18 +1029,20 @@ const HomePage: React.FC = () => {
             {format(new Date(), 'EEEE, MMMM dd, yyyy')}
           </Typography>
         </Box>
-        <Tooltip title="Widget Settings">
-          <IconButton
-            onClick={() => setPaletteOpen(true)}
-            sx={{ bgcolor: '#EEF2FF', color: '#2955FF', '&:hover': { bgcolor: '#C7D2FE' } }}
-          >
-            <WidgetsIcon />
-          </IconButton>
-        </Tooltip>
+        <Box sx={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', px: 2 }}>
+          <ShortcutSection currentUserId={currentUserId} navigate={navigate} />
+        </Box>
+        <Box sx={{ flex: '0 0 auto' }}>
+          <Tooltip title="Widget Settings">
+            <IconButton
+              onClick={() => setPaletteOpen(true)}
+              sx={{ bgcolor: '#EEF2FF', color: '#2955FF', '&:hover': { bgcolor: '#C7D2FE' } }}
+            >
+              <WidgetsIcon />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
-
-      {/* ── Shortcut Icon Cards ── */}
-      <ShortcutSection currentUserId={currentUserId} navigate={navigate} />
 
       {/* ── Sortable Widget Grid ── */}
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -1111,7 +1138,7 @@ const ShortcutSection: React.FC<{
   if (activeShortcuts.length === 0 && !isSuperAdmin) return null;
 
   return (
-    <Box sx={{ mb: 3 }}>
+    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
       <Typography
         variant="subtitle2"
         sx={{

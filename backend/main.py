@@ -25,17 +25,13 @@ from zoneinfo import ZoneInfo
 # DB / ENV / AUTH
 # =========================
 from app.db_connections.sqlalchemy import SessionLocal, engine, Base
-from app.models import Project, User, Task, UserPreference, VisitLog
-from app.routers import auth
+from app.models import Project, User, Task, UserPreference, VisitLog, GroupMembership, Group, ProjectAiQuery, AiSetting
 from app.environment import CORS_ORIGINS
-from app.models import ProjectAiQuery
-
-from app.models import AiSetting
 from app.llm.dsllm_adapter import chat as dsllm_chat
 from app.llm.dsllm_adapter import list_model_keys
 from app.llm.dsllm_adapter import MODEL_CONFIGS
 from app.utils.text import sanitize_llm_text, sanitize_llm_text_ai
-from .routers import auth, logs, spotfire, knox
+from app.routers import auth, knox
 
 # ✅ 필요시만 켜세요 (운영에서는 보통 migration 권장)
 # Base.metadata.create_all(bind=engine)
@@ -60,8 +56,36 @@ def startup_ensure_super_admin():
     db = SessionLocal()
     try:
         ensure_super_owner(db)
+        # v1.2: backfill deptname -> TEAM node
+        _backfill_team_nodes(db)
     finally:
         db.close()
+
+def _backfill_team_nodes(db: Session):
+    """deptname 값을 기반으로 groups 테이블에 TEAM 타입 노드를 자동 생성하고 users.primary_team_id를 매핑"""
+    try:
+        from app.models import Group as GroupModel
+        all_users = db.query(User).filter(User.deptname.isnot(None), User.deptname != "").all()
+        dept_names = set(u.deptname.strip() for u in all_users if u.deptname and u.deptname.strip())
+
+        for dept in dept_names:
+            existing = db.query(GroupModel).filter(GroupModel.name == dept).first()
+            if not existing:
+                new_group = GroupModel(name=dept, group_type="TEAM", is_active=True)
+                db.add(new_group)
+                db.flush()
+                existing = new_group
+
+            # Map users with this deptname to the team group
+            for u in all_users:
+                if u.deptname and u.deptname.strip() == dept:
+                    if not u.primary_team_id:
+                        u.primary_team_id = existing.id
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] backfill team nodes failed: {e}")
 
 # =========================
 # DB Dependency
@@ -1529,6 +1553,22 @@ def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # v1.2: Parse @mentions from content
+    mentioned_user_ids = []
+    mentioned_usernames = []
+    mention_matches = re.findall(r'@(\S+)', note.content)
+    if mention_matches:
+        all_db_users = db.query(User).filter(User.is_active == True).all()
+        for mention_text in mention_matches:
+            mention_lower = mention_text.lower()
+            for u in all_db_users:
+                if (u.loginid and u.loginid.lower() == mention_lower) or \
+                   (u.username and u.username.lower() == mention_lower):
+                    if u.id not in mentioned_user_ids:
+                        mentioned_user_ids.append(u.id)
+                        mentioned_usernames.append(u.username or u.loginid)
+                    break
+
     notes = state.get("notes", [])
     new_note = note.model_dump()
     new_note["id"] = next_id(notes)
@@ -1536,6 +1576,8 @@ def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=
     new_note["author_id"] = user_id
     new_note["created_at"] = datetime.now().isoformat()
     new_note["updated_at"] = datetime.now().isoformat()
+    new_note["mentioned_user_ids"] = mentioned_user_ids
+    new_note["mentioned_usernames"] = mentioned_usernames
 
     notes.append(new_note)
     state["notes"] = notes
@@ -1548,6 +1590,66 @@ def delete_note(note_id: int):
     state["notes"] = [n for n in state.get("notes", []) if int(n.get("id")) != note_id]
     save_state(state)
     return {"message": "Note deleted"}
+
+# =========================
+# Mentions (v1.2)
+# =========================
+@app.get("/api/mentions")
+def get_mentions(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """사용자가 멘션된 모든 notes를 반환 (user_id 또는 username 기반 매칭)"""
+    state = load_state()
+    all_notes = state.get("notes", [])
+
+    # 현재 유저 정보
+    current_user = db.query(User).filter(User.id == user_id).first()
+    if not current_user:
+        return {"mentions": []}
+
+    current_username_lower = (current_user.username or "").lower()
+    current_loginid_lower = (current_user.loginid or "").lower()
+
+    result = []
+    users_map = {u.id: u for u in db.query(User).all()}
+    projects_map = {}
+    for p in db.query(Project).filter(Project.archived_at.is_(None)).all():
+        projects_map[p.id] = p
+
+    for n in all_notes:
+        mentioned_ids = n.get("mentioned_user_ids", [])
+        mentioned_names = n.get("mentioned_usernames", [])
+
+        # 방법1: mentioned_user_ids에 user_id가 있으면 매칭
+        is_mentioned = user_id in mentioned_ids
+
+        # 방법2: mentioned_usernames에서 loginid/username 매칭
+        if not is_mentioned and mentioned_names:
+            for name in mentioned_names:
+                if name.lower() == current_username_lower or name.lower() == current_loginid_lower:
+                    is_mentioned = True
+                    break
+
+        # 방법3: 레거시 노트 — content에서 @username/@loginid 검색
+        if not is_mentioned and not mentioned_ids and not mentioned_names:
+            content = n.get("content", "")
+            mentions_in_content = re.findall(r'@(\S+)', content)
+            for m in mentions_in_content:
+                if m.lower() == current_username_lower or m.lower() == current_loginid_lower:
+                    is_mentioned = True
+                    break
+
+        if is_mentioned:
+            author = users_map.get(int(n.get("author_id", 0)))
+            pid = int(n.get("project_id", 0))
+            project = projects_map.get(pid)
+            result.append({
+                **n,
+                "author_name": author.username if author else "Unknown",
+                "author_color": author.avatar_color if author else "#ccc",
+                "project_name": project.name if project else "Unknown",
+            })
+
+    result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"mentions": result}
 
 # =========================
 # Roadmap APIs (DB tasks + sidecar sub_projects/task_meta)
@@ -2599,6 +2701,199 @@ def admin_toggle_user_active(target_id: int, user_id: int = Query(...), db: Sess
     db.commit()
     db.refresh(target)
     return user_dict(target, state)
+
+@app.patch("/api/admin/users/{target_id}/role")
+def admin_update_user_role(target_id: int, body: dict, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """v1.2: 프론트엔드에서 호출하던 누락 엔드포인트"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    target = db.query(User).filter(User.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    new_role = body.get("role")
+    if not new_role:
+        raise HTTPException(status_code=400, detail="role is required")
+
+    valid_roles = {"super_admin", "admin", "manager", "member", "viewer"}
+    if new_role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"role must be one of {valid_roles}")
+
+    target.role = new_role
+    db.commit()
+    db.refresh(target)
+    return user_dict(target, state)
+
+# =========================
+# Org Admin APIs (v1.2)
+# =========================
+@app.get("/api/admin/org/tree")
+def admin_get_org_tree(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """조직 트리 조회"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    from app.models import Group as GroupModel
+    groups = db.query(GroupModel).filter(GroupModel.is_active == True).order_by(GroupModel.sort_order, GroupModel.id).all()
+    result = []
+    for g in groups:
+        members = db.query(GroupMembership).filter(GroupMembership.group_id == g.id).all()
+        member_list = []
+        for m in members:
+            u = db.query(User).filter(User.id == m.user_id).first()
+            if u:
+                member_list.append({
+                    "user_id": u.id,
+                    "username": u.username,
+                    "loginid": u.loginid,
+                    "org_role": m.org_role,
+                    "detail_level": m.detail_level,
+                    "is_primary": m.is_primary,
+                })
+        result.append({
+            "id": g.id,
+            "name": g.name,
+            "description": g.description,
+            "group_type": g.group_type,
+            "parent_id": g.parent_id,
+            "sort_order": g.sort_order,
+            "is_active": g.is_active,
+            "members": member_list,
+        })
+    return {"tree": result}
+
+@app.post("/api/admin/org/groups")
+def admin_create_org_group(body: dict, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """조직 그룹 노드 생성"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    from app.models import Group as GroupModel
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    existing = db.query(GroupModel).filter(GroupModel.name == name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="이미 존재하는 그룹명입니다")
+
+    new_group = GroupModel(
+        name=name,
+        description=body.get("description"),
+        group_type=body.get("group_type", "PART"),
+        parent_id=body.get("parent_id"),
+        sort_order=body.get("sort_order", 0),
+        is_active=True,
+    )
+    db.add(new_group)
+    db.commit()
+    db.refresh(new_group)
+    return {"id": new_group.id, "name": new_group.name, "group_type": new_group.group_type}
+
+@app.patch("/api/admin/org/groups/{group_id}")
+def admin_update_org_group(group_id: int, body: dict, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """조직 그룹 수정"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    from app.models import Group as GroupModel
+    g = db.query(GroupModel).filter(GroupModel.id == group_id).first()
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    for k in ["name", "description", "group_type", "parent_id", "sort_order", "is_active"]:
+        if k in body:
+            setattr(g, k, body[k])
+    db.commit()
+    db.refresh(g)
+    return {"id": g.id, "name": g.name, "group_type": g.group_type}
+
+@app.delete("/api/admin/org/groups/{group_id}")
+def admin_delete_org_group(group_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """조직 그룹 비활성화"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    from app.models import Group as GroupModel
+    g = db.query(GroupModel).filter(GroupModel.id == group_id).first()
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    g.is_active = False
+    db.commit()
+    return {"message": "Group deactivated"}
+
+@app.post("/api/admin/org/users/{target_user_id}/assign")
+def admin_assign_user_part(target_user_id: int, body: dict, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """사용자 파트 배정 (group_id, org_role, detail_level)"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    target = db.query(User).filter(User.id == target_user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    group_id = body.get("group_id")
+    org_role = body.get("org_role", "MEMBER")
+    detail_level = body.get("detail_level", "FULL_DETAIL")
+
+    if group_id:
+        existing = db.query(GroupMembership).filter(
+            GroupMembership.user_id == target_user_id,
+            GroupMembership.group_id == group_id
+        ).first()
+
+        if existing:
+            existing.org_role = org_role
+            existing.detail_level = detail_level
+        else:
+            new_membership = GroupMembership(
+                user_id=target_user_id,
+                group_id=group_id,
+                org_role=org_role,
+                detail_level=detail_level,
+                is_primary=True,
+            )
+            db.add(new_membership)
+
+        # Update user's primary_part_id
+        from app.models import Group as GroupModel
+        grp = db.query(GroupModel).filter(GroupModel.id == group_id).first()
+        if grp and grp.group_type == "PART":
+            target.primary_part_id = group_id
+        elif grp and grp.group_type == "TEAM":
+            target.primary_team_id = group_id
+
+    db.commit()
+    return {"message": "User assigned", "user_id": target_user_id, "group_id": group_id}
+
+@app.post("/api/admin/org/projects/{project_id}/assign-part")
+def admin_assign_project_part(project_id: int, body: dict, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """프로젝트 파트 배정"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    part_id = body.get("part_id")
+    p.part_id = part_id
+    db.commit()
+    return {"message": "Project part assigned", "project_id": project_id, "part_id": part_id}
+
+@app.get("/api/admin/org/unassigned-users")
+def admin_get_unassigned_users(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """PART 배정 안 된 사용자 목록"""
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    all_users = db.query(User).filter(User.is_active == True).all()
+    assigned_user_ids = set(
+        m.user_id for m in db.query(GroupMembership).all()
+    )
+    unassigned = [user_dict(u, state) for u in all_users if u.id not in assigned_user_ids]
+    return {"users": unassigned}
 
 
 # =========================

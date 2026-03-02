@@ -318,7 +318,7 @@ export const api = {
 
   // =========================
   // Mentions
-  // ⚠️ 백엔드 코드에 /api/mentions가 아직 안 보임(추가 필요)
+  // ✅ v1.2: Backend /api/mentions endpoint implemented
   // =========================
   getMentions: async (userId: number): Promise<MentionNote[]> => {
     const res = await client.get('/mentions', { params: { user_id: requireUserId(userId) } });
@@ -470,6 +470,20 @@ export const api = {
         parent_key: parentKey || null,
       },
       { params: { user_id: requireUserId(userId) } }
+    );
+  },
+
+  saveRoadmapOrder: async (
+    projectId: number,
+    order: string[],
+    parentKey?: string
+  ): Promise<void> => {
+    await client.put(
+      `/projects/${projectId}/roadmap/order`,
+      {
+        order,
+        parent_key: parentKey || null,
+      }
     );
   },
 
@@ -654,6 +668,44 @@ export const api = {
       { params: { user_id: requireUserId(userId) } }
     );
     return res.data;
+  },
+
+  // =========================
+  // Org Admin (v1.2)
+  // =========================
+  getOrgTree: async (userId: number) => {
+    const res = await client.get('/admin/org/tree', { params: { user_id: requireUserId(userId) } });
+    return res.data.tree || [];
+  },
+
+  createOrgGroup: async (data: any, userId: number) => {
+    const res = await client.post('/admin/org/groups', data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  updateOrgGroup: async (groupId: number, data: any, userId: number) => {
+    const res = await client.patch(`/admin/org/groups/${groupId}`, data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  deleteOrgGroup: async (groupId: number, userId: number) => {
+    const res = await client.delete(`/admin/org/groups/${groupId}`, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  assignUserToPart: async (targetUserId: number, data: any, userId: number) => {
+    const res = await client.post(`/admin/org/users/${targetUserId}/assign`, data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  assignProjectPart: async (projectId: number, data: any, userId: number) => {
+    const res = await client.post(`/admin/org/projects/${projectId}/assign-part`, data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  getUnassignedUsers: async (userId: number) => {
+    const res = await client.get('/admin/org/unassigned-users', { params: { user_id: requireUserId(userId) } });
+    return res.data.users || [];
   },
 };
 

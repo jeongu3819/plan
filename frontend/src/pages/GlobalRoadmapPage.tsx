@@ -120,6 +120,33 @@ const GlobalRoadmapPage: React.FC = () => {
   const [sortKey, setSortKey] = useState<SortKey>('default');
   const [sortAsc, setSortAsc] = useState(true);
 
+  // v1.2: Resizable left panel
+  const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
+    const saved = localStorage.getItem('globalRoadmap_leftPanelWidth');
+    return saved ? parseInt(saved, 10) : 300;
+  });
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = leftPanelWidth;
+    const onMouseMove = (ev: MouseEvent) => {
+      const newWidth = Math.min(600, Math.max(200, startWidth + (ev.clientX - startX)));
+      setLeftPanelWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      localStorage.setItem('globalRoadmap_leftPanelWidth', String(leftPanelWidth));
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [leftPanelWidth]);
+
   // ── Drag reorder state ──
   const [localItems, setLocalItems] = useState<RoadmapItem[]>([]);
   const localDragRef = useRef(false);
@@ -820,8 +847,8 @@ const GlobalRoadmapPage: React.FC = () => {
               },
             }}
           >
-            <ToggleButton value="month">Month</ToggleButton>
             <ToggleButton value="week">Week</ToggleButton>
+            <ToggleButton value="month">Month</ToggleButton>
             <ToggleButton value="quarter">Quarter</ToggleButton>
           </ToggleButtonGroup>
           <Tooltip title="Today">
@@ -845,14 +872,30 @@ const GlobalRoadmapPage: React.FC = () => {
           <Box sx={{ display: 'flex', borderBottom: '2px solid #E5E7EB', bgcolor: '#FAFBFC' }}>
             <Box
               sx={{
-                width: 300,
-                minWidth: 300,
+                width: leftPanelWidth,
+                minWidth: leftPanelWidth,
                 flexShrink: 0,
                 borderRight: '1px solid #E5E7EB',
                 px: 2,
                 py: 1,
+                position: 'relative',
               }}
             >
+              {/* Resize handle */}
+              <Box
+                onMouseDown={handleResizeMouseDown}
+                sx={{
+                  position: 'absolute',
+                  right: -3,
+                  top: 0,
+                  bottom: 0,
+                  width: 6,
+                  cursor: 'col-resize',
+                  zIndex: 5,
+                  '&:hover': { bgcolor: 'rgba(41,85,255,0.15)' },
+                  transition: 'background 0.15s',
+                }}
+              />
               <Typography
                 variant="caption"
                 sx={{

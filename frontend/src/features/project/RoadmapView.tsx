@@ -745,8 +745,8 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
             },
           }}
         >
-          <ToggleButton value="month">Month</ToggleButton>
           <ToggleButton value="week">Week</ToggleButton>
+          <ToggleButton value="month">Month</ToggleButton>
           <ToggleButton value="quarter">Quarter</ToggleButton>
         </ToggleButtonGroup>
 
