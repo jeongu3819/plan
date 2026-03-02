@@ -1,29 +1,285 @@
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File as FastAPIFile
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Depends,
+    Request,
+    Query,
+    UploadFile,
+    File as FastAPIFile,
+)
 from fastapi.responses import FileResponse
-import shutil
-import uuid
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+from datetime import datetime, date, timedelta
 import os
 import json
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
-from datetime import datetime, date
+import uuid
+import threading
+import httpx
+import re
+from zoneinfo import ZoneInfo
+
+# =========================
+# DB / ENV / AUTH
+# =========================
+from app.db_connections.sqlalchemy import SessionLocal, engine, Base
+from app.models import Project, User, Task, UserPreference, VisitLog
+from app.routers import auth
+from app.environment import CORS_ORIGINS
+from app.models import ProjectAiQuery
+
+from app.models import AiSetting
+from app.llm.dsllm_adapter import chat as dsllm_chat
+from app.llm.dsllm_adapter import list_model_keys
+from app.llm.dsllm_adapter import MODEL_CONFIGS
+from app.utils.text import sanitize_llm_text, sanitize_llm_text_ai
+from .routers import auth, logs, spotfire, knox
+
+# ✅ 필요시만 켜세요 (운영에서는 보통 migration 권장)
+# Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Antigravity Schedule Platform API")
 
-# CORS Setup — allow all origins for dev / internal network
+# SSO 라우터 (/api/auth/*)
+app.include_router(auth.router)
+app.include_router(knox.router)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=CORS_ORIGINS or ["*"],
+    allow_credentials=False,  # Authorization Bearer 방식이면 보통 False로 충분
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def startup_ensure_super_admin():
+    db = SessionLocal()
+    try:
+        ensure_super_owner(db)
+    finally:
+        db.close()
+
+# =========================
+# DB Dependency
+# =========================
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# 시간
+KST = ZoneInfo("Asia/Seoul")
+
+def _today_kst() -> date:
+    return datetime.now(KST).date()
+
+def _add_months(d: date, months: int) -> date:
+    y = d.year + (d.month - 1 + months) // 12
+    m = (d.month - 1 + months) % 12 + 1
+    return date(y, m, 1)
+
+def _month_window(year: int, month: int) -> tuple[date, date]:
+    start = date(year, month, 1)
+    end = _add_months(start, 1)
+    return start, end  # [start, end)
+
+def _parse_iso_or_ymd(s: str) -> date | None:
+    if not s:
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    # "2026-02-15" or "2026-02-15T00:00:00"
+    try:
+        if "T" in s:
+            return datetime.fromisoformat(s.replace("Z", "")).date()
+        return date.fromisoformat(s[:10])
+    except Exception:
+        return None
+
+def _parse_time_window_from_query(q: str, today: date) -> tuple[date, date] | None:
+    q = (q or "").strip()
+    if not q:
+        return None
+
+    # 상대 표현
+    if re.search(r"(이번\s*달|이번달)", q):
+        return _month_window(today.year, today.month)
+    if re.search(r"(다음\s*달|다음달)", q):
+        d = _add_months(date(today.year, today.month, 1), 1)
+        return _month_window(d.year, d.month)
+    if re.search(r"(지난\s*달|지난달|저번\s*달|저번달)", q):
+        d = _add_months(date(today.year, today.month, 1), -1)
+        return _month_window(d.year, d.month)
+
+    # "2026년 2월"
+    m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월", q)
+    if m:
+        y = int(m.group(1))
+        mo = int(m.group(2))
+        if 1 <= mo <= 12:
+            return _month_window(y, mo)
+
+    # "2월" (연도 없으면 올해로 가정)
+    m2 = re.search(r"(\d{1,2})\s*월", q)
+    if m2:
+        mo = int(m2.group(1))
+        if 1 <= mo <= 12:
+            y = today.year
+            # "내년 2월" 같은 케이스
+            if "내년" in q:
+                y += 1
+            elif "작년" in q:
+                y -= 1
+            return _month_window(y, mo)
+
+    # "2026-02-15" / "2026/02/15" / "2/15"
+    m3 = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", q)
+    if m3:
+        y, mo, d = map(int, m3.groups())
+        try:
+            start = date(y, mo, d)
+            return start, start + timedelta(days=1)
+        except Exception:
+            return None
+
+    m4 = re.search(r"(?<!\d)(\d{1,2})/(\d{1,2})(?!\d)", q)
+    if m4:
+        mo, d = map(int, m4.groups())
+        y = today.year
+        try:
+            start = date(y, mo, d)
+            return start, start + timedelta(days=1)
+        except Exception:
+            return None
+
+    return None
+
+def _task_overlaps_window(task: dict, start: date, end: date) -> bool:
+    sd = _parse_iso_or_ymd(task.get("start_date"))
+    dd = _parse_iso_or_ymd(task.get("due_date"))
+
+    # 둘 다 있으면 overlap 기준(기간이 걸친 Task도 포함)
+    if sd and dd:
+        return (sd < end) and (dd >= start)
+
+    # 하나만 있으면 그 날짜가 window 안에 들어오면 포함
+    if dd:
+        return (start <= dd < end)
+    if sd:
+        return (start <= sd < end)
+
+    return False
+
+def _extract_task_ids_from_related_text(text: str) -> set[int]:
+    if not text:
+        return set()
+    ids = set()
+
+    # "123 / ..." 형태
+    for m in re.finditer(r"^\s*(\d+)\s*/", text, flags=re.MULTILINE):
+        ids.add(int(m.group(1)))
+
+    # "ID:123" 형태
+    for m in re.finditer(r"\bID\s*[:#]?\s*(\d+)\b", text, flags=re.IGNORECASE):
+        ids.add(int(m.group(1)))
+
+    return ids
+
+# =========================
+# Sidecar JSON State (추가 기능 저장소)
+# - DB 스키마를 안 바꾸고도 새 기능 붙이기 위한 구조
+# =========================
 DATA_FILE = "data.json"
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ─── Models ───
+STATE_LOCK = threading.Lock()
 
+DEFAULT_PERMISSIONS = {
+    "post_write": "all",
+    "post_edit": "all",
+    "post_view": "all",
+    "comment_write": "all",
+    "file_view": "all",
+    "file_download": "all",
+}
+
+DEFAULT_STATE = {
+    # DB 보완용 메타
+    "project_meta": {},   # { "project_id": {owner_id, visibility, require_approval, permissions} }
+    "task_meta": {},      # { "task_id": {sub_project_id, progress} }
+    "user_meta": {},      # { "user_id": {group_name} }
+
+    # 새 기능 저장
+    "sub_projects": [],   # [{id, project_id, name, description, parent_id, created_at}]
+    "notes": [],          # [{id, project_id, author_id, content, created_at, updated_at}]
+    "attachments": [],    # task attachments (URL 형태) [{id, task_id, url, filename, type, created_at}]
+    "project_members": [],# [{project_id, user_id, role}]
+    "project_files": [],  # [{id, project_id, filename, stored_name, size, uploader_id, created_at}]
+    "join_requests": [],  # [{id, project_id, user_id, role, status, created_at}]
+    "groups": [],         # [{id, name, created_at, description?, is_active?}]
+    "shortcuts": [],      # [{...}]
+    "ai_settings": {"api_url": "", "model_name": ""},
+    "project_ai_queries": [],
+    "ai_summaries": [],
+    "search_feedback": [],
+}
+
+def _deepcopy_state(obj: dict) -> dict:
+    return json.loads(json.dumps(obj))
+
+def load_state() -> Dict[str, Any]:
+    with STATE_LOCK:
+        if not os.path.exists(DATA_FILE):
+            return _deepcopy_state(DEFAULT_STATE)
+
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # 마이그레이션: 누락 키 보강
+            for k, v in DEFAULT_STATE.items():
+                if k not in data:
+                    data[k] = _deepcopy_state(v) if isinstance(v, (dict, list)) else v
+
+            # 타입 방어
+            if not isinstance(data.get("project_meta"), dict):
+                data["project_meta"] = {}
+            if not isinstance(data.get("task_meta"), dict):
+                data["task_meta"] = {}
+            if not isinstance(data.get("user_meta"), dict):
+                data["user_meta"] = {}
+            if not isinstance(data.get("ai_settings"), dict):
+                data["ai_settings"] = {"api_url": "", "model_name": ""}
+
+            return data
+        except json.JSONDecodeError:
+            return _deepcopy_state(DEFAULT_STATE)
+
+def save_state(state: Dict[str, Any]):
+    with STATE_LOCK:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+
+def next_id(items: list) -> int:
+    if not items:
+        return 1
+    return max(int(item.get("id", 0)) for item in items) + 1
+
+# 최초 파일 없으면 생성
+if not os.path.exists(DATA_FILE):
+    save_state(load_state())
+
+# =========================
+# Pydantic Models
+# =========================
 class TaskBase(BaseModel):
     project_id: int
     title: str
@@ -32,8 +288,10 @@ class TaskBase(BaseModel):
     priority: Optional[str] = "medium"
     start_date: Optional[str] = None
     due_date: Optional[str] = None
-    assignee_ids: List[int] = []
-    tags: List[str] = []
+    assignee_ids: List[int] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+
+    # ✅ DB Task 테이블엔 없어서 sidecar(task_meta)에 저장
     sub_project_id: Optional[int] = None
     progress: Optional[int] = 0
 
@@ -52,19 +310,11 @@ class TaskUpdate(BaseModel):
     sub_project_id: Optional[int] = None
     progress: Optional[int] = None
 
-# Default permissions for new projects
-DEFAULT_PERMISSIONS = {
-    "post_write": "all",
-    "post_edit": "all",
-    "post_view": "all",
-    "comment_write": "all",
-    "file_view": "all",
-    "file_download": "all",
-}
-
 class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
+
+    # ✅ DB Project 테이블엔 없어서 sidecar(project_meta)에 저장
     owner_id: Optional[int] = 1
     visibility: Optional[str] = "private"
     require_approval: Optional[bool] = False
@@ -74,9 +324,12 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+    # ✅ sidecar
     visibility: Optional[str] = None
     require_approval: Optional[bool] = None
     permissions: Optional[Dict[str, str]] = None
+    owner_id: Optional[int] = None
 
 class UserCreate(BaseModel):
     username: str
@@ -88,6 +341,10 @@ class UserUpdate(BaseModel):
     username: Optional[str] = None
     role: Optional[str] = None
     avatar_color: Optional[str] = None
+    is_active: Optional[bool] = None
+
+    # ✅ DB 컬럼 없음 → sidecar user_meta에 저장
+    group_name: Optional[str] = None
 
 class LayoutUpdate(BaseModel):
     layout: Dict[str, Any]
@@ -100,6 +357,7 @@ class SubProjectCreate(BaseModel):
 class SubProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    parent_id: Optional[int] = None
 
 class NoteCreate(BaseModel):
     content: str
@@ -115,557 +373,756 @@ class MemberAdd(BaseModel):
 
 class MemberApproval(BaseModel):
     user_id: int
-    action: str  # "approve" or "reject"
+    action: str  # approve / reject
 
-# ─── Data Helpers ───
+class AiSettingsUpdate(BaseModel):
+    api_url: str
+    model_name: str
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+class ReportRequest(BaseModel):
+    project_id: int
 
-DEFAULT_DATA = {
-    "projects": [{"id": 1, "name": "Demo Project", "created_at": "2026-01-01T00:00:00", "owner_id": 1, "visibility": "private", "description": "", "require_approval": False, "permissions": DEFAULT_PERMISSIONS}],
-    "users": [
-        {"id": 1, "loginid": "admin", "username": "Admin", "role": "admin", "avatar_color": "#2955FF", "is_active": True},
-    ],
-    "tasks": [],
-    "activity_logs": [],
-    "user_preferences": {},
-    "sub_projects": [],
-    "notes": [],
-    "attachments": [],
-    "project_members": [{"project_id": 1, "user_id": 1, "role": "owner"}],
-    "project_files": [],
-    "join_requests": [],
-    "groups": [],
-    "shortcuts": [],
-}
+class GroupCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
 
-def load_data() -> Dict[str, Any]:
-    if not os.path.exists(DATA_FILE):
-        return json.loads(json.dumps(DEFAULT_DATA))
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+class GroupUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
 
-        # ─── Migration: ensure all keys exist ───
-        for key in DEFAULT_DATA:
-            if key not in data:
-                data[key] = DEFAULT_DATA[key] if not isinstance(DEFAULT_DATA[key], list) else []
+class ShortcutCreate(BaseModel):
+    name: str
+    url: str
+    icon_text: Optional[str] = None
+    icon_color: Optional[str] = "#2955FF"
+    order: Optional[int] = 0
+    open_new_tab: Optional[bool] = True
 
-        # Migrate projects: add owner_id, visibility, description, require_approval, permissions
-        for p in data.get("projects", []):
-            if "owner_id" not in p:
-                p["owner_id"] = 1
-            if "visibility" not in p:
-                p["visibility"] = "private"
-            if "description" not in p:
-                p["description"] = ""
-            if "require_approval" not in p:
-                p["require_approval"] = False
-            if "permissions" not in p:
-                p["permissions"] = dict(DEFAULT_PERMISSIONS)
+class ShortcutUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    icon_text: Optional[str] = None
+    icon_color: Optional[str] = None
+    order: Optional[int] = None
+    open_new_tab: Optional[bool] = None
+    active: Optional[bool] = None
 
-        # Migrate tasks: add sub_project_id, progress
-        for t in data.get("tasks", []):
-            if "sub_project_id" not in t:
-                t["sub_project_id"] = None
-            if "progress" not in t:
-                t["progress"] = 0
+# 26일 추가됨
+class ProjectAiQueryRequest(BaseModel):
+    query: str
 
-        # Ensure project_members has at least owner for project 1
-        if not data.get("project_members"):
-            data["project_members"] = [{"project_id": 1, "user_id": 1, "role": "owner"}]
+class SummaryFeedback(BaseModel):
+    summary_id: int
+    rating: int
+    comment: Optional[str] = None
 
-        # Ensure project_files and join_requests exist
-        if "project_files" not in data:
-            data["project_files"] = []
-        if "join_requests" not in data:
-            data["join_requests"] = []
+class SummaryCorrectionSave(BaseModel):
+    summary_id: int
+    corrected_text: str
 
-        return data
-    except json.JSONDecodeError:
-        return json.loads(json.dumps(DEFAULT_DATA))
+# =========================
+# Serializer / Helper
+# =========================
+def iso(dt):
+    return dt.isoformat() if dt else None
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+def get_project_meta(state: dict, project_id: int) -> dict:
+    meta = state.get("project_meta", {}).get(str(project_id), {})
+    return {
+        "owner_id": meta.get("owner_id", 1),
+        "visibility": meta.get("visibility", "private"),
+        "require_approval": bool(meta.get("require_approval", False)),
+        "permissions": meta.get("permissions") or dict(DEFAULT_PERMISSIONS),
+    }
 
-def next_id(items: list) -> int:
-    if not items:
-        return 1
-    return max(item["id"] for item in items) + 1
+def set_project_meta(state: dict, project_id: int, values: dict):
+    if "project_meta" not in state or not isinstance(state["project_meta"], dict):
+        state["project_meta"] = {}
+    curr = state["project_meta"].get(str(project_id), {})
+    curr.update(values)
+    if "permissions" in curr and curr["permissions"] is None:
+        curr["permissions"] = dict(DEFAULT_PERMISSIONS)
+    state["project_meta"][str(project_id)] = curr
 
-# ─── Permission Helpers ───
+def get_task_meta(state: dict, task_id: int) -> dict:
+    meta = state.get("task_meta", {}).get(str(task_id), {})
+    return {
+        "sub_project_id": meta.get("sub_project_id"),
+        "progress": int(meta.get("progress", 0) or 0),
+    }
 
-def get_user_project_ids(data: dict, user_id: int) -> set:
-    """Return set of project IDs the user has access to (member or owner)."""
-    members = data.get("project_members", [])
-    pids = set(m["project_id"] for m in members if m["user_id"] == user_id)
-    for p in data.get("projects", []):
-        if p.get("owner_id") == user_id:
-            pids.add(p["id"])
-    return pids
+def set_task_meta(state: dict, task_id: int, values: dict):
+    if "task_meta" not in state or not isinstance(state["task_meta"], dict):
+        state["task_meta"] = {}
+    curr = state["task_meta"].get(str(task_id), {})
+    curr.update(values)
+    # 방어
+    if "progress" in curr and curr["progress"] is not None:
+        try:
+            curr["progress"] = max(0, min(100, int(curr["progress"])))
+        except Exception:
+            curr["progress"] = 0
+    state["task_meta"][str(task_id)] = curr
 
-def require_admin(data: dict, user_id: int):
-    """Raise 403 if user is not admin."""
-    user = next((u for u in data.get("users", []) if u["id"] == user_id), None)
-    if not user or user.get("role") != "admin":
+def get_user_meta(state: dict, user_id: int) -> dict:
+    return state.get("user_meta", {}).get(str(user_id), {})
+
+def set_user_meta(state: dict, user_id: int, values: dict):
+    if "user_meta" not in state or not isinstance(state["user_meta"], dict):
+        state["user_meta"] = {}
+    curr = state["user_meta"].get(str(user_id), {})
+    curr.update(values)
+    state["user_meta"][str(user_id)] = curr
+
+def project_dict(p: Project, state: dict):
+    meta = get_project_meta(state, p.id)
+    return {
+        "id": p.id,
+        "name": p.name,
+        "description": p.description,
+        "created_at": iso(p.created_at),
+        "archived_at": iso(p.archived_at),
+        "owner_id": meta["owner_id"],
+        "visibility": meta["visibility"],
+        "require_approval": meta["require_approval"],
+        "permissions": meta["permissions"],
+    }
+
+def user_dict(u: User, state: dict):
+    meta = get_user_meta(state, u.id)
+    return {
+        "id": u.id,
+        "loginid": u.loginid,
+        "username": u.username,
+        "role": u.role,
+        "avatar_color": u.avatar_color,
+        "is_active": u.is_active,
+        "deptname": getattr(u, "deptname", None),
+        "mail": getattr(u, "mail", None),
+        "created_at": iso(u.created_at),
+        "last_login_at": iso(u.last_login_at),
+        "group_name": meta.get("group_name"),
+    }
+
+def task_dict(t: Task, state: dict):
+    meta = get_task_meta(state, t.id)
+    return {
+        "id": t.id,
+        "project_id": t.project_id,
+        "title": t.title,
+        "description": t.description,
+        "status": t.status,
+        "priority": t.priority,
+        "start_date": t.start_date,
+        "due_date": t.due_date,
+        "assignee_ids": t.assignee_ids or [],
+        "tags": t.tags or [],
+        "sub_project_id": meta.get("sub_project_id"),
+        "progress": meta.get("progress", 0),
+        "created_at": iso(t.created_at),
+        "updated_at": iso(t.updated_at),
+        "archived_at": iso(t.archived_at),
+    }
+
+def get_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+def try_get_user_from_token(request: Request) -> dict:
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header.replace("Bearer ", "").strip()
+        from app.routers.auth import load_session  # 지연 import
+        user_info = load_session(token)
+        if user_info:
+            return user_info
+    return {}
+
+def resolve_user_id_from_token(request: Request, db: Session) -> Optional[int]:
+    user_info = try_get_user_from_token(request)
+    loginid = user_info.get("loginid")
+    if not loginid:
+        return None
+    row = db.query(User).filter(User.loginid == loginid).first()
+    return row.id if row else None
+
+def get_members_for_project(state: dict, project_id: int) -> List[dict]:
+    return [m for m in state.get("project_members", []) if int(m.get("project_id")) == int(project_id)]
+
+def ensure_owner_membership(state: dict, project_id: int, owner_id: Optional[int]):
+    if not owner_id:
+        return
+    members = state.get("project_members", [])
+    exists = any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(owner_id) for m in members)
+    if not exists:
+        members.append({"project_id": project_id, "user_id": owner_id, "role": "owner"})
+        state["project_members"] = members
+
+def get_user_role(db: Session, user_id: int) -> Optional[str]:
+    u = db.query(User).filter(User.id == user_id).first()
+    return u.role if u else None
+
+def is_admin_like_role(role: Optional[str]) -> bool:
+    return role in {"admin", "super_admin"}  # 점진 전환용
+
+def is_super_admin_user(db: Session, user_id: int) -> bool:
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        return False
+    return bool(u.is_active) and u.role == "super_admin" and u.loginid in ["jimi.lee", "juhui07.kim", "zoltas.roh"]
+
+def require_admin(db: Session, state: dict, user_id: int):
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u or not bool(u.is_active):
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    # 오직 jimi.lee + super_admin만 허용
+    if not (u.loginid in ["jimi.lee", "juhui07.kim", "zoltas.roh"] and u.role == "super_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
 
-def check_project_access(data: dict, project_id: int, user_id: int):
-    """Check if user has access to project. Raises 403 if not."""
-    # Admin users always have access
-    users = data.get("users", [])
-    user = next((u for u in users if u["id"] == user_id), None)
-    if user and user.get("role") == "admin":
+def get_user_project_ids(db: Session, state: dict, user_id: int) -> set:
+    pids = set()
+
+    # state members
+    for m in state.get("project_members", []):
+        if int(m.get("user_id")) == int(user_id):
+            pids.add(int(m.get("project_id")))
+
+    # owner
+    projects = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    for p in projects:
+        meta = get_project_meta(state, p.id)
+        if int(meta.get("owner_id") or 0) == int(user_id):
+            pids.add(p.id)
+
+    # public projects are "접근 가능"로 볼지 여부는 호출부에서 처리
+    return pids
+
+def check_project_access(db: Session, state: dict, project_id: int, user_id: int):
+    # admin pass
+    if is_admin_like_role(get_user_role(db, user_id)):
         return True
 
-    # Check project visibility
-    projects = data.get("projects", [])
-    project = next((p for p in projects if p["id"] == project_id), None)
-    if not project:
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Owner always has access
-    if project.get("owner_id") == user_id:
+    meta = get_project_meta(state, p.id)
+
+    if int(meta.get("owner_id") or 0) == int(user_id):
         return True
 
-    # Check membership
-    members = data.get("project_members", [])
-    is_member = any(m["project_id"] == project_id and m["user_id"] == user_id for m in members)
-    if is_member:
+    if any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(user_id) for m in state.get("project_members", [])):
         return True
 
-    if project.get("visibility") == "public":
+    if meta.get("visibility") == "public":
         return True
 
     raise HTTPException(status_code=403, detail="Access denied: you are not a member of this project")
 
-
-def check_project_permission(data: dict, project_id: int, user_id: int, permission_key: str):
-    """Check if user has a specific permission on a project. Raises 403 if not."""
-    users = data.get("users", [])
-    user = next((u for u in users if u["id"] == user_id), None)
-    # Admin always passes
-    if user and user.get("role") == "admin":
+def check_project_permission(db: Session, state: dict, project_id: int, user_id: int, permission_key: str):
+    if is_admin_like_role(get_user_role(db, user_id)):
         return True
 
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    permissions = project.get("permissions", DEFAULT_PERMISSIONS)
+    meta = get_project_meta(state, p.id)
+    permissions = meta.get("permissions") or dict(DEFAULT_PERMISSIONS)
     perm_value = permissions.get(permission_key, "all")
+
+    # owner pass
+    if int(meta.get("owner_id") or 0) == int(user_id):
+        return True
 
     if perm_value == "all":
         return True
-
-    # Check if user is project owner
-    if project.get("owner_id") == user_id:
-        return True
-
-    if perm_value == "admin":
-        if user and user.get("role") == "admin":
-            return True
+    elif perm_value == "admin":
         raise HTTPException(status_code=403, detail=f"권한이 없습니다: {permission_key} 은(는) 관리자만 가능합니다")
-
-    if perm_value == "members_only":
-        members = data.get("project_members", [])
-        is_member = any(m["project_id"] == project_id and m["user_id"] == user_id for m in members)
+    elif perm_value == "members_only":
+        is_member = any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(user_id) for m in state.get("project_members", []))
         if is_member:
             return True
         raise HTTPException(status_code=403, detail=f"권한이 없습니다: {permission_key} 은(는) 프로젝트 담당자만 가능합니다")
 
     return True
 
-# ─── Root ───
+# =========================
+# Role / Super Admin Helpers
+# =========================
+ADMIN_ROLES = {"super_admin"}
+SUPER_OWNER_LOGINID = ["jimi.lee", "juhui07.kim", "zoltas.roh"]
 
+def normalize_loginid(loginid: Optional[str]) -> str:
+    return (loginid or "").strip().lower()
+
+def is_admin_role(role: Optional[str]) -> bool:
+    return (role or "").strip().lower() in ADMIN_ROLES
+
+def is_super_owner_loginid(loginid: Optional[str]) -> bool:
+    # NOTE: 원본 코드에 논리 오류가 있었는데(리스트 비교),
+    # 사용자가 "그대로"를 원하므로 안전하게 문자열/리스트 모두 대응하도록 작성.
+    if isinstance(SUPER_OWNER_LOGINID, list):
+        return normalize_loginid(loginid) in [normalize_loginid(x) for x in SUPER_OWNER_LOGINID]
+    return normalize_loginid(loginid) == normalize_loginid(SUPER_OWNER_LOGINID)
+
+def get_user_role(db: Session, user_id: int) -> Optional[str]:
+    u = db.query(User).filter(User.id == user_id).first()
+    return u.role if u else None
+
+def get_super_owner_user(db: Session) -> Optional[User]:
+    # DB에 loginid가 소문자로 저장된다고 가정
+    return db.query(User).filter(User.loginid.in_(SUPER_OWNER_LOGINID)).first()
+
+def get_super_owner_id(db: Session) -> Optional[int]:
+    u = get_super_owner_user(db)
+    return u.id if u else None
+
+def ensure_super_owner(db: Session) -> Optional[User]:
+    """
+    jimi.lee, juhui07.kim, zoltas.roh 계정이 존재하면 super_admin + 활성 상태를 강제 보장.
+    (존재하지 않으면 생성하지 않고 None 반환)
+    """
+    u = db.query(User).filter(
+        User.loginid.in_(SUPER_OWNER_LOGINID)
+    ).first()
+    if not u:
+        return None
+
+    changed = False
+
+    if (u.role or "").strip().lower() != "super_admin":
+        u.role = "super_admin"
+        changed = True
+
+    if not bool(u.is_active):
+        u.is_active = True
+        changed = True
+
+    if changed:
+        db.commit()
+        db.refresh(u)
+
+    return u
+
+# =========================
+# Root / Health
+# =========================
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Antigravity Schedule Platform API"}
 
+@app.get("/health")
+def health_check():
+    return {"ok": True}
+
+# =========================
+# Combined Data Endpoint
+# =========================
 @app.get("/api/data")
-def get_all_data(user_id: Optional[int] = None):
-    data = load_data()
+def get_all_data(user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    state = load_state()
+
+    projects_db = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    users_db = db.query(User).all()
+    tasks_db = db.query(Task).filter(Task.archived_at.is_(None)).all()
+    prefs_rows = db.query(UserPreference).all()
+
+    projects = [project_dict(p, state) for p in projects_db]
+    users = [user_dict(u, state) for u in users_db]
+    tasks = [task_dict(t, state) for t in tasks_db]
+
+    # user_id 필터 (새 프론트 호환)
     if user_id:
-        # Filter tasks: only tasks where user is assignee or is member of the project
-        users = data.get("users", [])
-        user = next((u for u in users if u["id"] == user_id), None)
-        is_admin = user and user.get("role") == "admin"
+        role = get_user_role(db, user_id)
+        is_admin = is_admin_like_role(role)
         if not is_admin:
-            members = data.get("project_members", [])
-            user_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
-            # Also include projects owned by user
-            for p in data.get("projects", []):
-                if p.get("owner_id") == user_id:
-                    user_project_ids.add(p["id"])
-            data["tasks"] = [
-                t for t in data.get("tasks", [])
-                if t.get("project_id") in user_project_ids and (
-                    not t.get("assignee_ids") or user_id in t.get("assignee_ids", [])
-                )
-            ]
-    return data
+            authorized_pids = get_user_project_ids(db, state, user_id)
+            # public 프로젝트도 허용
+            public_pids = {p["id"] for p in projects if p.get("visibility") == "public"}
+            authorized_pids |= public_pids
 
-# ─── User Endpoints ───
-
-@app.get("/api/users")
-def get_users():
-    data = load_data()
-    return {"users": data.get("users", [])}
-
-@app.post("/api/users")
-def create_user(user: UserCreate):
-    data = load_data()
-    users = data.get("users", [])
-
-    if any(u.get("loginid") == user.loginid for u in users):
-        raise HTTPException(status_code=400, detail="Login ID already exists")
-
-    new_user = user.model_dump()
-    new_user["id"] = next_id(users)
-    new_user["is_active"] = True
-    new_user["created_at"] = datetime.now().isoformat()
-
-    users.append(new_user)
-    data["users"] = users
-    save_data(data)
-    return new_user
-
-@app.patch("/api/users/{user_id}")
-def update_user(user_id: int, updates: UserUpdate):
-    data = load_data()
-    users = data.get("users", [])
-
-    for i, u in enumerate(users):
-        if u["id"] == user_id:
-            update_data = updates.model_dump(exclude_unset=True)
-            users[i].update(update_data)
-            save_data(data)
-            return users[i]
-
-    raise HTTPException(status_code=404, detail="User not found")
-
-@app.delete("/api/users/{user_id}")
-def delete_user(user_id: int):
-    data = load_data()
-    users = data.get("users", [])
-    data["users"] = [u for u in users if u["id"] != user_id]
-    for t in data.get("tasks", []):
-        if user_id in t.get("assignee_ids", []):
-            t["assignee_ids"].remove(user_id)
-    save_data(data)
-    return {"message": "User deleted"}
-
-# ─── User Preferences / Dashboard Layout ───
-
-@app.get("/api/users/{user_id}/preferences")
-def get_user_preferences(user_id: int):
-    data = load_data()
-    prefs = data.get("user_preferences", {})
-    return prefs.get(str(user_id), {"layout": None})
-
-@app.put("/api/users/{user_id}/preferences/layout")
-def save_user_layout(user_id: int, body: LayoutUpdate):
-    data = load_data()
-    if "user_preferences" not in data:
-        data["user_preferences"] = {}
-
-    user_key = str(user_id)
-    if user_key not in data["user_preferences"]:
-        data["user_preferences"][user_key] = {}
-
-    data["user_preferences"][user_key]["layout"] = body.layout
-    save_data(data)
-    return {"message": "Layout saved", "layout": body.layout}
-
-# ─── Task Endpoints ───
-
-@app.get("/api/tasks")
-def get_tasks(project_id: Optional[int] = None, assignee_id: Optional[int] = None, user_id: Optional[int] = None):
-    data = load_data()
-    tasks = data.get("tasks", [])
-    if project_id:
-        tasks = [t for t in tasks if t.get("project_id") == project_id]
-    if assignee_id:
-        tasks = [t for t in tasks if assignee_id in t.get("assignee_ids", [])]
-    # Filter by user permissions: only tasks where user is assignee or task has no assignees
-    if user_id:
-        users = data.get("users", [])
-        user = next((u for u in users if u["id"] == user_id), None)
-        is_admin = user and user.get("role") == "admin"
-        if not is_admin:
-            # Check project membership
-            members = data.get("project_members", [])
-            user_project_ids = set(m["project_id"] for m in members if m["user_id"] == user_id)
-            for p in data.get("projects", []):
-                if p.get("owner_id") == user_id:
-                    user_project_ids.add(p["id"])
+            projects = [p for p in projects if p["id"] in authorized_pids]
             tasks = [
                 t for t in tasks
-                if t.get("project_id") in user_project_ids and (
-                    not t.get("assignee_ids") or user_id in t.get("assignee_ids", [])
+                if t.get("project_id") in authorized_pids and (
+                    not t.get("assignee_ids") or user_id in (t.get("assignee_ids") or [])
                 )
             ]
-    return {"tasks": tasks}
 
-@app.post("/api/tasks")
-def create_task(task: TaskCreate):
-    data = load_data()
-    tasks = data.get("tasks", [])
+    prefs = {}
+    for pr in prefs_rows:
+        prefs[str(pr.user_id)] = {"layout": pr.layout}
 
-    new_task = task.model_dump()
-    new_task["id"] = next_id(tasks)
-    new_task["created_at"] = datetime.now().isoformat()
-    new_task["updated_at"] = datetime.now().isoformat()
-    new_task["archived_at"] = None
+    return {
+        # DB core
+        "projects": projects,
+        "users": users,
+        "tasks": tasks,
+        "activity_logs": [],  # 미구현 유지
+        "user_preferences": prefs,
 
-    tasks.append(new_task)
-    data["tasks"] = tasks
-    save_data(data)
-    return new_task
+        # 기존/신규 프론트 호환용 sidecar
+        "sub_projects": state.get("sub_projects", []),
+        "notes": state.get("notes", []),
+        "attachments": state.get("attachments", []),
+        "project_members": state.get("project_members", []),
+        "project_files": state.get("project_files", []),
+        "join_requests": state.get("join_requests", []),
+        "groups": state.get("groups", []),
+        "shortcuts": state.get("shortcuts", []),
 
-@app.patch("/api/tasks/{task_id}")
-def update_task(task_id: int, updates: TaskUpdate):
-    data = load_data()
-    tasks = data.get("tasks", [])
+        # 레거시 호환용 (예전 main.py에서 쓰던 키)
+        "roadmap_items": [],
+    }
 
-    for i, t in enumerate(tasks):
-        if t["id"] == task_id:
-            update_data = updates.model_dump(exclude_unset=True)
-            tasks[i].update(update_data)
-            tasks[i]["updated_at"] = datetime.now().isoformat()
-            save_data(data)
-            return tasks[i]
+# =========================
+# User Endpoints (DB + user_meta)
+# =========================
+@app.get("/api/users")
+def get_users(db: Session = Depends(get_db)):
+    state = load_state()
+    users = db.query(User).all()
+    return {"users": [user_dict(u, state) for u in users]}
 
-    raise HTTPException(status_code=404, detail="Task not found")
+@app.post("/api/users")
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    state = load_state()
 
-@app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: int):
-    data = load_data()
-    tasks = data.get("tasks", [])
+    exists = db.query(User).filter(User.loginid == user.loginid).first()
+    if exists:
+        raise HTTPException(status_code=400, detail="Login ID already exists")
 
-    for i, t in enumerate(tasks):
-        if t["id"] == task_id:
-            tasks[i]["archived_at"] = datetime.now().isoformat()
-            save_data(data)
-            return {"message": "Task deleted"}
+    u = User(
+        loginid=user.loginid,
+        username=user.username,
+        role=user.role or "member",
+        avatar_color=user.avatar_color or "#2955FF",
+        is_active=True,
+    )
+    db.add(u)
+    db.commit()
+    db.refresh(u)
 
-    raise HTTPException(status_code=404, detail="Task not found")
+    return user_dict(u, state)
 
-@app.post("/api/tasks/{task_id}/restore")
-def restore_task(task_id: int):
-    data = load_data()
-    tasks = data.get("tasks", [])
+@app.patch("/api/users/{user_id}")
+def update_user(user_id: int, updates: UserUpdate, db: Session = Depends(get_db)):
+    state = load_state()
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    for i, t in enumerate(tasks):
-        if t["id"] == task_id:
-            tasks[i]["archived_at"] = None
-            save_data(data)
-            return {"message": "Task restored"}
+    data = updates.model_dump(exclude_unset=True)
 
-    raise HTTPException(status_code=404, detail="Task not found")
+    # DB fields
+    for k in ["username", "role", "avatar_color", "is_active"]:
+        if k in data:
+            setattr(u, k, data[k])
 
-# ─── Task Attachments ───
+    # sidecar field
+    if "group_name" in data:
+        set_user_meta(state, user_id, {"group_name": data["group_name"]})
+        save_state(state)
 
-@app.get("/api/tasks/{task_id}/attachments")
-def get_task_attachments(task_id: int):
-    data = load_data()
-    attachments = [a for a in data.get("attachments", []) if a.get("task_id") == task_id]
-    return {"attachments": attachments}
+    db.commit()
+    db.refresh(u)
+    return user_dict(u, state)
 
-@app.post("/api/tasks/{task_id}/attachments")
-def create_attachment(task_id: int, attachment: AttachmentCreate):
-    data = load_data()
-    # Verify task exists
-    task = next((t for t in data.get("tasks", []) if t["id"] == task_id), None)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    state = load_state()
 
-    attachments = data.get("attachments", [])
-    new_att = attachment.model_dump()
-    new_att["id"] = next_id(attachments) if attachments else 1
-    new_att["task_id"] = task_id
-    new_att["created_at"] = datetime.now().isoformat()
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    attachments.append(new_att)
-    data["attachments"] = attachments
-    save_data(data)
-    return new_att
+    if (u.loginid or "").lower() in [x.lower() for x in SUPER_OWNER_LOGINID]:
+        raise HTTPException(status_code=400, detail="Super owner 계정은 삭제할 수 없습니다.")
 
-@app.delete("/api/attachments/{attachment_id}")
-def delete_attachment(attachment_id: int):
-    data = load_data()
-    attachments = data.get("attachments", [])
-    data["attachments"] = [a for a in attachments if a["id"] != attachment_id]
-    save_data(data)
-    return {"message": "Attachment deleted"}
+    # tasks.assignee_ids(JSON)에서 제거
+    tasks = db.query(Task).filter(Task.archived_at.is_(None)).all()
+    for t in tasks:
+        ids = list(t.assignee_ids or [])
+        if user_id in ids:
+            ids.remove(user_id)
+            t.assignee_ids = ids
 
-# ─── Project Endpoints ───
+    # preferences 삭제
+    pref = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+    if pref:
+        db.delete(pref)
 
+    # sidecar 정리
+    state["project_members"] = [m for m in state.get("project_members", []) if int(m.get("user_id")) != user_id]
+    state["join_requests"] = [jr for jr in state.get("join_requests", []) if int(jr.get("user_id")) != user_id]
+    state["notes"] = [n for n in state.get("notes", []) if int(n.get("author_id", -1)) != user_id]
+    state.get("user_meta", {}).pop(str(user_id), None)
+
+    db.delete(u)
+    db.commit()
+    save_state(state)
+    return {"message": "User deleted"}
+
+@app.post("/api/visit")
+def write_visit_log(request: Request, db: Session = Depends(get_db)):
+    user = try_get_user_from_token(request)
+    ip = get_client_ip(request)
+
+    row = VisitLog(
+        ip_address=ip,
+        deptname=user.get("deptname"),
+        username=user.get("username"),
+    )
+    db.add(row)
+    db.commit()
+    return {"message": "logged", "ip": ip}
+
+# =========================
+# User Preferences (DB)
+# =========================
+@app.get("/api/users/{user_id}/preferences")
+def get_user_preferences(user_id: int, db: Session = Depends(get_db)):
+    pref = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+    if not pref:
+        return {"layout": None}
+    return {"layout": pref.layout}
+
+@app.put("/api/users/{user_id}/preferences/layout")
+def save_user_layout(user_id: int, body: LayoutUpdate, db: Session = Depends(get_db)):
+    pref = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+    if not pref:
+        pref = UserPreference(user_id=user_id, layout=body.layout)
+        db.add(pref)
+    else:
+        pref.layout = body.layout
+
+    db.commit()
+    return {"message": "Layout saved", "layout": body.layout}
+
+# =========================
+# Project Endpoints (DB + project_meta + members sidecar)
+# =========================
 @app.get("/api/projects")
-def get_projects(user_id: Optional[int] = None):
-    data = load_data()
-    projects = data.get("projects", [])
+def get_projects(user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    state = load_state()
+    rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    projects = [project_dict(p, state) for p in rows]
+
     if user_id:
-        members = data.get("project_members", [])
-        accessible_project_ids = set()
-        for m in members:
-            if m["user_id"] == user_id:
-                accessible_project_ids.add(m["project_id"])
-        # Also include projects owned by user
-        for p in projects:
-            if p.get("owner_id") == user_id:
-                accessible_project_ids.add(p["id"])
-        # Admin sees all
-        user = next((u for u in data.get("users", []) if u["id"] == user_id), None)
-        if user and user.get("role") == "admin":
-            return {"projects": projects}
-        projects = [p for p in projects if p["id"] in accessible_project_ids or p.get("visibility") == "public"]
+        role = get_user_role(db, user_id)
+        if not is_admin_like_role(role):
+            accessible_project_ids = get_user_project_ids(db, state, user_id)
+            projects = [
+                p for p in projects
+                if p["id"] in accessible_project_ids or p.get("visibility") == "public"
+            ]
+
     return {"projects": projects}
 
 @app.post("/api/projects")
-def create_project(project: ProjectCreate):
-    data = load_data()
-    projects = data.get("projects", [])
+def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
+    state = load_state()
 
-    new_project = project.model_dump()
-    new_project["id"] = next_id(projects)
-    new_project["created_at"] = datetime.now().isoformat()
+    p = Project(name=project.name, description=project.description)
+    db.add(p)
+    db.commit()
+    db.refresh(p)
 
-    # Set default permissions if not provided
-    if new_project.get("permissions") is None:
-        new_project["permissions"] = dict(DEFAULT_PERMISSIONS)
+    # owner 기본값: 요청값 > super owner > 1
+    default_owner_id = project.owner_id
+    if not default_owner_id:
+        default_owner_id = get_super_owner_id(db) or 1
 
-    projects.append(new_project)
-    data["projects"] = projects
+    set_project_meta(state, p.id, {
+        "owner_id": default_owner_id,
+        "visibility": project.visibility or "private",
+        "require_approval": bool(project.require_approval or False),
+        "permissions": project.permissions or dict(DEFAULT_PERMISSIONS),
+    })
 
-    # Auto-add owner as member
-    members = data.get("project_members", [])
-    members.append({"project_id": new_project["id"], "user_id": new_project["owner_id"], "role": "owner"})
+    ensure_owner_membership(state, p.id, default_owner_id)
 
-    # Add additional members from member_ids
-    member_ids = new_project.pop("member_ids", None) or []
-    for mid in member_ids:
-        if mid != new_project["owner_id"]:
-            if not any(m["project_id"] == new_project["id"] and m["user_id"] == mid for m in members):
-                members.append({"project_id": new_project["id"], "user_id": mid, "role": "member"})
+    for mid in (project.member_ids or []):
+        if mid == default_owner_id:
+            continue
+        exists = any(
+            int(m.get("project_id")) == p.id and int(m.get("user_id")) == int(mid)
+            for m in state.get("project_members", [])
+        )
+        if not exists:
+            state["project_members"].append({"project_id": p.id, "user_id": mid, "role": "member"})
 
-    data["project_members"] = members
-
-    save_data(data)
-    return new_project
+    save_state(state)
+    return project_dict(p, state)
 
 @app.patch("/api/projects/{project_id}")
-def update_project(project_id: int, updates: ProjectUpdate):
-    data = load_data()
-    projects = data.get("projects", [])
+def update_project(project_id: int, updates: ProjectUpdate, db: Session = Depends(get_db)):
+    state = load_state()
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
 
-    for i, p in enumerate(projects):
-        if p["id"] == project_id:
-            update_data = updates.model_dump(exclude_unset=True)
-            projects[i].update(update_data)
-            save_data(data)
-            return projects[i]
+    data = updates.model_dump(exclude_unset=True)
 
-    raise HTTPException(status_code=404, detail="Project not found")
+    # DB fields
+    if "name" in data:
+        p.name = data["name"]
+    if "description" in data:
+        p.description = data["description"]
+
+    # sidecar meta
+    meta_updates = {}
+    for k in ["visibility", "require_approval", "permissions", "owner_id"]:
+        if k in data:
+            meta_updates[k] = data[k]
+    if meta_updates:
+        set_project_meta(state, project_id, meta_updates)
+        if "owner_id" in meta_updates:
+            ensure_owner_membership(state, project_id, meta_updates["owner_id"])
+
+    db.commit()
+    db.refresh(p)
+    save_state(state)
+    return project_dict(p, state)
 
 @app.delete("/api/projects/{project_id}")
-def delete_project(project_id: int):
-    data = load_data()
-    projects = data.get("projects", [])
-    data["projects"] = [p for p in projects if p["id"] != project_id]
-    tasks = data.get("tasks", [])
-    for i, t in enumerate(tasks):
-        if t.get("project_id") == project_id:
-            tasks[i]["archived_at"] = datetime.now().isoformat()
-    # Clean up sub_projects, notes, members
-    data["sub_projects"] = [s for s in data.get("sub_projects", []) if s.get("project_id") != project_id]
-    data["notes"] = [n for n in data.get("notes", []) if n.get("project_id") != project_id]
-    data["project_members"] = [m for m in data.get("project_members", []) if m.get("project_id") != project_id]
-    save_data(data)
+def delete_project(project_id: int, db: Session = Depends(get_db)):
+    state = load_state()
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    now = datetime.now()
+    p.archived_at = now
+
+    # 관련 task soft delete
+    tasks = db.query(Task).filter(Task.project_id == project_id).all()
+    for t in tasks:
+        if not t.archived_at:
+            t.archived_at = now
+
+    # sidecar cleanup
+    state["sub_projects"] = [s for s in state.get("sub_projects", []) if int(s.get("project_id")) != project_id]
+    state["notes"] = [n for n in state.get("notes", []) if int(n.get("project_id")) != project_id]
+    state["project_members"] = [m for m in state.get("project_members", []) if int(m.get("project_id")) != project_id]
+    state["join_requests"] = [jr for jr in state.get("join_requests", []) if int(jr.get("project_id")) != project_id]
+
+    # project_files + disk cleanup (metadata only / disk best-effort)
+    for pf in [f for f in state.get("project_files", []) if int(f.get("project_id")) == project_id]:
+        file_path = os.path.join(UPLOAD_DIR, str(project_id), pf.get("stored_name", ""))
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+    state["project_files"] = [f for f in state.get("project_files", []) if int(f.get("project_id")) != project_id]
+
+    # project_meta 제거
+    state.get("project_meta", {}).pop(str(project_id), None)
+
+    db.commit()
+    save_state(state)
     return {"message": "Project deleted"}
 
-# ─── Project Members ───
-
+# =========================
+# Project Members / Join Requests (sidecar)
+# =========================
 @app.get("/api/projects/{project_id}/members")
-def get_project_members(project_id: int):
-    data = load_data()
-    members = [m for m in data.get("project_members", []) if m["project_id"] == project_id]
-    # Enrich with user info
-    users = {u["id"]: u for u in data.get("users", [])}
+def get_project_members(project_id: int, db: Session = Depends(get_db)):
+    state = load_state()
+    members = get_members_for_project(state, project_id)
+    users_map = {u.id: u for u in db.query(User).all()}
+
     enriched = []
     for m in members:
-        user = users.get(m["user_id"], {})
-        enriched.append({**m, "username": user.get("username", "Unknown"), "avatar_color": user.get("avatar_color", "#ccc")})
+        uid = int(m.get("user_id"))
+        u = users_map.get(uid)
+        enriched.append({
+            **m,
+            "username": u.username if u else "Unknown",
+            "avatar_color": (u.avatar_color if u else "#ccc"),
+        })
     return {"members": enriched}
 
 @app.post("/api/projects/{project_id}/members")
-def add_project_member(project_id: int, member: MemberAdd):
-    data = load_data()
-    # Check project exists
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+def add_project_member(project_id: int, member: MemberAdd, db: Session = Depends(get_db)):
+    state = load_state()
+
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    members = data.get("project_members", [])
-    # Check duplicate
-    if any(m["project_id"] == project_id and m["user_id"] == member.user_id for m in members):
+    # 유저 존재 체크
+    u = db.query(User).filter(User.id == member.user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    members = state.get("project_members", [])
+    if any(int(m.get("project_id")) == project_id and int(m.get("user_id")) == member.user_id for m in members):
         raise HTTPException(status_code=400, detail="User is already a member")
 
-    # Check if project requires approval
-    if project.get("require_approval", False):
-        join_requests = data.get("join_requests", [])
-        # Check if already requested
-        if any(jr["project_id"] == project_id and jr["user_id"] == member.user_id and jr["status"] == "pending" for jr in join_requests):
+    meta = get_project_meta(state, project_id)
+    if meta.get("require_approval", False):
+        join_requests = state.get("join_requests", [])
+        if any(
+            int(jr.get("project_id")) == project_id and
+            int(jr.get("user_id")) == member.user_id and
+            jr.get("status") == "pending"
+            for jr in join_requests
+        ):
             raise HTTPException(status_code=400, detail="이미 참여 요청이 있습니다")
+
         new_request = {
-            "id": next_id(join_requests) if join_requests else 1,
+            "id": next_id(join_requests),
             "project_id": project_id,
             "user_id": member.user_id,
-            "role": member.role,
+            "role": member.role or "member",
             "status": "pending",
             "created_at": datetime.now().isoformat(),
         }
         join_requests.append(new_request)
-        data["join_requests"] = join_requests
-        save_data(data)
+        state["join_requests"] = join_requests
+        save_state(state)
         return {"message": "참여 요청이 등록되었습니다. 관리자 승인 후 참여 가능합니다.", "status": "pending"}
 
-    members.append({"project_id": project_id, "user_id": member.user_id, "role": member.role})
-    data["project_members"] = members
-    save_data(data)
+    members.append({"project_id": project_id, "user_id": member.user_id, "role": member.role or "member"})
+    state["project_members"] = members
+    save_state(state)
     return {"message": "Member added"}
 
 @app.delete("/api/projects/{project_id}/members/{user_id}")
 def remove_project_member(project_id: int, user_id: int):
-    data = load_data()
-    members = data.get("project_members", [])
-    data["project_members"] = [m for m in members if not (m["project_id"] == project_id and m["user_id"] == user_id)]
-    save_data(data)
+    state = load_state()
+    state["project_members"] = [
+        m for m in state.get("project_members", [])
+        if not (int(m.get("project_id")) == project_id and int(m.get("user_id")) == user_id)
+    ]
+    save_state(state)
     return {"message": "Member removed"}
 
-# ─── Join Requests ───
-
 @app.post("/api/projects/{project_id}/join-request")
-def request_join(project_id: int, user_id: int = Query(...)):
-    """Request to join a project (when require_approval is ON)."""
-    data = load_data()
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+def request_join(project_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    members = data.get("project_members", [])
-    if any(m["project_id"] == project_id and m["user_id"] == user_id for m in members):
+    if any(int(m.get("project_id")) == project_id and int(m.get("user_id")) == user_id for m in state.get("project_members", [])):
         raise HTTPException(status_code=400, detail="이미 프로젝트 멤버입니다")
 
-    join_requests = data.get("join_requests", [])
-    if any(jr["project_id"] == project_id and jr["user_id"] == user_id and jr["status"] == "pending" for jr in join_requests):
+    join_requests = state.get("join_requests", [])
+    if any(int(jr.get("project_id")) == project_id and int(jr.get("user_id")) == user_id and jr.get("status") == "pending" for jr in join_requests):
         raise HTTPException(status_code=400, detail="이미 참여 요청이 있습니다")
 
     new_request = {
-        "id": next_id(join_requests) if join_requests else 1,
+        "id": next_id(join_requests),
         "project_id": project_id,
         "user_id": user_id,
         "role": "member",
@@ -673,31 +1130,29 @@ def request_join(project_id: int, user_id: int = Query(...)):
         "created_at": datetime.now().isoformat(),
     }
     join_requests.append(new_request)
-    data["join_requests"] = join_requests
-    save_data(data)
+    state["join_requests"] = join_requests
+    save_state(state)
     return {"message": "참여 요청이 등록되었습니다", "request": new_request}
 
 @app.get("/api/projects/{project_id}/join-requests")
-def get_join_requests(project_id: int):
-    data = load_data()
-    requests = [jr for jr in data.get("join_requests", []) if jr["project_id"] == project_id]
-    # Enrich with user info
-    users = {u["id"]: u for u in data.get("users", [])}
-    for jr in requests:
-        user = users.get(jr["user_id"], {})
-        jr["username"] = user.get("username", "Unknown")
-        jr["avatar_color"] = user.get("avatar_color", "#ccc")
-    return {"join_requests": requests}
+def get_join_requests(project_id: int, db: Session = Depends(get_db)):
+    state = load_state()
+    reqs = [jr.copy() for jr in state.get("join_requests", []) if int(jr.get("project_id")) == project_id]
+    users_map = {u.id: u for u in db.query(User).all()}
+    for jr in reqs:
+        u = users_map.get(int(jr.get("user_id")))
+        jr["username"] = u.username if u else "Unknown"
+        jr["avatar_color"] = u.avatar_color if u else "#ccc"
+    return {"join_requests": reqs}
 
 @app.post("/api/projects/{project_id}/join-requests/approve")
 def approve_join_request(project_id: int, body: MemberApproval):
-    """Approve or reject a join request."""
-    data = load_data()
-    join_requests = data.get("join_requests", [])
+    state = load_state()
+    join_requests = state.get("join_requests", [])
 
     target = None
     for jr in join_requests:
-        if jr["project_id"] == project_id and jr["user_id"] == body.user_id and jr["status"] == "pending":
+        if int(jr.get("project_id")) == project_id and int(jr.get("user_id")) == body.user_id and jr.get("status") == "pending":
             target = jr
             break
 
@@ -706,85 +1161,256 @@ def approve_join_request(project_id: int, body: MemberApproval):
 
     if body.action == "approve":
         target["status"] = "approved"
-        # Add as member
-        members = data.get("project_members", [])
-        members.append({"project_id": project_id, "user_id": body.user_id, "role": target.get("role", "member")})
-        data["project_members"] = members
-        data["join_requests"] = join_requests
-        save_data(data)
+        members = state.get("project_members", [])
+        exists = any(int(m.get("project_id")) == project_id and int(m.get("user_id")) == body.user_id for m in members)
+        if not exists:
+            members.append({
+                "project_id": project_id,
+                "user_id": body.user_id,
+                "role": target.get("role", "member"),
+            })
+        state["project_members"] = members
+        state["join_requests"] = join_requests
+        save_state(state)
         return {"message": "참여가 승인되었습니다"}
+
     elif body.action == "reject":
         target["status"] = "rejected"
-        data["join_requests"] = join_requests
-        save_data(data)
+        state["join_requests"] = join_requests
+        save_state(state)
         return {"message": "참여가 거부되었습니다"}
-    else:
-        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
 
-# ─── Project Files ───
+    raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
 
+# =========================
+# Task Endpoints (DB + task_meta)
+# =========================
+@app.get("/api/tasks")
+def get_tasks(
+    project_id: Optional[int] = None,
+    assignee_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    state = load_state()
+
+    q = db.query(Task).filter(Task.archived_at.is_(None))
+    if project_id:
+        q = q.filter(Task.project_id == project_id)
+
+    rows = q.all()
+    tasks = [task_dict(t, state) for t in rows]
+
+    if assignee_id:
+        tasks = [t for t in tasks if assignee_id in (t.get("assignee_ids") or [])]
+
+    # user 권한 기반 필터 (새 프론트 호환)
+    if user_id:
+        role = get_user_role(db, user_id)
+        if not is_admin_like_role(role):
+            user_project_ids = get_user_project_ids(db, state, user_id)
+            public_pids = {
+                project_dict(p, state)["id"]
+                for p in db.query(Project).filter(Project.archived_at.is_(None)).all()
+                if get_project_meta(state, p.id).get("visibility") == "public"
+            }
+            user_project_ids |= public_pids
+
+            tasks = [
+                t for t in tasks
+                if t.get("project_id") in user_project_ids and (
+                    not t.get("assignee_ids") or user_id in (t.get("assignee_ids") or [])
+                )
+            ]
+
+    return {"tasks": tasks}
+
+@app.post("/api/tasks")
+def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+    state = load_state()
+
+    p = db.query(Project).filter(Project.id == task.project_id, Project.archived_at.is_(None)).first()
+    if not p:
+        raise HTTPException(status_code=400, detail="Project not found")
+
+    t = Task(
+        project_id=task.project_id,
+        title=task.title,
+        description=task.description,
+        status=task.status,
+        priority=task.priority or "medium",
+        start_date=task.start_date,
+        due_date=task.due_date,
+        assignee_ids=task.assignee_ids or [],
+        tags=task.tags or [],
+        archived_at=None,
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+
+    set_task_meta(state, t.id, {
+        "sub_project_id": task.sub_project_id,
+        "progress": task.progress if task.progress is not None else 0,
+    })
+    save_state(state)
+
+    return task_dict(t, state)
+
+@app.patch("/api/tasks/{task_id}")
+def update_task(task_id: int, updates: TaskUpdate, db: Session = Depends(get_db)):
+    state = load_state()
+    t = db.query(Task).filter(Task.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    data = updates.model_dump(exclude_unset=True)
+
+    # DB fields
+    for k in ["title", "description", "status", "priority", "start_date", "due_date", "assignee_ids", "tags"]:
+        if k in data:
+            setattr(t, k, data[k])
+
+    t.updated_at = datetime.now()
+
+    # sidecar fields
+    meta_updates = {}
+    if "sub_project_id" in data:
+        meta_updates["sub_project_id"] = data["sub_project_id"]
+    if "progress" in data:
+        meta_updates["progress"] = data["progress"]
+    if meta_updates:
+        set_task_meta(state, task_id, meta_updates)
+        save_state(state)
+
+    db.commit()
+    db.refresh(t)
+    return task_dict(t, state)
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: int, db: Session = Depends(get_db)):
+    t = db.query(Task).filter(Task.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    t.archived_at = datetime.now()
+    db.commit()
+    return {"message": "Task deleted"}
+
+@app.post("/api/tasks/{task_id}/restore")
+def restore_task(task_id: int, db: Session = Depends(get_db)):
+    t = db.query(Task).filter(Task.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    t.archived_at = None
+    db.commit()
+    return {"message": "Task restored"}
+
+# =========================
+# Task Attachments (URL attachment / sidecar)
+# =========================
+@app.get("/api/tasks/{task_id}/attachments")
+def get_task_attachments(task_id: int):
+    state = load_state()
+    attachments = [a for a in state.get("attachments", []) if int(a.get("task_id")) == task_id]
+    return {"attachments": attachments}
+
+@app.post("/api/tasks/{task_id}/attachments")
+def create_attachment(task_id: int, attachment: AttachmentCreate, db: Session = Depends(get_db)):
+    state = load_state()
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    attachments = state.get("attachments", [])
+    new_att = attachment.model_dump()
+    new_att["id"] = next_id(attachments)
+    new_att["task_id"] = task_id
+    new_att["created_at"] = datetime.now().isoformat()
+
+    attachments.append(new_att)
+    state["attachments"] = attachments
+    save_state(state)
+    return new_att
+
+@app.delete("/api/attachments/{attachment_id}")
+def delete_attachment(attachment_id: int):
+    state = load_state()
+    state["attachments"] = [a for a in state.get("attachments", []) if int(a.get("id")) != attachment_id]
+    save_state(state)
+    return {"message": "Attachment deleted"}
+
+# =========================
+# Project Files (실파일 업로드 / sidecar metadata)
+# =========================
 @app.get("/api/projects/{project_id}/files")
-def get_project_files(project_id: int, user_id: Optional[int] = None):
-    data = load_data()
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+def get_project_files(project_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    state = load_state()
+
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Permission check
     if user_id:
-        check_project_permission(data, project_id, user_id, "file_view")
+        check_project_permission(db, state, project_id, user_id, "file_view")
 
-    files = [f for f in data.get("project_files", []) if f.get("project_id") == project_id]
-    files.sort(key=lambda f: f.get("created_at", ""), reverse=True)
+    files = [f for f in state.get("project_files", []) if int(f.get("project_id")) == project_id]
+    files.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return {"files": files}
 
 @app.post("/api/projects/{project_id}/files")
-async def upload_project_file(project_id: int, file: UploadFile = FastAPIFile(...), user_id: int = Query(default=1)):
-    data = load_data()
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+async def upload_project_file(
+    project_id: int,
+    file: UploadFile = FastAPIFile(...),
+    user_id: int = Query(default=1),
+    db: Session = Depends(get_db),
+):
+    state = load_state()
+
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Create project folder
     project_dir = os.path.join(UPLOAD_DIR, str(project_id))
     os.makedirs(project_dir, exist_ok=True)
 
-    # Generate unique filename
     ext = os.path.splitext(file.filename or "")[1]
     stored_name = f"{uuid.uuid4().hex}{ext}"
     file_path = os.path.join(project_dir, stored_name)
 
-    # Save file
     contents = await file.read()
     with open(file_path, "wb") as f:
         f.write(contents)
 
-    file_size = len(contents)
-
-    project_files = data.get("project_files", [])
+    project_files = state.get("project_files", [])
     new_file = {
-        "id": next_id(project_files) if project_files else 1,
+        "id": next_id(project_files),
         "project_id": project_id,
         "filename": file.filename or stored_name,
         "stored_name": stored_name,
-        "size": file_size,
+        "size": len(contents),
         "uploader_id": user_id,
         "created_at": datetime.now().isoformat(),
     }
     project_files.append(new_file)
-    data["project_files"] = project_files
-    save_data(data)
+    state["project_files"] = project_files
+    save_state(state)
+
     return new_file
 
 @app.get("/api/projects/{project_id}/files/{file_id}/download")
-def download_project_file(project_id: int, file_id: int, user_id: Optional[int] = None):
-    data = load_data()
+def download_project_file(project_id: int, file_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    state = load_state()
 
-    # Permission check
     if user_id:
-        check_project_permission(data, project_id, user_id, "file_download")
+        check_project_permission(db, state, project_id, user_id, "file_download")
 
-    pf = next((f for f in data.get("project_files", []) if f["id"] == file_id and f["project_id"] == project_id), None)
+    pf = next(
+        (f for f in state.get("project_files", []) if int(f.get("id")) == file_id and int(f.get("project_id")) == project_id),
+        None
+    )
     if not pf:
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -800,127 +1426,132 @@ def download_project_file(project_id: int, file_id: int, user_id: Optional[int] 
 
 @app.delete("/api/projects/{project_id}/files/{file_id}")
 def delete_project_file(project_id: int, file_id: int):
-    data = load_data()
-    project_files = data.get("project_files", [])
+    state = load_state()
+    project_files = state.get("project_files", [])
 
-    pf = next((f for f in project_files if f["id"] == file_id and f["project_id"] == project_id), None)
+    pf = next((f for f in project_files if int(f.get("id")) == file_id and int(f.get("project_id")) == project_id), None)
     if not pf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Remove from disk
     file_path = os.path.join(UPLOAD_DIR, str(project_id), pf["stored_name"])
     if os.path.exists(file_path):
-        os.remove(file_path)
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
 
-    data["project_files"] = [f for f in project_files if f["id"] != file_id]
-    save_data(data)
+    state["project_files"] = [f for f in project_files if int(f.get("id")) != file_id]
+    save_state(state)
     return {"message": "File deleted"}
 
-# ─── SubProjects ───
-
+# =========================
+# SubProjects (sidecar)
+# =========================
 @app.get("/api/projects/{project_id}/subprojects")
 def get_subprojects(project_id: int):
-    data = load_data()
-    subs = [s for s in data.get("sub_projects", []) if s.get("project_id") == project_id]
+    state = load_state()
+    subs = [s for s in state.get("sub_projects", []) if int(s.get("project_id")) == project_id]
     return {"sub_projects": subs}
 
 @app.post("/api/projects/{project_id}/subprojects")
-def create_subproject(project_id: int, sub: SubProjectCreate):
-    data = load_data()
-    # Check project exists
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+def create_subproject(project_id: int, sub: SubProjectCreate, db: Session = Depends(get_db)):
+    state = load_state()
+
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    subs = data.get("sub_projects", [])
+    subs = state.get("sub_projects", [])
     new_sub = sub.model_dump()
-    new_sub["id"] = next_id(subs) if subs else 1
+    new_sub["id"] = next_id(subs)
     new_sub["project_id"] = project_id
     new_sub["created_at"] = datetime.now().isoformat()
 
     subs.append(new_sub)
-    data["sub_projects"] = subs
-    save_data(data)
+    state["sub_projects"] = subs
+    save_state(state)
     return new_sub
 
 @app.patch("/api/subprojects/{sub_id}")
 def update_subproject(sub_id: int, updates: SubProjectUpdate):
-    data = load_data()
-    subs = data.get("sub_projects", [])
+    state = load_state()
+    subs = state.get("sub_projects", [])
 
     for i, s in enumerate(subs):
-        if s["id"] == sub_id:
-            update_data = updates.model_dump(exclude_unset=True)
-            subs[i].update(update_data)
-            save_data(data)
+        if int(s.get("id")) == sub_id:
+            subs[i].update(updates.model_dump(exclude_unset=True))
+            state["sub_projects"] = subs
+            save_state(state)
             return subs[i]
 
     raise HTTPException(status_code=404, detail="SubProject not found")
 
 @app.delete("/api/subprojects/{sub_id}")
 def delete_subproject(sub_id: int):
-    data = load_data()
-    subs = data.get("sub_projects", [])
-    data["sub_projects"] = [s for s in subs if s["id"] != sub_id]
-    # Archive tasks under this sub_project
-    for t in data.get("tasks", []):
-        if t.get("sub_project_id") == sub_id:
-            t["sub_project_id"] = None
-    save_data(data)
+    state = load_state()
+
+    state["sub_projects"] = [s for s in state.get("sub_projects", []) if int(s.get("id")) != sub_id]
+
+    # task_meta에서 sub_project_id 제거
+    for key, meta in state.get("task_meta", {}).items():
+        if meta.get("sub_project_id") == sub_id:
+            meta["sub_project_id"] = None
+
+    save_state(state)
     return {"message": "SubProject deleted"}
 
-# ─── Notes ───
-
+# =========================
+# Notes (sidecar)
+# =========================
 @app.get("/api/projects/{project_id}/notes")
-def get_notes(project_id: int, user_id: Optional[int] = None):
-    data = load_data()
-    # Permission check (optional, soft)
+def get_notes(project_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    state = load_state()
+
     if user_id:
-        try:
-            check_project_access(data, project_id, user_id)
-        except HTTPException:
-            raise
-    notes = [n for n in data.get("notes", []) if n.get("project_id") == project_id]
-    notes.sort(key=lambda n: n.get("created_at", ""), reverse=True)
-    # Enrich with author info
-    users = {u["id"]: u for u in data.get("users", [])}
+        check_project_access(db, state, project_id, user_id)
+
+    notes = [n.copy() for n in state.get("notes", []) if int(n.get("project_id")) == project_id]
+    notes.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+    users_map = {u.id: u for u in db.query(User).all()}
     for n in notes:
-        author = users.get(n.get("author_id"), {})
-        n["author_name"] = author.get("username", "Unknown")
-        n["author_color"] = author.get("avatar_color", "#ccc")
+        author = users_map.get(int(n.get("author_id", 0)))
+        n["author_name"] = author.username if author else "Unknown"
+        n["author_color"] = author.avatar_color if author else "#ccc"
+
     return {"notes": notes}
 
 @app.post("/api/projects/{project_id}/notes")
-def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=1)):
-    data = load_data()
-    # Check project exists
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=1), db: Session = Depends(get_db)):
+    state = load_state()
+
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    notes = data.get("notes", [])
+    notes = state.get("notes", [])
     new_note = note.model_dump()
-    new_note["id"] = next_id(notes) if notes else 1
+    new_note["id"] = next_id(notes)
     new_note["project_id"] = project_id
     new_note["author_id"] = user_id
     new_note["created_at"] = datetime.now().isoformat()
     new_note["updated_at"] = datetime.now().isoformat()
 
     notes.append(new_note)
-    data["notes"] = notes
-    save_data(data)
+    state["notes"] = notes
+    save_state(state)
     return {**new_note, "message": "메모가 등록되었습니다"}
 
 @app.delete("/api/notes/{note_id}")
 def delete_note(note_id: int):
-    data = load_data()
-    notes = data.get("notes", [])
-    data["notes"] = [n for n in notes if n["id"] != note_id]
-    save_data(data)
+    state = load_state()
+    state["notes"] = [n for n in state.get("notes", []) if int(n.get("id")) != note_id]
+    save_state(state)
     return {"message": "Note deleted"}
 
-# ─── Roadmap (Gantt) API ───
-
+# =========================
+# Roadmap APIs (DB tasks + sidecar sub_projects/task_meta)
+# =========================
 @app.get("/api/roadmap")
 def get_roadmap(
     project_id: int = Query(...),
@@ -929,52 +1560,46 @@ def get_roadmap(
     to_date: Optional[str] = Query(default=None, alias="to"),
     assignee_id: Optional[int] = None,
     status: Optional[str] = None,
+    db: Session = Depends(get_db),
 ):
-    data = load_data()
+    state = load_state()
     today_str = date.today().isoformat()
 
-    # Get project
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Get sub_projects for this project
-    sub_projects = [s for s in data.get("sub_projects", []) if s.get("project_id") == project_id]
+    project = project_dict(p, state)
+    sub_projects = [s for s in state.get("sub_projects", []) if int(s.get("project_id")) == project_id]
 
-    # Get tasks for this project (non-archived)
-    tasks = [t for t in data.get("tasks", []) if t.get("project_id") == project_id and not t.get("archived_at")]
+    all_task_rows = db.query(Task).filter(Task.project_id == project_id, Task.archived_at.is_(None)).all()
+    all_tasks = [task_dict(t, state) for t in all_task_rows]
+    tasks = list(all_tasks)
 
-    # Apply filters
     if assignee_id:
-        tasks = [t for t in tasks if assignee_id in t.get("assignee_ids", [])]
+        tasks = [t for t in tasks if assignee_id in (t.get("assignee_ids") or [])]
     if status:
         tasks = [t for t in tasks if t.get("status") == status]
     if from_date:
-        tasks = [t for t in tasks if (t.get("due_date") or "9999") >= from_date or (t.get("start_date") or "9999") >= from_date]
+        tasks = [
+            t for t in tasks
+            if (t.get("due_date") or "9999") >= from_date or (t.get("start_date") or "9999") >= from_date
+        ]
     if to_date:
         tasks = [t for t in tasks if (t.get("start_date") or "0000") <= to_date]
 
-    # Build tree
-    items = []
-
-    # Top-level project item
-    all_project_tasks = [t for t in data.get("tasks", []) if t.get("project_id") == project_id and not t.get("archived_at")]
-    # Weighted average progress excluding Hold tasks
-    active_tasks = [t for t in all_project_tasks if t.get("status") != "hold"]
+    # 프로젝트 진행률
+    active_tasks = [t for t in all_tasks if t.get("status") != "hold"]
     total = len(active_tasks)
     done = len([t for t in active_tasks if t.get("status") == "done"])
     if total > 0:
-        progress_sum = sum(
-            100 if t.get("status") == "done" else (t.get("progress", 0) or 0)
-            for t in active_tasks
-        )
+        progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
         project_progress = round(progress_sum / total)
     else:
         project_progress = 0
 
-    # Min start, max due for project
-    start_dates = [t["start_date"] for t in all_project_tasks if t.get("start_date")]
-    due_dates = [t["due_date"] for t in all_project_tasks if t.get("due_date")]
+    start_dates = [t["start_date"] for t in all_tasks if t.get("start_date")]
+    due_dates = [t["due_date"] for t in all_tasks if t.get("due_date")]
 
     project_item = {
         "id": f"project-{project_id}",
@@ -988,19 +1613,15 @@ def get_roadmap(
         "children": [],
     }
 
-    # SubProject items
     for sp in sub_projects:
-        sp_tasks = [t for t in tasks if t.get("sub_project_id") == sp["id"]]
-        sp_all_tasks = [t for t in all_project_tasks if t.get("sub_project_id") == sp["id"]]
-        # Weighted average progress excluding Hold tasks
+        sp_tasks_filtered = [t for t in tasks if t.get("sub_project_id") == sp["id"]]
+        sp_all_tasks = [t for t in all_tasks if t.get("sub_project_id") == sp["id"]]
+
         sp_active = [t for t in sp_all_tasks if t.get("status") != "hold"]
         sp_total = len(sp_active)
         sp_done = len([t for t in sp_active if t.get("status") == "done"])
         if sp_total > 0:
-            sp_progress_sum = sum(
-                100 if t.get("status") == "done" else (t.get("progress", 0) or 0)
-                for t in sp_active
-            )
+            sp_progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in sp_active)
             sp_progress = round(sp_progress_sum / sp_total)
         else:
             sp_progress = 0
@@ -1020,7 +1641,7 @@ def get_roadmap(
             "children": [],
         }
 
-        for t in sp_tasks:
+        for t in sp_tasks_filtered:
             t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
             sp_item["children"].append({
                 "id": f"task-{t['id']}",
@@ -1036,7 +1657,6 @@ def get_roadmap(
 
         project_item["children"].append(sp_item)
 
-    # Tasks without sub_project
     root_tasks = [t for t in tasks if not t.get("sub_project_id")]
     for t in root_tasks:
         t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
@@ -1059,21 +1679,150 @@ def get_roadmap(
         "items": [project_item],
     }
 
-# ─── Dashboard Stats ───
+@app.get("/api/roadmap/global")
+def get_global_roadmap(
+    user_id: int = Query(...),
+    view: str = Query(default="month"),
+    db: Session = Depends(get_db),
+):
+    state = load_state()
+    today_str = date.today().isoformat()
 
-@app.get("/api/stats")
-def get_stats(user_id: Optional[int] = None):
-    data = load_data()
-    all_tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
-    projects = data.get("projects", [])
+    role = get_user_role(db, user_id)
 
-    # Filter by user's authorized projects
-    if user_id:
-        authorized_pids = get_user_project_ids(data, user_id)
-        tasks = [t for t in all_tasks if t.get("project_id") in authorized_pids]
-        projects = [p for p in projects if p["id"] in authorized_pids]
+    rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    all_projects = [project_dict(p, state) for p in rows]
+
+    if is_admin_role(role):
+        projects = all_projects
     else:
-        tasks = all_tasks
+        authorized_pids = get_user_project_ids(db, state, user_id)
+        public_pids = {p["id"] for p in all_projects if p.get("visibility") == "public"}
+        accessible = authorized_pids | public_pids
+        projects = [p for p in all_projects if p["id"] in accessible]
+
+    task_rows = db.query(Task).filter(Task.archived_at.is_(None)).all()
+    all_tasks = [task_dict(t, state) for t in task_rows]
+    sub_projects = state.get("sub_projects", [])
+
+    items = []
+
+    for project in projects:
+        pid = project["id"]
+        p_tasks = [t for t in all_tasks if t.get("project_id") == pid]
+        p_subs = [s for s in sub_projects if int(s.get("project_id")) == pid]
+
+        active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
+        total = len(active_tasks)
+        done = len([t for t in active_tasks if t.get("status") == "done"])
+        if total > 0:
+            progress_sum = sum(
+                100 if t.get("status") == "done" else (t.get("progress", 0) or 0)
+                for t in active_tasks
+            )
+            project_progress = round(progress_sum / total)
+        else:
+            project_progress = 0
+
+        start_dates = [t["start_date"] for t in p_tasks if t.get("start_date")]
+        due_dates = [t["due_date"] for t in p_tasks if t.get("due_date")]
+
+        project_item = {
+            "id": f"project-{pid}",
+            "type": "project",
+            "name": project.get("name", ""),
+            "start_date": min(start_dates) if start_dates else None,
+            "due_date": max(due_dates) if due_dates else None,
+            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
+            "progress": project_progress,
+            "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
+            "children": [],
+        }
+
+        for sp in p_subs:
+            sp_tasks = [t for t in p_tasks if t.get("sub_project_id") == sp["id"]]
+            sp_active = [t for t in sp_tasks if t.get("status") != "hold"]
+            sp_total = len(sp_active)
+            sp_done = len([t for t in sp_active if t.get("status") == "done"])
+
+            if sp_total > 0:
+                sp_progress = round(
+                    sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in sp_active) / sp_total
+                )
+            else:
+                sp_progress = 0
+
+            sp_starts = [t["start_date"] for t in sp_tasks if t.get("start_date")]
+            sp_dues = [t["due_date"] for t in sp_tasks if t.get("due_date")]
+
+            sp_item = {
+                "id": f"subproject-{sp['id']}",
+                "type": "subproject",
+                "name": sp.get("name", ""),
+                "start_date": min(sp_starts) if sp_starts else None,
+                "due_date": max(sp_dues) if sp_dues else None,
+                "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
+                "progress": sp_progress,
+                "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_progress < 100),
+                "children": [],
+            }
+
+            for t in sp_tasks:
+                t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
+                sp_item["children"].append({
+                    "id": f"task-{t['id']}",
+                    "type": "task",
+                    "name": t.get("title", ""),
+                    "start_date": t.get("start_date"),
+                    "due_date": t.get("due_date"),
+                    "status": t.get("status", "todo"),
+                    "progress": t.get("progress", 0),
+                    "overdue": t_overdue,
+                    "assignee_ids": t.get("assignee_ids", []),
+                })
+
+            project_item["children"].append(sp_item)
+
+        root_tasks = [t for t in p_tasks if not t.get("sub_project_id")]
+        for t in root_tasks:
+            t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
+            project_item["children"].append({
+                "id": f"task-{t['id']}",
+                "type": "task",
+                "name": t.get("title", ""),
+                "start_date": t.get("start_date"),
+                "due_date": t.get("due_date"),
+                "status": t.get("status", "todo"),
+                "progress": t.get("progress", 0),
+                "overdue": t_overdue,
+                "assignee_ids": t.get("assignee_ids", []),
+            })
+
+        items.append(project_item)
+
+    return {"view": view, "items": items}
+
+# =========================
+# Dashboard Stats (DB + task_meta)
+# =========================
+@app.get("/api/stats")
+def get_stats(user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    state = load_state()
+
+    all_task_rows = db.query(Task).filter(Task.archived_at.is_(None)).all()
+    tasks = [task_dict(t, state) for t in all_task_rows]
+
+    project_rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    projects = [project_dict(p, state) for p in project_rows]
+
+    # 권한 필터
+    if user_id:
+        authorized_pids = get_user_project_ids(db, state, user_id)
+        if not is_admin_like_role(get_user_role(db, user_id)):
+            public_pids = {p["id"] for p in projects if p.get("visibility") == "public"}
+            authorized_pids |= public_pids
+            tasks = [t for t in tasks if t.get("project_id") in authorized_pids]
+            projects = [p for p in projects if p["id"] in authorized_pids]
 
     total = len(tasks)
     in_progress = len([t for t in tasks if t.get("status") == "in_progress"])
@@ -1081,7 +1830,6 @@ def get_stats(user_id: Optional[int] = None):
     todo = len([t for t in tasks if t.get("status") == "todo"])
     hold = len([t for t in tasks if t.get("status") == "hold"])
 
-    # Per-project stats (only authorized)
     project_stats = []
     for p in projects:
         p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
@@ -1106,7 +1854,7 @@ def get_stats(user_id: Optional[int] = None):
 
     my_tasks = []
     if user_id:
-        my_tasks = [t for t in tasks if user_id in t.get("assignee_ids", [])]
+        my_tasks = [t for t in tasks if user_id in (t.get("assignee_ids") or [])]
 
     return {
         "total": total,
@@ -1120,119 +1868,141 @@ def get_stats(user_id: Optional[int] = None):
         "my_tasks": my_tasks,
     }
 
-# ─── Node Graph Data ───
-
+# =========================
+# Graph
+# =========================
 @app.get("/api/projects/{project_id}/graph")
-def get_project_graph(project_id: int):
-    """Returns nodes and edges for graph visualization."""
-    data = load_data()
-    project = next((p for p in data.get("projects", []) if p["id"] == project_id), None)
-    if not project:
+def get_project_graph(project_id: int, db: Session = Depends(get_db)):
+    state = load_state()
+
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    project = project_dict(p, state)
     nodes = []
     edges = []
 
-    # Project node
     nodes.append({"id": f"project-{project_id}", "type": "project", "label": project["name"]})
 
-    # SubProjects
-    for sp in data.get("sub_projects", []):
-        if sp.get("project_id") == project_id:
+    for sp in state.get("sub_projects", []):
+        if int(sp.get("project_id")) == project_id:
             sp_id = f"subproject-{sp['id']}"
-            nodes.append({"id": sp_id, "type": "subproject", "label": sp["name"]})
+            nodes.append({"id": sp_id, "type": "subproject", "label": sp.get("name", "")})
             edges.append({"source": f"project-{project_id}", "target": sp_id})
 
-    # Tasks
-    for t in data.get("tasks", []):
-        if t.get("project_id") == project_id and not t.get("archived_at"):
-            t_id = f"task-{t['id']}"
-            nodes.append({"id": t_id, "type": "task", "label": t["title"], "status": t.get("status")})
-            if t.get("sub_project_id"):
-                edges.append({"source": f"subproject-{t['sub_project_id']}", "target": t_id})
-            else:
-                edges.append({"source": f"project-{project_id}", "target": t_id})
+    task_rows = db.query(Task).filter(Task.project_id == project_id, Task.archived_at.is_(None)).all()
+    tasks = [task_dict(t, state) for t in task_rows]
 
-            # Attachments for this task
-            for a in data.get("attachments", []):
-                if a.get("task_id") == t["id"]:
-                    a_id = f"attachment-{a['id']}"
-                    nodes.append({"id": a_id, "type": "attachment", "label": a.get("filename", a.get("url", ""))})
-                    edges.append({"source": t_id, "target": a_id})
+    for t in tasks:
+        t_id = f"task-{t['id']}"
+        nodes.append({"id": t_id, "type": "task", "label": t["title"], "status": t.get("status")})
 
-    # Notes
-    for n in data.get("notes", []):
-        if n.get("project_id") == project_id:
+        if t.get("sub_project_id"):
+            edges.append({"source": f"subproject-{t['sub_project_id']}", "target": t_id})
+        else:
+            edges.append({"source": f"project-{project_id}", "target": t_id})
+
+        for a in state.get("attachments", []):
+            if int(a.get("task_id")) == t["id"]:
+                a_id = f"attachment-{a['id']}"
+                nodes.append({"id": a_id, "type": "attachment", "label": a.get("filename") or a.get("url", "")})
+                edges.append({"source": t_id, "target": a_id})
+
+    for n in state.get("notes", []):
+        if int(n.get("project_id")) == project_id:
+            content = n.get("content", "")
+            label = content[:30] + ("..." if len(content) > 30 else "")
             n_id = f"note-{n['id']}"
-            label = n.get("content", "")[:30] + ("..." if len(n.get("content", "")) > 30 else "")
             nodes.append({"id": n_id, "type": "note", "label": label})
             edges.append({"source": f"project-{project_id}", "target": n_id})
 
     return {"nodes": nodes, "edges": edges}
 
-# ─── AI Settings & Report Generation ───
+# =========================
+# AI LLM Helper
+# =========================
+def call_llm_api(api_url: str, model_name: str, system_prompt: str, user_prompt: str) -> str:
+    return dsllm_chat(
+        base_url=api_url,
+        model_name=model_name,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=0.3,
+        max_tokens=4096,
+    )
 
-class AiSettingsUpdate(BaseModel):
-    api_url: str
-    model_name: str
-    api_key: Optional[str] = None
+# =========================
+# AI Settings & Report Generation (sidecar + DB data)
+# =========================
+def get_or_create_ai_setting(db: Session) -> AiSetting:
+    row = db.query(AiSetting).order_by(AiSetting.id.asc()).first()
+    if not row:
+        row = AiSetting(api_url="", model_name="", api_key=None)  # api_key는 이제 사용 안 함
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
 
-class ReportRequest(BaseModel):
-    project_id: int
+@app.get("/api/settings/ai/models")
+def get_ai_models():
+    return {"models": list_model_keys()}
 
 @app.get("/api/settings/ai")
-def get_ai_settings():
-    data = load_data()
-    return data.get("ai_settings", {"api_url": "", "model_name": "", "api_key": ""})
+def get_ai_settings(db: Session = Depends(get_db)):
+    row = get_or_create_ai_setting(db)
+    return {"api_url": row.api_url or "", "model_name": row.model_name or ""}
 
 @app.put("/api/settings/ai")
-def save_ai_settings(body: AiSettingsUpdate):
-    data = load_data()
-    data["ai_settings"] = {
-        "api_url": body.api_url,
-        "model_name": body.model_name,
-        "api_key": body.api_key or "",
-    }
-    save_data(data)
-    return {"message": "AI settings saved", "settings": data["ai_settings"]}
+def save_ai_settings(body: AiSettingsUpdate, db: Session = Depends(get_db)):
+    row = get_or_create_ai_setting(db)
+    row.api_url = body.api_url.strip()
+    row.model_name = body.model_name.strip()
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"message": "AI settings saved", "settings": {"api_url": row.api_url, "model_name": row.model_name}}
 
 @app.post("/api/report/generate")
-def generate_report(body: ReportRequest):
-    import httpx
+def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
+    # ✅ dsllm_chat 내부에서 requests를 쓰므로, 예외 매핑용으로만 import
+    import requests
 
-    data = load_data()
-    ai_settings = data.get("ai_settings", {})
-    api_url = ai_settings.get("api_url", "")
-    model_name = ai_settings.get("model_name", "")
-    api_key = ai_settings.get("api_key", "")
+    # ✅ sidecar 데이터(sub_projects, notes 등)는 기존처럼 유지
+    state = load_state()
 
-    if not api_url or not model_name:
-        raise HTTPException(status_code=400, detail="AI settings not configured. Please set API URL and model name in Settings.")
+    # ✅ DB에서 AI 설정(api_url, model_name) 읽기
+    row = get_or_create_ai_setting(db)
+    api_url = (row.api_url or "").strip()
+    model_name = (row.model_name or "").strip()
 
-    # ── Collect project data ──
-    project = None
-    for p in data.get("projects", []):
-        if p["id"] == body.project_id:
-            project = p
-            break
-    if not project:
+    is_preset = model_name in MODEL_CONFIGS
+
+    if not model_name:
+        raise HTTPException(400, "AI settings not configured. Please set model name in Settings.")
+    if (not api_url) and (not is_preset):
+        raise HTTPException(400, "AI settings not configured. Please set API URL or choose a preset model.")
+
+    # ✅ 프로젝트 로드
+    p = db.query(Project).filter(Project.id == body.project_id, Project.archived_at.is_(None)).first()
+    if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    tasks = [t for t in data.get("tasks", []) if t.get("project_id") == body.project_id and not t.get("archived_at")]
-    sub_projects = [sp for sp in data.get("sub_projects", []) if sp.get("project_id") == body.project_id]
-    all_attachments = data.get("attachments", [])
-    raw_members = data.get("project_members", [])
-    if isinstance(raw_members, list):
-        members = [m for m in raw_members if m.get("project_id") == body.project_id]
-    elif isinstance(raw_members, dict):
-        members = raw_members.get(str(body.project_id), [])
-    else:
-        members = []
-    users = {u["id"]: u for u in data.get("users", [])}
-    notes = [n for n in data.get("notes", []) if n.get("project_id") == body.project_id]
-    project_files = [f for f in data.get("project_files", []) if f.get("project_id") == body.project_id]
+    project = project_dict(p, state)
 
-    # ── Calculate progress (Hold excluded, 1 decimal) ──
+    # ✅ 데이터 수집 (기존 그대로)
+    task_rows = db.query(Task).filter(Task.project_id == body.project_id, Task.archived_at.is_(None)).all()
+    tasks = [task_dict(t, state) for t in task_rows]
+
+    sub_projects = [sp for sp in state.get("sub_projects", []) if int(sp.get("project_id")) == body.project_id]
+    all_attachments = state.get("attachments", [])
+    members = [m for m in state.get("project_members", []) if int(m.get("project_id")) == body.project_id]
+    notes = [n for n in state.get("notes", []) if int(n.get("project_id")) == body.project_id]
+    project_files = [f for f in state.get("project_files", []) if int(f.get("project_id")) == body.project_id]
+
+    users_map = {u.id: user_dict(u, state) for u in db.query(User).all()}
+
+    # ✅ 진행률 계산 (Hold 제외)
     active_tasks = [t for t in tasks if t.get("status") != "hold"]
     hold_tasks = [t for t in tasks if t.get("status") == "hold"]
     done_tasks = [t for t in tasks if t.get("status") == "done"]
@@ -1248,18 +2018,17 @@ def generate_report(body: ReportRequest):
     else:
         overall_progress = 0.0
 
-    # ── Build structured task data ──
+    # ✅ task details (기존 그대로)
     task_details = []
     for t in tasks:
-        assignees = [users.get(a, {}).get("username", f"User {a}") for a in t.get("assignee_ids", [])]
+        assignees = [users_map.get(a, {}).get("username", f"User {a}") for a in (t.get("assignee_ids") or [])]
         sp_name = ""
         if t.get("sub_project_id"):
             sp = next((s for s in sub_projects if s["id"] == t["sub_project_id"]), None)
             sp_name = sp["name"] if sp else ""
-        
-        # Get attachments for this task
-        task_attachments = [a for a in all_attachments if a.get("task_id") == t["id"]]
-        
+
+        task_attachments = [a for a in all_attachments if int(a.get("task_id")) == t["id"]]
+
         task_details.append({
             "id": t["id"],
             "title": t.get("title", ""),
@@ -1273,20 +2042,24 @@ def generate_report(body: ReportRequest):
             "sub_project": sp_name,
             "tags": t.get("tags", []),
             "attachments": [
-                {"id": a["id"], "filename": a.get("filename", ""), "url": a.get("url", ""), "type": a.get("type", "url")}
+                {
+                    "id": a["id"],
+                    "filename": a.get("filename", ""),
+                    "url": a.get("url", ""),
+                    "type": a.get("type", "url"),
+                }
                 for a in task_attachments
             ],
         })
 
-    # ── Build member info ──
+    # ✅ 멤버명
     member_names = []
     for m in members:
-        uid = m.get("user_id", m) if isinstance(m, dict) else m
-        user = users.get(uid)
-        if user:
-            member_names.append(f'{user["username"]} ({user.get("role", "member")})')
+        uid = int(m.get("user_id"))
+        u = users_map.get(uid)
+        if u:
+            member_names.append(f'{u["username"]} ({m.get("role", "member")})')
 
-    # ── Status breakdown ──
     status_breakdown = {
         "total": len(tasks),
         "active": len(active_tasks),
@@ -1297,7 +2070,6 @@ def generate_report(body: ReportRequest):
         "overall_progress": overall_progress,
     }
 
-    # ── Build structured data for frontend ──
     structured = {
         "project": {
             "name": project.get("name", ""),
@@ -1314,7 +2086,7 @@ def generate_report(body: ReportRequest):
         ],
     }
 
-    # ── Build AI prompt ──
+    # ✅ Prompt (기존 그대로)
     task_lines = []
     for t in task_details:
         att_info = ""
@@ -1370,344 +2142,642 @@ def generate_report(body: ReportRequest):
 
 각 섹션은 [섹션1], [섹션2] 등의 태그로 시작해주세요. 반드시 한국어로 작성하세요."""
 
-    # ── Call external LLM API ──
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    endpoint = api_url.rstrip("/")
-    is_huggingface = "huggingface.co" in endpoint or "hf.space" in endpoint
-
-    if is_huggingface:
-        payload = {
-            "model": model_name,
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 4096,
-                "temperature": 0.3,
-                "return_full_text": False,
-            },
-        }
-    else:
-        if not endpoint.endswith("/chat/completions"):
-            if endpoint.endswith("/v1"):
-                endpoint += "/chat/completions"
-            elif not endpoint.endswith("/v1/chat/completions"):
-                endpoint += "/v1/chat/completions"
-
-        payload = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": "You are a professional project management report generator. Always respond in Korean. Do not use markdown syntax."},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 4096,
-        }
-
+    # ✅ DSLLM 호출 (ENV: CREDENTIAL_KEY_* / SYSTEM_NAME / USER_ID 를 dsllm_adapter가 사용)
     try:
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(endpoint, json=payload, headers=headers)
-            response.raise_for_status()
-            result = response.json()
+        content = dsllm_chat(
+            base_url=api_url,
+            model_name=model_name,
+            system_prompt="You are a professional project management report generator. Always respond in Korean. Do not use markdown syntax.",
+            user_prompt=prompt,
+            temperature=0.3,
+            max_tokens=4096,
+        )
 
-            if is_huggingface:
-                if isinstance(result, list) and len(result) > 0:
-                    content = result[0].get("generated_text", "Report generation failed.")
-                else:
-                    content = result.get("generated_text", str(result))
-            else:
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "Report generation failed.")
+        content = sanitize_llm_text(content)
 
-            # ── Parse sections ──
-            sections = {"overview": "", "task_analysis": "", "status_analysis": "", "next_steps": ""}
-            current_section = ""
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if "[섹션1" in stripped:
-                    current_section = "overview"
-                    continue
-                elif "[섹션2" in stripped:
-                    current_section = "task_analysis"
-                    continue
-                elif "[섹션3" in stripped:
-                    current_section = "status_analysis"
-                    continue
-                elif "[섹션4" in stripped:
-                    current_section = "next_steps"
-                    continue
-                if current_section:
-                    sections[current_section] += line + "\n"
+        # ✅ 섹션 파싱 (기존 로직 유지)
+        sections = {"overview": "", "task_analysis": "", "status_analysis": "", "next_steps": ""}
+        current_section = ""
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if "[섹션1" in stripped:
+                current_section = "overview"
+                continue
+            elif "[섹션2" in stripped:
+                current_section = "task_analysis"
+                continue
+            elif "[섹션3" in stripped:
+                current_section = "status_analysis"
+                continue
+            elif "[섹션4" in stripped:
+                current_section = "next_steps"
+                continue
 
-            # If no sections detected, put everything in overview
-            if not any(sections.values()):
-                sections["overview"] = content
+            if current_section:
+                sections[current_section] += line + "\n"
 
-            return {
-                "report": content,
-                "sections": sections,
-                "structured": structured,
-                "model": model_name,
-            }
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to AI model at {endpoint}. Please check the API URL.")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"AI API returned error {e.response.status_code}: {e.response.text[:300]}")
+        if not any(sections.values()):
+            sections["overview"] = content
+
+        report_payload = {
+            "project_id": body.project_id,
+            "report": content,
+            "sections": sections,
+            "structured": structured,
+            "model": model_name,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        # ✅ sidecar(state)에 저장해서 페이지 이동 후에도 재조회 가능하게
+        state.setdefault("reports", {})
+        state["reports"][str(body.project_id)] = report_payload
+        save_state(state)
+
+        return report_payload
+
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=502, detail=f"Cannot connect to DSLLM at {api_url}. Please check the API URL.")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="DSLLM request timed out.")
+    except requests.exceptions.HTTPError as e:
+        # DSLLM 응답이 4xx/5xx로 온 경우
+        raise HTTPException(status_code=502, detail=f"DSLLM returned HTTP error: {str(e)}")
     except Exception as e:
+        # 예: ENV 누락(RuntimeError), 파싱 실패 등
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
-# ─── Global Roadmap (all authorized projects) ───
+@app.get("/api/report/data/{project_id}")
+def get_report_data(
+    project_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    state = load_state()
+    check_project_access(db, state, project_id, user_id)
 
-@app.get("/api/roadmap/global")
-def get_global_roadmap(user_id: int = Query(...), view: str = Query(default="month")):
-    data = load_data()
-    today_str = date.today().isoformat()
-    authorized_pids = get_user_project_ids(data, user_id)
-    projects = [p for p in data.get("projects", []) if p["id"] in authorized_pids]
-    all_tasks = [t for t in data.get("tasks", []) if not t.get("archived_at")]
-    sub_projects = data.get("sub_projects", [])
-    items = []
+    reports = state.get("reports", {}) or {}
+    data = reports.get(str(project_id))
 
-    for project in projects:
-        pid = project["id"]
-        p_tasks = [t for t in all_tasks if t.get("project_id") == pid]
-        p_subs = [s for s in sub_projects if s.get("project_id") == pid]
+    if not data:
+        raise HTTPException(status_code=404, detail="Report not found. Please generate report first.")
 
-        active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
-        total = len(active_tasks)
-        done = len([t for t in active_tasks if t.get("status") == "done"])
-        if total > 0:
-            progress_sum = sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in active_tasks)
-            project_progress = round(progress_sum / total)
+    return data
+
+
+@app.delete("/api/report/data/{project_id}")
+def delete_report_data(
+    project_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    state = load_state()
+    check_project_access(db, state, project_id, user_id)
+
+    reports = state.get("reports", {}) or {}
+    if str(project_id) in reports:
+        del reports[str(project_id)]
+        state["reports"] = reports
+        save_state(state)
+
+    return {"message": "Report deleted"}
+
+# =========================
+# AI Project Q&A
+# =========================
+@app.post("/api/projects/{project_id}/ai-query")
+def generate_project_ai_query(
+    project_id: int,
+    req: ProjectAiQueryRequest,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    import requests
+
+    state = load_state()
+    check_project_access(db, state, project_id, user_id)
+
+    row = get_or_create_ai_setting(db)
+    api_url = (row.api_url or "").strip()
+    model_name = (row.model_name or "").strip()
+
+    is_preset = model_name in MODEL_CONFIGS
+
+    if not model_name:
+        raise HTTPException(400, "AI settings not configured. Please set model name in Settings.")
+    if (not api_url) and (not is_preset):
+        raise HTTPException(400, "AI settings not configured. Please set API URL or choose a preset model.")
+
+    p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    task_rows = db.query(Task).filter(Task.project_id == project_id, Task.archived_at.is_(None)).all()
+    tasks = [task_dict(t, state) for t in task_rows]
+
+    members = [m for m in state.get("project_members", []) if int(m.get("project_id")) == project_id]
+    sub_projects = [sp for sp in state.get("sub_projects", []) if int(sp.get("project_id")) == project_id]
+    all_attachments = state.get("attachments", [])
+
+    users_map = {u.id: user_dict(u, state) for u in db.query(User).all()}
+
+    task_details = []
+    for t in tasks:
+        assignees = [users_map.get(a, {}).get("username", f"User {a}") for a in (t.get("assignee_ids") or [])]
+
+        sp_name = ""
+        if t.get("sub_project_id"):
+            sp = next((s for s in sub_projects if int(s["id"]) == int(t["sub_project_id"])), None)
+            sp_name = sp["name"] if sp else ""
+
+        task_attachments = [a for a in all_attachments if int(a.get("task_id")) == int(t["id"])]
+
+        task_details.append({
+            "id": int(t["id"]),
+            "title": t.get("title", "") or "",
+            "description": t.get("description", "") or "",
+            "status": t.get("status", "todo") or "todo",
+            "priority": t.get("priority", "medium") or "medium",
+            "progress": t.get("progress", 0) or 0,
+            "start_date": t.get("start_date"),
+            "due_date": t.get("due_date"),
+            "assignees": assignees or [],
+            "sub_project": sp_name or "",
+            "tags": t.get("tags", []) or [],
+            "attachments": [
+                {
+                    "id": a.get("id"),
+                    "filename": a.get("filename", "") or "",
+                    "url": a.get("url", "") or "",
+                    "type": a.get("type", "url") or "url",
+                }
+                for a in task_attachments
+            ],
+        })
+
+    member_names = []
+    for m in members:
+        uid = int(m.get("user_id"))
+        u = users_map.get(uid)
+        if u:
+            member_names.append(f'{u["username"]} ({m.get("role", "member")})')
+
+    # ✅ 기간 파싱 → Task 필터
+    today = _today_kst()
+    window = _parse_time_window_from_query(req.query, today)
+    filtered_by_time = None
+    if window:
+        ws, we = window
+        filtered_by_time = [t for t in task_details if _task_overlaps_window(t, ws, we)]
+    else:
+        ws = we = None
+
+    prompt_tasks = filtered_by_time if (filtered_by_time is not None) else task_details
+
+    tasks_summary_lines = []
+    for t in prompt_tasks[:40]:
+        tasks_summary_lines.append(
+            f'{t["id"]} / {t["title"]} / {t["status"]} / {t["progress"]}% / {t["due_date"] or "미정"}'
+        )
+
+    context_str = f"""프로젝트명: {p.name}
+설명: {p.description or "없음"}
+
+Task 요약(최대 40개):
+{chr(10).join(tasks_summary_lines) if tasks_summary_lines else "Task 없음"}
+"""
+
+    period_hint = ""
+    if window:
+        period_hint = (
+            f"\n[기간 제약]\n"
+            f"사용자 질문이 요청한 기간은 {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()} 입니다.\n"
+            f"이 기간에 해당하는 Task만 관련 Task로 다루고, 기간 밖 Task는 절대 언급하지 마세요.\n"
+        )
+
+    # ✅✅ user prompt 강화: 섹션 태그 단독 줄 + 줄바꿈 강제
+    prompt = f"""당신은 전문 프로젝트 매니저 보조 AI입니다.
+아래 컨텍스트를 바탕으로 사용자의 질문에 답변해주세요.
+질문에 특정 기간/조건이 있으면, 그 조건에 해당하는 Task만 선택해서 답변하세요.
+무관한 Task는 절대 언급하지 마세요.{period_hint}
+
+[컨텍스트]
+{context_str}
+
+[질문]
+{req.query}
+
+[출력 규칙]
+- 반드시 4개 섹션을 순서대로 작성
+- 각 섹션 태그는 반드시 '단독 줄'로 출력 (예: [섹션1: 한줄요약])
+- 섹션 내용은 줄바꿈으로 구분 (가급적 '한 줄 = 한 문장')
+- 문장은 중간에 끊지 말고 반드시 마침표(또는 '다.')로 끝내기
+- 마크다운 금지: #, **, ```, 표(|---|) 금지
+
+[섹션1: 한줄요약]
+결론을 한 문장으로만 작성.
+
+[섹션2: 상세설명]
+근거/상황/주의사항을 6~12줄로 설명.
+컨텍스트 밖은 추측하지 말고 "알 수 없음"이라고 명시.
+
+[섹션3: 관련 Task]
+질문과 관련된 Task만 최대 8개.
+각 줄 형식: ID / 제목 / 상태 / 진행률 / 마감일
+없으면 "없음" 한 줄.
+
+[섹션4: 다음 액션]
+다음 액션 3~6개.
+각 액션은 한 줄씩 작성.
+"""
+
+    # ✅✅ system prompt 강화: 형식/줄바꿈 강제
+    system_prompt = """
+당신은 전문 프로젝트 매니저 보조 AI입니다.
+반드시 한국어로 답변하세요.
+마크다운(##, **, 표, 코드블록)을 절대 사용하지 마세요.
+각 섹션 태그([섹션1], [섹션2], [섹션3], [섹션4])는 반드시 단독 줄로 출력하세요.
+섹션 내용은 줄바꿈으로 구분하며, 가급적 한 줄 = 한 문장으로 작성하세요.
+문장 중간에 끊지 말고 반드시 마침표(또는 '다.')로 끝내세요.
+질문 조건(기간/상태/담당자 등)에 맞는 Task만 언급하세요. 조건 밖 Task는 절대 언급하지 마세요.
+""".strip()
+
+    try:
+        content = dsllm_chat(
+            base_url=api_url,
+            model_name=model_name,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            temperature=0.2,     # ✅ 안정성 ↑
+            max_tokens=4096,     # ✅ 끊김 ↓ (필요하면 4096)
+        )
+
+        # ✅✅ ai-query 전용 sanitize로 교체 (가독성 유지)
+        content = sanitize_llm_text_ai(content)
+
+        # ✅ 섹션 파싱
+        parsed = {"one_liner": "", "details": "", "key_schedule": "", "next_actions": ""}
+        current = ""
+        for line in content.split("\n"):
+            sline = line.strip()
+            if "[섹션1" in sline:
+                current = "one_liner"; continue
+            if "[섹션2" in sline:
+                current = "details"; continue
+            if "[섹션3" in sline:
+                current = "key_schedule"; continue
+            if "[섹션4" in sline:
+                current = "next_actions"; continue
+            if current:
+                parsed[current] += line + "\n"
+
+        parsed = {k: (v.strip() if v else "") for k, v in parsed.items()}
+        if not parsed["one_liner"]:
+            parsed["one_liner"] = (content[:200].strip() + ("…" if len(content) > 200 else "")) if content else ""
+            parsed["details"] = content
+
+        ids = _extract_task_ids_from_related_text(parsed.get("key_schedule", ""))
+
+        if window:
+            context_tasks = filtered_by_time
+        elif ids:
+            context_tasks = [t for t in task_details if int(t["id"]) in ids]
         else:
-            project_progress = 0
+            context_tasks = prompt_tasks[:15]
 
-        start_dates = [t["start_date"] for t in p_tasks if t.get("start_date")]
-        due_dates = [t["due_date"] for t in p_tasks if t.get("due_date")]
+        active_tasks = [t for t in context_tasks if t.get("status") != "hold"]
+        hold_tasks = [t for t in context_tasks if t.get("status") == "hold"]
+        done_tasks = [t for t in context_tasks if t.get("status") == "done"]
+        in_progress_tasks = [t for t in context_tasks if t.get("status") == "in_progress"]
+        todo_tasks = [t for t in context_tasks if t.get("status") == "todo"]
 
-        project_item = {
-            "id": f"project-{pid}",
-            "type": "project",
-            "name": project.get("name", ""),
-            "start_date": min(start_dates) if start_dates else None,
-            "due_date": max(due_dates) if due_dates else None,
-            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
-            "progress": project_progress,
-            "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
-            "children": [],
+        if len(active_tasks) > 0:
+            progress_sum = sum(
+                100 if t.get("status") == "done" else (t.get("progress", 0) or 0)
+                for t in active_tasks
+            )
+            overall_progress = round(progress_sum / len(active_tasks), 1)
+        else:
+            overall_progress = 0.0
+
+        db_record = ProjectAiQuery(
+            project_id=project_id,
+            user_id=user_id,
+            query=req.query,
+            raw_response=content,
+            model=model_name,
+            created_at=datetime.utcnow(),
+        )
+        db.add(db_record)
+        db.commit()
+        db.refresh(db_record)
+
+        context = {
+            "status_breakdown": {
+                "total": len(context_tasks),
+                "active": len(active_tasks),
+                "done": len(done_tasks),
+                "in_progress": len(in_progress_tasks),
+                "todo": len(todo_tasks),
+                "hold": len(hold_tasks),
+                "overall_progress": overall_progress,
+            },
+            "members": member_names,
+            "tasks": context_tasks,
+            "filter": {
+                "mode": "time_window" if window else ("ids" if ids else "fallback"),
+                "window_start": ws.isoformat() if window else None,
+                "window_end": we.isoformat() if window else None,
+                "task_ids": sorted(list(ids)) if ids else [],
+            },
         }
 
-        for sp in p_subs:
-            sp_tasks_filtered = [t for t in p_tasks if t.get("sub_project_id") == sp["id"]]
-            sp_all = [t for t in p_tasks if t.get("sub_project_id") == sp["id"]]
-            sp_active = [t for t in sp_all if t.get("status") != "hold"]
-            sp_total = len(sp_active)
-            sp_done = len([t for t in sp_active if t.get("status") == "done"])
-            if sp_total > 0:
-                sp_prog = round(sum(100 if t.get("status") == "done" else (t.get("progress", 0) or 0) for t in sp_active) / sp_total)
-            else:
-                sp_prog = 0
-            sp_starts = [t["start_date"] for t in sp_all if t.get("start_date")]
-            sp_dues = [t["due_date"] for t in sp_all if t.get("due_date")]
-            sp_item = {
-                "id": f"subproject-{sp['id']}",
-                "type": "subproject",
-                "name": sp.get("name", ""),
-                "start_date": min(sp_starts) if sp_starts else None,
-                "due_date": max(sp_dues) if sp_dues else None,
-                "status": "done" if sp_prog == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
-                "progress": sp_prog,
-                "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_prog < 100),
-                "children": [],
+        return {
+            "id": db_record.id,
+            "project_id": db_record.project_id,
+            "user_id": db_record.user_id,
+            "query": db_record.query,
+            "raw_response": db_record.raw_response,
+            "model": db_record.model,
+            "created_at": db_record.created_at.isoformat() if db_record.created_at else None,
+            "parsed_response": parsed,
+            "context": context,
+        }
+
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=502, detail=f"Cannot connect to DSLLM at {api_url}. Please check the API URL.")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="DSLLM request timed out.")
+    except requests.exceptions.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"DSLLM returned HTTP error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI query failed: {str(e)}")
+
+# AI Query History 조회
+@app.get("/api/projects/{project_id}/ai-queries")
+def get_project_ai_queries(
+    project_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    state = load_state()
+    check_project_access(db, state, project_id, user_id)
+
+    rows = (
+        db.query(ProjectAiQuery)
+        .filter(ProjectAiQuery.project_id == project_id)
+        .order_by(ProjectAiQuery.created_at.desc())
+        .all()
+    )
+
+    queries = []
+    for r in rows:
+        raw = getattr(r, "raw_response", None) or ""
+        one_liner = getattr(r, "one_liner", None)
+        details = getattr(r, "details", None)
+        key_schedule = getattr(r, "key_schedule", None)
+        next_actions = getattr(r, "next_actions", None)
+
+        # ✅ parsed_response를 프론트가 기대하는 형태로 생성 (없으면 raw_response로 fallback)
+        parsed_response = {
+            "one_liner": one_liner or (raw[:200].strip() + ("…" if len(raw) > 200 else "")) if raw else "",
+            "details": details or raw or "",
+            "key_schedule": key_schedule or "",
+            "next_actions": next_actions or "",
+        }
+
+        queries.append(
+            {
+                "id": r.id,
+                "project_id": r.project_id,
+                "user_id": r.user_id,
+                "query": r.query,
+
+                # ✅ 기존 호환 필드들 유지
+                "response": getattr(r, "response", None),
+                "raw_response": raw,
+                "model": getattr(r, "model", None),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+
+                # ✅ 확장 컬럼(있을 때만)
+                "one_liner": one_liner,
+                "details": details,
+                "key_schedule": key_schedule,
+                "next_actions": next_actions,
+                "context_snapshot": getattr(r, "context_snapshot", None),
+
+                # ✅ 프론트에서 바로 쓰게 추가
+                "parsed_response": parsed_response,
             }
-            for t in sp_tasks_filtered:
-                t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
-                sp_item["children"].append({
-                    "id": f"task-{t['id']}", "type": "task", "name": t.get("title", ""),
-                    "start_date": t.get("start_date"), "due_date": t.get("due_date"),
-                    "status": t.get("status", "todo"), "progress": t.get("progress", 0),
-                    "overdue": t_overdue, "assignee_ids": t.get("assignee_ids", []),
-                })
-            project_item["children"].append(sp_item)
+        )
 
-        root_tasks = [t for t in p_tasks if not t.get("sub_project_id")]
-        for t in root_tasks:
-            t_overdue = bool(t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done")
-            project_item["children"].append({
-                "id": f"task-{t['id']}", "type": "task", "name": t.get("title", ""),
-                "start_date": t.get("start_date"), "due_date": t.get("due_date"),
-                "status": t.get("status", "todo"), "progress": t.get("progress", 0),
-                "overdue": t_overdue, "assignee_ids": t.get("assignee_ids", []),
-            })
+    return {"queries": queries}
 
-        items.append(project_item)
-
-    return {"view": view, "items": items}
-
-
-# ─── Admin Endpoints ───
-
+# =========================
+# Admin APIs
+# =========================
 @app.get("/api/admin/users")
-def admin_get_users(user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    return {"users": data.get("users", [])}
+def admin_get_users(user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+    users = db.query(User).all()
+    return {"users": [user_dict(u, state) for u in users]}
 
 @app.patch("/api/admin/users/{target_id}/toggle-active")
-def admin_toggle_user_active(target_id: int, user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    users = data.get("users", [])
-    user = next((u for u in users if u["id"] == target_id), None)
-    if not user:
+def admin_toggle_user_active(target_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    target = db.query(User).filter(User.id == target_id).first()
+    if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    user["is_active"] = not user.get("is_active", True)
-    save_data(data)
-    return user
+
+    # 슈퍼운영자 비활성화 방지
+    if (target.loginid or "").lower() == SUPER_OWNER_LOGINID.lower():
+        raise HTTPException(status_code=400, detail="Super owner 계정은 비활성화할 수 없습니다.")
+
+    target.is_active = not bool(target.is_active)
+    db.commit()
+    db.refresh(target)
+    return user_dict(target, state)
 
 
-# ─── Group Endpoints ───
+# =========================
+# Groups (sidecar)
+# - 레거시 /api/groups + 신규 /api/admin/groups 둘 다 지원
+# =========================
+def _group_to_out(g: dict, db: Session, state: dict) -> dict:
+    users = [user_dict(u, state) for u in db.query(User).all()]
+    matched = [u for u in users if u.get("group_name") == g.get("name")]
+    return {**g, "matched_count": len(matched)}
 
-class GroupCreate(BaseModel):
-    name: str
+@app.get("/api/groups")
+def get_groups(db: Session = Depends(get_db)):
+    state = load_state()
+    groups = state.get("groups", [])
+    return {"groups": [_group_to_out(g, db, state) for g in groups]}
 
-@app.get("/api/admin/groups")
-def admin_get_groups(user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    groups = data.get("groups", [])
-    users = data.get("users", [])
-    # Enrich each group with the count of matching users
-    result = []
-    for g in groups:
-        matched = [u for u in users if u.get("group_name") == g["name"]]
-        result.append({**g, "matched_count": len(matched)})
-    return {"groups": result}
+@app.post("/api/groups")
+def create_group_legacy(group: GroupCreate, db: Session = Depends(get_db)):
+    state = load_state()
+    groups = state.get("groups", [])
+    if any(g.get("name") == group.name for g in groups):
+        raise HTTPException(status_code=400, detail="Group name already exists")
 
-@app.post("/api/admin/groups")
-def admin_create_group(group: GroupCreate, user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    groups = data.get("groups", [])
-    # Check duplicate group name
-    if any(g["name"] == group.name for g in groups):
-        raise HTTPException(status_code=400, detail=f"그룹명 '{group.name}'이(가) 이미 등록되어 있습니다.")
     new_group = {
         "id": next_id(groups),
         "name": group.name,
+        "description": group.description,
+        "is_active": True,
         "created_at": datetime.now().isoformat(),
     }
     groups.append(new_group)
-    data["groups"] = groups
-    save_data(data)
-    # Return with matched_count
-    users = data.get("users", [])
-    matched = [u for u in users if u.get("group_name") == group.name]
-    return {**new_group, "matched_count": len(matched)}
+    state["groups"] = groups
+    save_state(state)
+    return _group_to_out(new_group, db, state)
+
+@app.patch("/api/groups/{group_id}")
+def update_group_legacy(group_id: int, body: GroupUpdate, db: Session = Depends(get_db)):
+    state = load_state()
+    groups = state.get("groups", [])
+    for i, g in enumerate(groups):
+        if int(g.get("id")) == group_id:
+            groups[i].update(body.model_dump(exclude_unset=True))
+            state["groups"] = groups
+            save_state(state)
+            return _group_to_out(groups[i], db, state)
+    raise HTTPException(status_code=404, detail="Group not found")
+
+@app.get("/api/admin/groups")
+def admin_get_groups(user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+    return get_groups(db)
+
+@app.post("/api/admin/groups")
+def admin_create_group(group: GroupCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    groups = state.get("groups", [])
+    if any(g.get("name") == group.name for g in groups):
+        raise HTTPException(status_code=400, detail=f"그룹명 '{group.name}'이(가) 이미 등록되어 있습니다.")
+
+    new_group = {
+        "id": next_id(groups),
+        "name": group.name,
+        "description": group.description,
+        "is_active": True,
+        "created_at": datetime.now().isoformat(),
+    }
+    groups.append(new_group)
+    state["groups"] = groups
+    save_state(state)
+    return _group_to_out(new_group, db, state)
 
 @app.delete("/api/admin/groups/{group_id}")
-def admin_delete_group(group_id: int, user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    groups = data.get("groups", [])
-    data["groups"] = [g for g in groups if g["id"] != group_id]
-    save_data(data)
+def admin_delete_group(group_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+    state["groups"] = [g for g in state.get("groups", []) if int(g.get("id")) != group_id]
+    save_state(state)
     return {"message": "Group deleted"}
 
 @app.post("/api/admin/groups/{group_id}/apply")
-def admin_apply_group(group_id: int, user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    groups = data.get("groups", [])
-    group = next((g for g in groups if g["id"] == group_id), None)
+def admin_apply_group(group_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    groups = state.get("groups", [])
+    group = next((g for g in groups if int(g.get("id")) == group_id), None)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
-    users = data.get("users", [])
+
+    target_group_name = group.get("name")
     activated = 0
-    for user in users:
-        if user.get("group_name") == group["name"]:
-            if not user.get("is_active", True):
-                user["is_active"] = True
+
+    users = db.query(User).all()
+    for u in users:
+        umeta = get_user_meta(state, u.id)
+        if umeta.get("group_name") == target_group_name:
+            if not bool(u.is_active):
+                u.is_active = True
                 activated += 1
-    save_data(data)
-    total_matched = sum(1 for u in users if u.get("group_name") == group["name"])
-    return {"message": f"Activated {activated} users (total matched: {total_matched})", "activated": activated, "total_matched": total_matched}
+
+    db.commit()
+
+    total_matched = 0
+    for u in users:
+        if get_user_meta(state, u.id).get("group_name") == target_group_name:
+            total_matched += 1
+
+    return {
+        "message": f"Activated {activated} users (total matched: {total_matched})",
+        "activated": activated,
+        "total_matched": total_matched,
+    }
 
 
-
-# ─── Shortcut Endpoints ───
-
-class ShortcutCreate(BaseModel):
-    name: str
-    url: str
-    icon_text: Optional[str] = None
-    icon_color: Optional[str] = "#2955FF"
-    order: Optional[int] = 0
-    open_new_tab: Optional[bool] = True
-
-class ShortcutUpdate(BaseModel):
-    name: Optional[str] = None
-    url: Optional[str] = None
-    icon_text: Optional[str] = None
-    icon_color: Optional[str] = None
-    order: Optional[int] = None
-    open_new_tab: Optional[bool] = None
-    active: Optional[bool] = None
-
+# =========================
+# Shortcuts (sidecar)
+# =========================
 @app.get("/api/shortcuts")
 def get_shortcuts():
-    data = load_data()
-    shortcuts = data.get("shortcuts", [])
-    return {"shortcuts": shortcuts}
+    state = load_state()
+    return {"shortcuts": state.get("shortcuts", [])}
 
 @app.post("/api/shortcuts")
-def create_shortcut(shortcut: ShortcutCreate, user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    shortcuts = data.get("shortcuts", [])
+def create_shortcut(shortcut: ShortcutCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    shortcuts = state.get("shortcuts", [])
     new_sc = {
         "id": next_id(shortcuts),
         "name": shortcut.name,
         "url": shortcut.url,
-        "icon_text": shortcut.icon_text or shortcut.name[0].upper(),
-        "icon_color": shortcut.icon_color,
-        "order": shortcut.order if shortcut.order else len(shortcuts),
-        "open_new_tab": shortcut.open_new_tab,
+        "icon_text": shortcut.icon_text or (shortcut.name[:1].upper() if shortcut.name else "S"),
+        "icon_color": shortcut.icon_color or "#2955FF",
+        "order": shortcut.order if shortcut.order is not None else len(shortcuts),
+        "open_new_tab": bool(shortcut.open_new_tab),
         "active": True,
         "created_at": datetime.now().isoformat(),
     }
     shortcuts.append(new_sc)
-    data["shortcuts"] = shortcuts
-    save_data(data)
+    state["shortcuts"] = shortcuts
+    save_state(state)
     return new_sc
 
 @app.patch("/api/shortcuts/{shortcut_id}")
-def update_shortcut(shortcut_id: int, updates: ShortcutUpdate, user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    shortcuts = data.get("shortcuts", [])
-    sc = next((s for s in shortcuts if s["id"] == shortcut_id), None)
+def update_shortcut(shortcut_id: int, updates: ShortcutUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    shortcuts = state.get("shortcuts", [])
+    sc = next((s for s in shortcuts if int(s.get("id")) == shortcut_id), None)
     if not sc:
         raise HTTPException(status_code=404, detail="Shortcut not found")
-    for key, val in updates.dict(exclude_unset=True).items():
+
+    for key, val in updates.model_dump(exclude_unset=True).items():
         sc[key] = val
-    save_data(data)
+
+    save_state(state)
     return sc
 
 @app.delete("/api/shortcuts/{shortcut_id}")
-def delete_shortcut(shortcut_id: int, user_id: int = Query(...)):
-    data = load_data()
-    require_admin(data, user_id)
-    shortcuts = data.get("shortcuts", [])
-    data["shortcuts"] = [s for s in shortcuts if s["id"] != shortcut_id]
-    save_data(data)
+def delete_shortcut(shortcut_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+
+    state["shortcuts"] = [s for s in state.get("shortcuts", []) if int(s.get("id")) != shortcut_id]
+    save_state(state)
     return {"message": "Shortcut deleted"}
 
 
-# Initialize stub data if file doesn't exist
-if not os.path.exists(DATA_FILE):
-    save_data(load_data())
-
+# =========================
+# Run
+# =========================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+    # ✅ 네 기존 사내 포트 유지(8085)
+    uvicorn.run("main:app", host="0.0.0.0", port=8085, reload=True)
