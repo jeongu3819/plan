@@ -245,16 +245,55 @@ const AdminPage: React.FC = () => {
   const [newLoginId, setNewLoginId] = useState('');
   const [newUserRole, setNewUserRole] = useState('member');
 
-  // D-2: Knox search state
+  // D-2: Knox search state (Tab 0 inline)
   const [knoxSearch, setKnoxSearch] = useState('');
   const [knoxResults, setKnoxResults] = useState<any[]>([]);
   const [knoxSearching, setKnoxSearching] = useState(false);
 
-  const handleKnoxSearch = async () => {
-    if (!knoxSearch.trim()) return;
+  // Knox search in create user dialog
+  const [dialogKnoxQuery, setDialogKnoxQuery] = useState('');
+  const [dialogKnoxResults, setDialogKnoxResults] = useState<any[]>([]);
+  const [dialogKnoxSearching, setDialogKnoxSearching] = useState(false);
+
+  const handleDialogKnoxSearch = async () => {
+    if (!dialogKnoxQuery.trim()) return;
+    setDialogKnoxSearching(true);
+    try {
+      const results = await api.searchKnoxEmployees({ fullName: dialogKnoxQuery.trim() });
+      setDialogKnoxResults(results);
+    } catch {
+      setDialogKnoxResults([]);
+    } finally {
+      setDialogKnoxSearching(false);
+    }
+  };
+
+  // Knox search for group management (Tab 1)
+  const [groupKnoxQuery, setGroupKnoxQuery] = useState('');
+  const [groupKnoxResults, setGroupKnoxResults] = useState<any[]>([]);
+  const [groupKnoxSearching, setGroupKnoxSearching] = useState(false);
+
+  const handleGroupKnoxSearch = async () => {
+    if (!groupKnoxQuery.trim()) return;
+    setGroupKnoxSearching(true);
+    try {
+      const results = await api.searchKnoxEmployees({ fullName: groupKnoxQuery.trim() });
+      // Extract unique department names from results
+      setGroupKnoxResults(results);
+    } catch {
+      setGroupKnoxResults([]);
+    } finally {
+      setGroupKnoxSearching(false);
+    }
+  };
+
+  const handleKnoxSearch = async (searchOverride?: string) => {
+    const query = searchOverride || knoxSearch || userSearch;
+    if (!query.trim()) return;
+    setKnoxSearch(query.trim());
     setKnoxSearching(true);
     try {
-      const results = await api.searchKnoxEmployees({ fullName: knoxSearch.trim() });
+      const results = await api.searchKnoxEmployees({ fullName: query.trim() });
       setKnoxResults(results);
     } catch (err: any) {
       alert(err?.response?.data?.detail || 'Knox 검색 실패');
@@ -417,11 +456,26 @@ const AdminPage: React.FC = () => {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
             <TextField
               size="small"
-              placeholder="이름 또는 ID로 검색..."
+              placeholder="이름 또는 ID로 검색 (Enter: Knox 사내 검색)"
               value={userSearch}
               onChange={e => setUserSearch(e.target.value)}
-              sx={{ width: 300 }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && userSearch.trim()) {
+                  handleKnoxSearch();
+                }
+              }}
+              sx={{ width: 380 }}
             />
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={knoxSearching ? <CircularProgress size={16} /> : <SearchIcon />}
+              onClick={() => { if (userSearch.trim()) handleKnoxSearch(userSearch.trim()); }}
+              disabled={knoxSearching || !userSearch.trim()}
+              sx={{ textTransform: 'none', fontWeight: 600 }}
+            >
+              Knox 검색
+            </Button>
             <Button
               variant="contained"
               size="small"
@@ -581,38 +635,12 @@ const AdminPage: React.FC = () => {
             </Table>
           </TableContainer>
 
-          {/* D-2: Knox Search Panel */}
-          <Paper
-            sx={{ mt: 3, p: 2.5, borderRadius: 2, border: '1px solid #E5E7EB' }}
-            elevation={0}
-          >
-            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
-              Knox 사내 구성원 검색
-            </Typography>
-            <Typography variant="body2" sx={{ color: '#6B7280', mb: 2, fontSize: '0.85rem' }}>
-              사내 시스템(Knox)에서 직원을 검색하여 사이트에 추가합니다.
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-              <TextField
-                size="small"
-                placeholder="이름으로 검색..."
-                value={knoxSearch}
-                onChange={e => setKnoxSearch(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleKnoxSearch()}
-                sx={{ width: 300 }}
-              />
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={knoxSearching ? <CircularProgress size={16} /> : <SearchIcon />}
-                onClick={handleKnoxSearch}
-                disabled={knoxSearching || !knoxSearch.trim()}
-                sx={{ textTransform: 'none', fontWeight: 600 }}
-              >
-                검색
-              </Button>
-            </Box>
-            {knoxResults.length > 0 && (
+          {/* Knox 검색 결과 (사용자 테이블 바로 아래) */}
+          {knoxResults.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: '#5B21B6' }}>
+                Knox 사내 검색 결과 ({knoxResults.length}명) — "{knoxSearch}"
+              </Typography>
               <TableContainer
                 component={Paper}
                 sx={{ borderRadius: 2, border: '1px solid #E5E7EB' }}
@@ -620,7 +648,7 @@ const AdminPage: React.FC = () => {
               >
                 <Table size="small">
                   <TableHead>
-                    <TableRow sx={{ bgcolor: '#F9FAFB' }}>
+                    <TableRow sx={{ bgcolor: '#F5F3FF' }}>
                       <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>이름</TableCell>
                       <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>ID</TableCell>
                       <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>부서</TableCell>
@@ -681,8 +709,8 @@ const AdminPage: React.FC = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
-            )}
-          </Paper>
+            </Box>
+          )}
         </Box>
       )}
 
@@ -695,7 +723,7 @@ const AdminPage: React.FC = () => {
             <strong>group_name</strong> 필드로 매칭됩니다.
           </Alert>
 
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
             <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
               등록된 그룹 목록
             </Typography>
@@ -709,6 +737,107 @@ const AdminPage: React.FC = () => {
               그룹 등록
             </Button>
           </Box>
+
+          {/* Knox 부서/그룹 검색 */}
+          <Paper sx={{ p: 2, mb: 2, borderRadius: 2, border: '1px solid #E5E7EB' }} elevation={0}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: '#5B21B6' }}>
+              Knox 사내 부서 검색
+            </Typography>
+            <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.8rem', mb: 1.5 }}>
+              사내 구성원을 검색하면 소속 부서를 확인하고 그룹으로 등록할 수 있습니다.
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+              <TextField
+                size="small"
+                placeholder="사내 이름으로 검색..."
+                value={groupKnoxQuery}
+                onChange={e => setGroupKnoxQuery(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleGroupKnoxSearch()}
+                sx={{ width: 300 }}
+              />
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={groupKnoxSearching ? <CircularProgress size={14} /> : <SearchIcon />}
+                onClick={handleGroupKnoxSearch}
+                disabled={groupKnoxSearching || !groupKnoxQuery.trim()}
+                sx={{ textTransform: 'none', fontWeight: 600 }}
+              >
+                검색
+              </Button>
+            </Box>
+            {groupKnoxResults.length > 0 && (() => {
+              // Extract unique departments
+              const deptSet = new Map<string, number>();
+              groupKnoxResults.forEach((emp: any) => {
+                const dept = emp.deptName || emp.deptname || emp.department || '';
+                if (dept) deptSet.set(dept, (deptSet.get(dept) || 0) + 1);
+              });
+              const depts = Array.from(deptSet.entries());
+              return (
+                <Box>
+                  <Typography variant="caption" sx={{ color: '#6B7280', mb: 1, display: 'block' }}>
+                    검색된 부서 ({depts.length}개)
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+                    {depts.map(([dept, count]) => {
+                      const alreadyExists = groups.some(g => g.name === dept);
+                      return (
+                        <Chip
+                          key={dept}
+                          label={`${dept} (${count}명)`}
+                          size="small"
+                          onClick={() => {
+                            if (!alreadyExists) {
+                              setGroupName(dept);
+                              setGroupDialogOpen(true);
+                            }
+                          }}
+                          sx={{
+                            cursor: alreadyExists ? 'default' : 'pointer',
+                            fontWeight: 600,
+                            fontSize: '0.75rem',
+                            bgcolor: alreadyExists ? '#DCFCE7' : '#EDE9FE',
+                            color: alreadyExists ? '#22C55E' : '#7C3AED',
+                            border: alreadyExists ? '1px solid #22C55E40' : '1px solid #8B5CF640',
+                            '&:hover': alreadyExists ? {} : { bgcolor: '#DDD6FE' },
+                          }}
+                          deleteIcon={alreadyExists ? undefined : <AddIcon sx={{ fontSize: '14px !important' }} />}
+                          onDelete={alreadyExists ? undefined : () => {
+                            setGroupName(dept);
+                            setGroupDialogOpen(true);
+                          }}
+                        />
+                      );
+                    })}
+                  </Box>
+                  <Typography variant="caption" sx={{ color: '#6B7280', mb: 1, display: 'block' }}>
+                    검색된 구성원 ({groupKnoxResults.length}명)
+                  </Typography>
+                  <TableContainer component={Paper} sx={{ borderRadius: 1, border: '1px solid #E5E7EB', maxHeight: 200 }} elevation={0}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow sx={{ bgcolor: '#F5F3FF' }}>
+                          <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>이름</TableCell>
+                          <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>ID</TableCell>
+                          <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>부서</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {groupKnoxResults.slice(0, 20).map((emp: any, idx: number) => (
+                          <TableRow key={idx}>
+                            <TableCell sx={{ fontSize: '0.8rem' }}>{emp.fullName || emp.username || emp.name || '-'}</TableCell>
+                            <TableCell sx={{ fontSize: '0.8rem', color: '#6B7280' }}>{(emp.loginid || emp.login_id || emp.id || '').toString().toLowerCase()}</TableCell>
+                            <TableCell sx={{ fontSize: '0.8rem', color: '#6B7280' }}>{emp.deptName || emp.deptname || emp.department || '-'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              );
+            })()}
+          </Paper>
 
           {groups.length === 0 ? (
             <Alert severity="warning" sx={{ borderRadius: 2 }}>
@@ -1067,11 +1196,11 @@ const AdminPage: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* ── D-1: Create User Dialog ── */}
+      {/* ── D-1: Create User Dialog (with Knox search) ── */}
       <Dialog
         open={createUserDialogOpen}
-        onClose={() => setCreateUserDialogOpen(false)}
-        maxWidth="xs"
+        onClose={() => { setCreateUserDialogOpen(false); setDialogKnoxResults([]); setDialogKnoxQuery(''); }}
+        maxWidth="sm"
         fullWidth
         PaperProps={{ sx: { borderRadius: 3 } }}
       >
@@ -1082,21 +1211,91 @@ const AdminPage: React.FC = () => {
           </Box>
         </DialogTitle>
         <DialogContent>
+          {/* Knox 사내 검색 */}
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, mt: 1, color: '#5B21B6' }}>
+            Knox 사내 검색으로 추가
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+            <TextField
+              size="small"
+              fullWidth
+              placeholder="사내 이름으로 검색..."
+              value={dialogKnoxQuery}
+              onChange={e => setDialogKnoxQuery(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleDialogKnoxSearch()}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={dialogKnoxSearching ? <CircularProgress size={14} /> : <SearchIcon />}
+              onClick={handleDialogKnoxSearch}
+              disabled={dialogKnoxSearching || !dialogKnoxQuery.trim()}
+              sx={{ textTransform: 'none', minWidth: 80 }}
+            >
+              검색
+            </Button>
+          </Box>
+          {dialogKnoxResults.length > 0 && (
+            <Box sx={{ maxHeight: 200, overflowY: 'auto', mb: 2, border: '1px solid #E5E7EB', borderRadius: 1 }}>
+              {dialogKnoxResults.map((emp: any, idx: number) => {
+                const lid = (emp.loginid || emp.login_id || emp.id || '').toString().toLowerCase();
+                const name = emp.fullName || emp.username || emp.name || lid;
+                const dept = emp.deptName || emp.deptname || emp.department || '';
+                const isRegistered = adminUsers.some(u => (u.loginid || '').toLowerCase() === lid);
+                return (
+                  <Box
+                    key={idx}
+                    sx={{
+                      px: 1.5, py: 0.8,
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      borderBottom: '1px solid #F3F4F6',
+                      '&:hover': { bgcolor: '#F9FAFB' },
+                      cursor: isRegistered ? 'default' : 'pointer',
+                    }}
+                    onClick={() => {
+                      if (!isRegistered) {
+                        setNewUsername(name);
+                        setNewLoginId(lid);
+                        setDialogKnoxResults([]);
+                      }
+                    }}
+                  >
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.85rem' }}>{name}</Typography>
+                      <Typography variant="caption" sx={{ color: '#9CA3AF' }}>{lid} {dept ? `· ${dept}` : ''}</Typography>
+                    </Box>
+                    {isRegistered ? (
+                      <Chip label="등록됨" size="small" sx={{ fontSize: '0.65rem', bgcolor: '#DCFCE7', color: '#22C55E' }} />
+                    ) : (
+                      <Typography variant="caption" sx={{ color: '#2955FF', fontWeight: 600 }}>선택</Typography>
+                    )}
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+
+          {/* 직접 입력 */}
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, color: '#374151' }}>
+            직접 입력
+          </Typography>
           <TextField
             fullWidth
             label="이름 *"
+            size="small"
             value={newUsername}
             onChange={e => setNewUsername(e.target.value)}
             placeholder="예: 홍길동"
-            sx={{ mt: 1, mb: 2 }}
+            sx={{ mb: 1.5 }}
           />
           <TextField
             fullWidth
             label="Login ID *"
+            size="small"
             value={newLoginId}
             onChange={e => setNewLoginId(e.target.value)}
             placeholder="예: gildong.hong"
-            sx={{ mb: 2 }}
+            sx={{ mb: 1.5 }}
           />
           <Select
             fullWidth
@@ -1112,7 +1311,7 @@ const AdminPage: React.FC = () => {
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
           <Button
-            onClick={() => setCreateUserDialogOpen(false)}
+            onClick={() => { setCreateUserDialogOpen(false); setDialogKnoxResults([]); setDialogKnoxQuery(''); }}
             sx={{ textTransform: 'none' }}
           >
             취소

@@ -767,8 +767,26 @@ export const api = {
     const res = await client.get(`/projects/${projectId}/list/order`);
     return res.data;
   },
+  getAllListOrders: async (projectId: number): Promise<Record<string, number[]>> => {
+    const res = await client.get(`/projects/${projectId}/list/all-orders`);
+    return res.data;
+  },
   saveListOrder: async (projectId: number, order: number[]): Promise<void> => {
     await client.put(`/projects/${projectId}/list/order`, { order });
+  },
+  getSubProjectOrder: async (projectId: number): Promise<{ order: number[] }> => {
+    const res = await client.get(`/projects/${projectId}/subprojects/order`);
+    return res.data;
+  },
+  saveSubProjectOrder: async (projectId: number, order: number[]): Promise<void> => {
+    await client.put(`/projects/${projectId}/subprojects/order`, { order });
+  },
+  getSpTaskOrder: async (subId: number): Promise<{ order: number[] }> => {
+    const res = await client.get(`/subprojects/${subId}/tasks/order`);
+    return res.data;
+  },
+  saveSpTaskOrder: async (subId: number, order: number[]): Promise<void> => {
+    await client.put(`/subprojects/${subId}/tasks/order`, { order });
   },
 
   // =========================

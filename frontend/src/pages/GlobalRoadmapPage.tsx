@@ -571,8 +571,8 @@ const GlobalRoadmapPage: React.FC = () => {
             >
               <Box
                 sx={{
-                  width: 300,
-                  minWidth: 300,
+                  width: leftPanelWidth,
+                  minWidth: leftPanelWidth,
                   flexShrink: 0,
                   display: 'flex',
                   alignItems: 'center',

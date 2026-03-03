@@ -1586,6 +1586,21 @@ def get_list_order(project_id: int):
     orders = state.get("list_orders", {})
     return {"order": orders.get(str(project_id), [])}
 
+@app.get("/api/projects/{project_id}/list/all-orders")
+def get_all_list_orders(project_id: int):
+    """Return all order keys for a project (root tasks, subproject order, sp task orders)"""
+    state = load_state()
+    orders = state.get("list_orders", {})
+    result = {
+        "root": orders.get(str(project_id), []),
+        "sp_order": orders.get(f"sp_{project_id}", []),
+    }
+    # Collect all sptask_* orders
+    for key, val in orders.items():
+        if key.startswith("sptask_"):
+            result[key] = val
+    return result
+
 @app.put("/api/projects/{project_id}/list/order")
 def save_list_order(project_id: int, body: ListOrderUpdate):
     state = load_state()
@@ -1594,6 +1609,36 @@ def save_list_order(project_id: int, body: ListOrderUpdate):
     state["list_orders"][str(project_id)] = body.order
     save_state(state)
     return {"message": "Order saved"}
+
+@app.get("/api/projects/{project_id}/subprojects/order")
+def get_subproject_order(project_id: int):
+    state = load_state()
+    orders = state.get("list_orders", {})
+    return {"order": orders.get(f"sp_{project_id}", [])}
+
+@app.put("/api/projects/{project_id}/subprojects/order")
+def save_subproject_order(project_id: int, body: ListOrderUpdate):
+    state = load_state()
+    if "list_orders" not in state:
+        state["list_orders"] = {}
+    state["list_orders"][f"sp_{project_id}"] = body.order
+    save_state(state)
+    return {"message": "Subproject order saved"}
+
+@app.get("/api/subprojects/{sub_id}/tasks/order")
+def get_sp_task_order(sub_id: int):
+    state = load_state()
+    orders = state.get("list_orders", {})
+    return {"order": orders.get(f"sptask_{sub_id}", [])}
+
+@app.put("/api/subprojects/{sub_id}/tasks/order")
+def save_sp_task_order(sub_id: int, body: ListOrderUpdate):
+    state = load_state()
+    if "list_orders" not in state:
+        state["list_orders"] = {}
+    state["list_orders"][f"sptask_{sub_id}"] = body.order
+    save_state(state)
+    return {"message": "SP task order saved"}
 
 # =========================
 # SubProjects (C-2: DB)

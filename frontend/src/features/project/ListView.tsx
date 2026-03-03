@@ -176,6 +176,76 @@ const SortableTaskRow: React.FC<{
   );
 };
 
+// Sortable SubProject header row
+const SortableSubProjectRow: React.FC<{
+  subProject: SubProject;
+  taskCount: number;
+  isCollapsed: boolean;
+  onToggle: () => void;
+}> = ({ subProject, taskCount, isCollapsed, onToggle }) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `sp-${subProject.id}`,
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      onClick={onToggle}
+      sx={{
+        cursor: 'pointer',
+        bgcolor: 'rgba(139,92,246,0.08)',
+        '&:hover': { bgcolor: '#F0EBFF' },
+        '& td': { py: 1.2, borderColor: '#E5E7EB' },
+      }}
+    >
+      <TableCell colSpan={5}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box
+            {...attributes}
+            {...listeners}
+            onClick={(e) => e.stopPropagation()}
+            sx={{ cursor: 'grab', display: 'flex', alignItems: 'center', color: '#B0A4D0', '&:hover': { color: '#8B5CF6' } }}
+          >
+            <DragIndicatorIcon sx={{ fontSize: 18 }} />
+          </Box>
+          <IconButton size="small" sx={{ p: 0.3 }}>
+            {isCollapsed ? (
+              <ExpandMoreIcon sx={{ fontSize: 18 }} />
+            ) : (
+              <ExpandLessIcon sx={{ fontSize: 18 }} />
+            )}
+          </IconButton>
+          <FolderSpecialIcon sx={{ fontSize: 18, color: '#8B5CF6' }} />
+          <Typography
+            variant="body2"
+            sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#5B21B6' }}
+          >
+            {subProject.name}
+          </Typography>
+          <Chip
+            label={`${taskCount} task${taskCount !== 1 ? 's' : ''}`}
+            size="small"
+            sx={{
+              height: 20,
+              fontSize: '0.65rem',
+              fontWeight: 600,
+              bgcolor: '#EDE9FE',
+              color: '#7C3AED',
+            }}
+          />
+        </Box>
+      </TableCell>
+    </TableRow>
+  );
+};
+
 const ListView: React.FC<ListViewProps> = ({ projectId }) => {
   const openDrawer = useAppStore(state => state.openDrawer);
   const currentUserId = useAppStore(state => state.currentUserId);
@@ -194,17 +264,31 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
     queryFn: () => api.getSubProjects(projectId),
   });
 
-  // B-1: Load saved order
-  const { data: savedOrderData } = useQuery({
-    queryKey: ['listOrder', projectId],
-    queryFn: () => api.getListOrder(projectId),
+  // Load all orders at once (root tasks, sp order, sp task orders)
+  const { data: allOrders } = useQuery({
+    queryKey: ['allListOrders', projectId],
+    queryFn: () => api.getAllListOrders(projectId),
   });
 
-  // B-1: Save order mutation
   const saveOrderMutation = useMutation({
     mutationFn: (order: number[]) => api.saveListOrder(projectId, order),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['listOrder', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['allListOrders', projectId] });
+    },
+  });
+
+  const saveSpOrderMutation = useMutation({
+    mutationFn: (order: number[]) => api.saveSubProjectOrder(projectId, order),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allListOrders', projectId] });
+    },
+  });
+
+  const saveSpTaskOrderMutation = useMutation({
+    mutationFn: ({ subId, order }: { subId: number; order: number[] }) =>
+      api.saveSpTaskOrder(subId, order),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['allListOrders', projectId] });
     },
   });
 
@@ -222,11 +306,12 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
     });
   }, []);
 
-  const sortTasks = useCallback(
-    (taskList: Task[]): Task[] => {
+  // Sort tasks with optional orderKey for subproject-specific ordering
+  const sortTasksWithKey = useCallback(
+    (taskList: Task[], orderKey?: string): Task[] => {
       if (sortField === 'default') {
-        // B-1: Apply saved order if available
-        const savedOrder = savedOrderData?.order;
+        const key = orderKey || 'root';
+        const savedOrder = allOrders?.[key];
         if (savedOrder && savedOrder.length > 0) {
           const orderMap = new Map<number, number>();
           savedOrder.forEach((id: number, idx: number) => orderMap.set(id, idx));
@@ -270,7 +355,12 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
         return sortDirection === 'desc' ? -cmp : cmp;
       });
     },
-    [sortField, sortDirection, savedOrderData]
+    [sortField, sortDirection, allOrders]
+  );
+
+  const sortTasks = useCallback(
+    (taskList: Task[]): Task[] => sortTasksWithKey(taskList),
+    [sortTasksWithKey]
   );
 
   const handleHeaderSort = useCallback(
@@ -285,37 +375,80 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
     [sortField]
   );
 
-  // Group tasks by subproject
+  // Group tasks by subproject (with saved order)
   const groupedTasks = useMemo(() => {
     const allTasks = tasks || [];
     const rootTasks = allTasks.filter(t => !t.sub_project_id);
-    const subGroups = subProjects.map(sp => ({
+
+    // Apply saved subproject order
+    let orderedSps = [...subProjects];
+    const spOrder = allOrders?.sp_order;
+    if (spOrder && spOrder.length > 0) {
+      const orderMap = new Map<number, number>();
+      spOrder.forEach((id: number, idx: number) => orderMap.set(id, idx));
+      orderedSps.sort((a, b) => {
+        const aIdx = orderMap.get(a.id) ?? 99999;
+        const bIdx = orderMap.get(b.id) ?? 99999;
+        return aIdx - bIdx;
+      });
+    }
+
+    const subGroups = orderedSps.map(sp => ({
       subProject: sp,
       tasks: allTasks.filter(t => t.sub_project_id === sp.id),
     }));
     return { rootTasks, subGroups };
-  }, [tasks, subProjects]);
+  }, [tasks, subProjects, allOrders]);
 
   const hasSubProjects = subProjects.length > 0;
 
   const sortedRootTasks = sortTasks(groupedTasks.rootTasks);
   const isDragMode = sortField === 'default';
 
-  // B-1: Handle drag end for reorder
+  // Handle drag end for task, subproject, and sp-task reorder
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
 
-      const oldIndex = sortedRootTasks.findIndex(t => String(t.id) === String(active.id));
-      const newIndex = sortedRootTasks.findIndex(t => String(t.id) === String(over.id));
+      const activeId = String(active.id);
+      const overId = String(over.id);
+
+      // SubProject reorder
+      if (activeId.startsWith('sp-') && overId.startsWith('sp-')) {
+        const subs = groupedTasks.subGroups.map(g => g.subProject);
+        const oldIndex = subs.findIndex(sp => `sp-${sp.id}` === activeId);
+        const newIndex = subs.findIndex(sp => `sp-${sp.id}` === overId);
+        if (oldIndex === -1 || newIndex === -1) return;
+        const reordered = arrayMove(subs, oldIndex, newIndex);
+        saveSpOrderMutation.mutate(reordered.map(sp => sp.id));
+        return;
+      }
+
+      // Check if both are in the same subproject
+      for (const { subProject, tasks: spTasks } of groupedTasks.subGroups) {
+        const spTaskList = sortTasksWithKey(spTasks, `sptask_${subProject.id}`);
+        const oldIdx = spTaskList.findIndex(t => String(t.id) === activeId);
+        const newIdx = spTaskList.findIndex(t => String(t.id) === overId);
+        if (oldIdx !== -1 && newIdx !== -1) {
+          const reordered = arrayMove(spTaskList, oldIdx, newIdx);
+          saveSpTaskOrderMutation.mutate({
+            subId: subProject.id,
+            order: reordered.map(t => t.id),
+          });
+          return;
+        }
+      }
+
+      // Root task reorder
+      const oldIndex = sortedRootTasks.findIndex(t => String(t.id) === activeId);
+      const newIndex = sortedRootTasks.findIndex(t => String(t.id) === overId);
       if (oldIndex === -1 || newIndex === -1) return;
 
       const reordered = arrayMove(sortedRootTasks, oldIndex, newIndex);
-      const newOrder = reordered.map(t => t.id);
-      saveOrderMutation.mutate(newOrder);
+      saveOrderMutation.mutate(reordered.map(t => t.id));
     },
-    [sortedRootTasks, saveOrderMutation]
+    [sortedRootTasks, saveOrderMutation, groupedTasks.subGroups, saveSpOrderMutation, saveSpTaskOrderMutation, sortTasksWithKey]
   );
 
   if (isLoading) return <Typography>Loading...</Typography>;
@@ -483,13 +616,13 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {/* Root tasks with drag reorder when in default sort */}
             {isDragMode ? (
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
                 onDragEnd={handleDragEnd}
               >
+                {/* Root tasks sortable */}
                 <SortableContext
                   items={sortedRootTasks.map(t => String(t.id))}
                   strategy={verticalListSortingStrategy}
@@ -505,61 +638,101 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
                     />
                   ))}
                 </SortableContext>
+
+                {/* Subproject groups sortable */}
+                {hasSubProjects && (
+                  <SortableContext
+                    items={groupedTasks.subGroups.map(g => `sp-${g.subProject.id}`)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {groupedTasks.subGroups.map(({ subProject, tasks: spTasks }) => {
+                      const isCollapsed = collapsedSubs.has(subProject.id);
+                      const sortedSpTasks = sortTasksWithKey(spTasks, `sptask_${subProject.id}`);
+                      return (
+                        <React.Fragment key={`sp-${subProject.id}`}>
+                          <SortableSubProjectRow
+                            subProject={subProject}
+                            taskCount={spTasks.length}
+                            isCollapsed={isCollapsed}
+                            onToggle={() => toggleSubCollapse(subProject.id)}
+                          />
+                          {!isCollapsed && (
+                            <SortableContext
+                              items={sortedSpTasks.map(t => String(t.id))}
+                              strategy={verticalListSortingStrategy}
+                            >
+                              {sortedSpTasks.map(task => (
+                                <SortableTaskRow
+                                  key={task.id}
+                                  task={task}
+                                  indent={true}
+                                  projectId={projectId}
+                                  openDrawer={openDrawer}
+                                  isDragMode={true}
+                                />
+                              ))}
+                            </SortableContext>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </SortableContext>
+                )}
               </DndContext>
             ) : (
-              sortedRootTasks.map(task => renderTaskRow(task, false))
+              <>
+                {sortedRootTasks.map(task => renderTaskRow(task, false))}
+                {hasSubProjects &&
+                  groupedTasks.subGroups.map(({ subProject, tasks: spTasks }) => {
+                    const isCollapsed = collapsedSubs.has(subProject.id);
+                    const sortedSpTasks = sortTasks(spTasks);
+                    return (
+                      <React.Fragment key={`sp-${subProject.id}`}>
+                        <TableRow
+                          onClick={() => toggleSubCollapse(subProject.id)}
+                          sx={{
+                            cursor: 'pointer',
+                            bgcolor: 'rgba(139,92,246,0.08)',
+                            '&:hover': { bgcolor: '#F0EBFF' },
+                            '& td': { py: 1.2, borderColor: '#E5E7EB' },
+                          }}
+                        >
+                          <TableCell colSpan={5}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <IconButton size="small" sx={{ p: 0.3 }}>
+                                {isCollapsed ? (
+                                  <ExpandMoreIcon sx={{ fontSize: 18 }} />
+                                ) : (
+                                  <ExpandLessIcon sx={{ fontSize: 18 }} />
+                                )}
+                              </IconButton>
+                              <FolderSpecialIcon sx={{ fontSize: 18, color: '#8B5CF6' }} />
+                              <Typography
+                                variant="body2"
+                                sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#5B21B6' }}
+                              >
+                                {subProject.name}
+                              </Typography>
+                              <Chip
+                                label={`${spTasks.length} task${spTasks.length !== 1 ? 's' : ''}`}
+                                size="small"
+                                sx={{
+                                  height: 20,
+                                  fontSize: '0.65rem',
+                                  fontWeight: 600,
+                                  bgcolor: '#EDE9FE',
+                                  color: '#7C3AED',
+                                }}
+                              />
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                        {!isCollapsed && sortedSpTasks.map(task => renderTaskRow(task, true))}
+                      </React.Fragment>
+                    );
+                  })}
+              </>
             )}
-
-            {/* Subproject groups */}
-            {hasSubProjects &&
-              groupedTasks.subGroups.map(({ subProject, tasks: spTasks }) => {
-                const isCollapsed = collapsedSubs.has(subProject.id);
-                const sortedSpTasks = sortTasks(spTasks);
-                return (
-                  <React.Fragment key={`sp-${subProject.id}`}>
-                    <TableRow
-                      onClick={() => toggleSubCollapse(subProject.id)}
-                      sx={{
-                        cursor: 'pointer',
-                        bgcolor: 'rgba(139,92,246,0.08)',
-                        '&:hover': { bgcolor: '#F0EBFF' },
-                        '& td': { py: 1.2, borderColor: '#E5E7EB' },
-                      }}
-                    >
-                      <TableCell colSpan={5}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <IconButton size="small" sx={{ p: 0.3 }}>
-                            {isCollapsed ? (
-                              <ExpandMoreIcon sx={{ fontSize: 18 }} />
-                            ) : (
-                              <ExpandLessIcon sx={{ fontSize: 18 }} />
-                            )}
-                          </IconButton>
-                          <FolderSpecialIcon sx={{ fontSize: 18, color: '#8B5CF6' }} />
-                          <Typography
-                            variant="body2"
-                            sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#5B21B6' }}
-                          >
-                            {subProject.name}
-                          </Typography>
-                          <Chip
-                            label={`${spTasks.length} task${spTasks.length !== 1 ? 's' : ''}`}
-                            size="small"
-                            sx={{
-                              height: 20,
-                              fontSize: '0.65rem',
-                              fontWeight: 600,
-                              bgcolor: '#EDE9FE',
-                              color: '#7C3AED',
-                            }}
-                          />
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                    {!isCollapsed && sortedSpTasks.map(task => renderTaskRow(task, true))}
-                  </React.Fragment>
-                );
-              })}
 
             {(!tasks || tasks.length === 0) && (
               <TableRow>
