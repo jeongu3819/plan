@@ -290,6 +290,21 @@ class Shortcut(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class UserShortcut(Base):
+    __tablename__ = "user_shortcuts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    url = Column(Text, nullable=False)
+    icon_text = Column(String(20), nullable=True)
+    icon_color = Column(String(20), nullable=False, default="#2955FF")
+    order = Column(Integer, nullable=False, default=0)
+    open_new_tab = Column(Boolean, nullable=False, default=True)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class AiSetting(Base):
     __tablename__ = "ai_settings"
 

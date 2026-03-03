@@ -15,6 +15,11 @@ import {
   MenuItem,
   Tooltip,
   TableSortLabel,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
 } from '@mui/material';
 
 import { api } from '../../api/client';
@@ -182,7 +187,8 @@ const SortableSubProjectRow: React.FC<{
   taskCount: number;
   isCollapsed: boolean;
   onToggle: () => void;
-}> = ({ subProject, taskCount, isCollapsed, onToggle }) => {
+  onEdit: (subProject: SubProject) => void;
+}> = ({ subProject, taskCount, isCollapsed, onToggle, onEdit }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `sp-${subProject.id}`,
   });
@@ -240,6 +246,13 @@ const SortableSubProjectRow: React.FC<{
               color: '#7C3AED',
             }}
           />
+          <IconButton
+            size="small"
+            onClick={(e) => { e.stopPropagation(); onEdit(subProject); }}
+            sx={{ ml: 'auto', color: '#8B5CF6', '&:hover': { bgcolor: '#EDE9FE' } }}
+          >
+            <EditIcon sx={{ fontSize: 16 }} />
+          </IconButton>
         </Box>
       </TableCell>
     </TableRow>
@@ -253,6 +266,27 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
   const [sortField, setSortField] = useState<SortField>('default');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [collapsedSubs, setCollapsedSubs] = useState<Set<number>>(new Set());
+
+  // SubProject edit state
+  const [editingSub, setEditingSub] = useState<SubProject | null>(null);
+  const [editSubName, setEditSubName] = useState('');
+  const [editSubDesc, setEditSubDesc] = useState('');
+
+  const updateSubMut = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<SubProject> }) =>
+      api.updateSubProject(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['subprojects', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['graphData', projectId] });
+      setEditingSub(null);
+    },
+  });
+
+  const handleEditSub = (sub: SubProject) => {
+    setEditingSub(sub);
+    setEditSubName(sub.name);
+    setEditSubDesc(sub.description || '');
+  };
 
   const { data: tasks, isLoading } = useQuery({
     queryKey: ['tasks', projectId, currentUserId],
@@ -655,6 +689,7 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
                             taskCount={spTasks.length}
                             isCollapsed={isCollapsed}
                             onToggle={() => toggleSubCollapse(subProject.id)}
+                            onEdit={handleEditSub}
                           />
                           {!isCollapsed && (
                             <SortableContext
@@ -751,6 +786,45 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* SubProject edit dialog */}
+      <Dialog open={!!editingSub} onClose={() => setEditingSub(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>서브프로젝트 편집</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <TextField
+            label="이름"
+            value={editSubName}
+            onChange={e => setEditSubName(e.target.value)}
+            size="small"
+            required
+            fullWidth
+          />
+          <TextField
+            label="설명 (선택)"
+            value={editSubDesc}
+            onChange={e => setEditSubDesc(e.target.value)}
+            size="small"
+            fullWidth
+            multiline
+            rows={2}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setEditingSub(null)} sx={{ textTransform: 'none' }}>취소</Button>
+          <Button
+            variant="contained"
+            disabled={!editSubName.trim() || updateSubMut.isPending}
+            onClick={() => {
+              if (editingSub && editSubName.trim()) {
+                updateSubMut.mutate({ id: editingSub.id, data: { name: editSubName.trim(), description: editSubDesc.trim() || undefined } });
+              }
+            }}
+            sx={{ textTransform: 'none' }}
+          >
+            저장
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

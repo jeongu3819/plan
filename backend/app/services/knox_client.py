@@ -95,6 +95,10 @@ async def knox_search_employees(
                 "departmentName": e.get("departmentName"),
                 "departmentCode": e.get("departmentCode"),
                 "employeeNumber": e.get("employeeNumber"),
+                # ---- alias 추가 (프론트 호환) ----
+                "loginid": e.get("userId"),
+                "deptname": e.get("departmentName"),
+                "email": e.get("mail") or e.get("email"),
             }
         )
     return normalized

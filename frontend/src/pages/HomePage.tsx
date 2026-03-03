@@ -16,7 +16,15 @@ import {
   Switch,
   CircularProgress,
   Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  FormControlLabel,
 } from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import AssessmentIcon from '@mui/icons-material/Assessment';
@@ -29,7 +37,7 @@ import WidgetsIcon from '@mui/icons-material/Widgets';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, DashboardStats, ProjectStats, Shortcut, User } from '../api/client';
+import { api, DashboardStats, ProjectStats, Shortcut, UserShortcut } from '../api/client';
 import { Task } from '../types';
 import { useAppStore } from '../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
@@ -1117,146 +1125,238 @@ const HomePage: React.FC = () => {
   );
 };
 
+// ── Shared shortcut icon renderer ──
+const ShortcutIcon: React.FC<{ sc: { name: string; url: string; icon_text?: string | null; icon_color?: string | null; open_new_tab?: boolean } }> = ({ sc }) => (
+  <Tooltip title={sc.url}>
+    <Box
+      onClick={() => {
+        if (sc.open_new_tab !== false) window.open(sc.url, '_blank');
+        else window.location.href = sc.url;
+      }}
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 0.8,
+        cursor: 'pointer',
+        width: 72,
+        '&:hover .shortcut-icon': { transform: 'scale(1.08)', boxShadow: '0 4px 16px rgba(0,0,0,0.15)' },
+        transition: 'all 0.15s',
+      }}
+    >
+      <Box
+        className="shortcut-icon"
+        sx={{
+          width: 48,
+          height: 48,
+          borderRadius: 2.5,
+          bgcolor: sc.icon_color || '#2955FF',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#fff',
+          fontWeight: 800,
+          fontSize: '1.2rem',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          transition: 'all 0.2s ease',
+        }}
+      >
+        {sc.icon_text || sc.name.charAt(0).toUpperCase()}
+      </Box>
+      <Typography
+        variant="caption"
+        sx={{
+          fontSize: '0.65rem',
+          fontWeight: 500,
+          color: '#4B5563',
+          textAlign: 'center',
+          lineHeight: 1.2,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          maxWidth: 72,
+        }}
+      >
+        {sc.name}
+      </Typography>
+    </Box>
+  </Tooltip>
+);
+
 // ── Shortcut Section Component ──
 const ShortcutSection: React.FC<{
   currentUserId: number;
   navigate: ReturnType<typeof useNavigate>;
-}> = ({ currentUserId, navigate }) => {
+}> = ({ currentUserId }) => {
+  const queryClient = useQueryClient();
+
   const { data: shortcuts = [] } = useQuery<Shortcut[]>({
     queryKey: ['shortcuts'],
     queryFn: api.getShortcuts,
   });
-  const { data: users = [] } = useQuery<User[]>({
-    queryKey: ['users'],
-    queryFn: api.getUsers,
+  const { data: userShortcuts = [] } = useQuery<UserShortcut[]>({
+    queryKey: ['userShortcuts', currentUserId],
+    queryFn: () => api.getUserShortcuts(currentUserId),
+    enabled: currentUserId > 0,
   });
-  const currentUser = users.find(u => u.id === currentUserId);
-  const normalizeRole = (role?: string) => String(role || '').toLowerCase();
-  const isSuperAdmin = normalizeRole(currentUser?.role) === 'super_admin';
 
   const activeShortcuts = shortcuts
     .filter(s => s.active !== false)
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
-  if (activeShortcuts.length === 0 && !isSuperAdmin) return null;
+  // User shortcut dialog state
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [scName, setScName] = useState('');
+  const [scUrl, setScUrl] = useState('');
+  const [scIconText, setScIconText] = useState('');
+  const [scIconColor, setScIconColor] = useState('#2955FF');
+  const [scOpenNewTab, setScOpenNewTab] = useState(true);
+
+  const createUserScMut = useMutation({
+    mutationFn: () => api.createUserShortcut(currentUserId, {
+      name: scName.trim(),
+      url: scUrl.trim(),
+      icon_text: scIconText.trim() || undefined,
+      icon_color: scIconColor,
+      open_new_tab: scOpenNewTab,
+      order: userShortcuts.length,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['userShortcuts', currentUserId] });
+      setDialogOpen(false);
+      setScName(''); setScUrl(''); setScIconText(''); setScIconColor('#2955FF'); setScOpenNewTab(true);
+    },
+  });
+
+  const deleteUserScMut = useMutation({
+    mutationFn: (id: number) => api.deleteUserShortcut(id, currentUserId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['userShortcuts', currentUserId] }),
+  });
+
+  const handleSave = () => {
+    if (!scName.trim() || !scUrl.trim()) return;
+    createUserScMut.mutate();
+  };
+
+  if (activeShortcuts.length === 0 && userShortcuts.length === 0 && currentUserId <= 0) return null;
 
   return (
-    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-      <Typography
-        variant="subtitle2"
-        sx={{
-          fontWeight: 700,
-          fontSize: '0.8rem',
-          color: '#6B7280',
-          mb: 1.5,
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-        }}
-      >
-        바로가기
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', justifyContent: 'center' }}>
-        {activeShortcuts.map(sc => (
-          <Tooltip key={sc.id} title={sc.url}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'center' }}>
+      {/* 공용 바로가기 */}
+      {activeShortcuts.length > 0 && (
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start' }}>
+          {activeShortcuts.map(sc => (
+            <ShortcutIcon key={sc.id} sc={sc} />
+          ))}
+        </Box>
+      )}
+
+      {/* 내 바로가기 */}
+      {(userShortcuts.length > 0 || currentUserId > 0) && (
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start' }}>
+          {userShortcuts.map(sc => (
+            <Box key={sc.id} sx={{ position: 'relative', '&:hover .del-btn': { opacity: 1 } }}>
+              <ShortcutIcon sc={sc} />
+              <IconButton
+                className="del-btn"
+                size="small"
+                onClick={e => { e.stopPropagation(); deleteUserScMut.mutate(sc.id); }}
+                sx={{
+                  position: 'absolute', top: -6, right: -6, opacity: 0,
+                  transition: 'opacity 0.15s', bgcolor: '#FEE2E2', color: '#EF4444',
+                  width: 18, height: 18,
+                  '&:hover': { bgcolor: '#EF4444', color: '#fff' },
+                }}
+              >
+                <DeleteIcon sx={{ fontSize: 11 }} />
+              </IconButton>
+            </Box>
+          ))}
+          {/* "+" 버튼 */}
+          <Tooltip title="내 바로가기 추가">
             <Box
-              onClick={() => {
-                if (sc.open_new_tab !== false) window.open(sc.url, '_blank');
-                else window.location.href = sc.url;
-              }}
+              onClick={() => setDialogOpen(true)}
               sx={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 0.8,
-                cursor: 'pointer',
-                width: 80,
-                '&:hover .shortcut-icon': {
-                  transform: 'scale(1.08)',
-                  boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
-                },
-                transition: 'all 0.15s',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8,
+                cursor: 'pointer', width: 72,
+                '&:hover .my-add-icon': { transform: 'scale(1.08)', borderColor: '#22C55E' },
               }}
             >
               <Box
-                className="shortcut-icon"
+                className="my-add-icon"
                 sx={{
-                  width: 52,
-                  height: 52,
-                  borderRadius: 2.5,
-                  bgcolor: sc.icon_color || '#2955FF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#fff',
-                  fontWeight: 800,
-                  fontSize: '1.3rem',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                  transition: 'all 0.2s ease',
+                  width: 48, height: 48, borderRadius: 2.5,
+                  border: '2px dashed #86EFAC',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#22C55E', fontSize: '1.5rem', transition: 'all 0.2s ease',
                 }}
               >
-                {sc.icon_text || sc.name.charAt(0).toUpperCase()}
+                +
               </Box>
-              <Typography
-                variant="caption"
-                sx={{
-                  fontSize: '0.68rem',
-                  fontWeight: 500,
-                  color: '#4B5563',
-                  textAlign: 'center',
-                  lineHeight: 1.2,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  maxWidth: 80,
-                }}
-              >
-                {sc.name}
+              <Typography variant="caption" sx={{ fontSize: '0.65rem', fontWeight: 500, color: '#22C55E' }}>
+                내 추가
               </Typography>
             </Box>
           </Tooltip>
-        ))}
-        {isSuperAdmin && (
-          <Box
-            onClick={() => navigate('/admin')}
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 0.8,
-              cursor: 'pointer',
-              width: 80,
-              '&:hover .add-icon': { transform: 'scale(1.08)', borderColor: '#2955FF' },
-            }}
-          >
-            <Box
-              className="add-icon"
-              sx={{
-                width: 52,
-                height: 52,
-                borderRadius: 2.5,
-                border: '2px dashed #CBD5E1',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#9CA3AF',
-                fontSize: '1.5rem',
-                fontWeight: 400,
-                transition: 'all 0.2s ease',
-              }}
-            >
-              +
-            </Box>
-            <Typography
-              variant="caption"
-              sx={{ fontSize: '0.68rem', fontWeight: 500, color: '#9CA3AF' }}
-            >
-              추가
-            </Typography>
+        </Box>
+      )}
+
+      {/* Add user shortcut dialog */}
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>내 바로가기 추가</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <TextField
+            label="이름"
+            value={scName}
+            onChange={e => setScName(e.target.value)}
+            size="small"
+            required
+            fullWidth
+          />
+          <TextField
+            label="URL (https://...)"
+            value={scUrl}
+            onChange={e => setScUrl(e.target.value)}
+            size="small"
+            required
+            fullWidth
+          />
+          <TextField
+            label="아이콘 텍스트 (선택)"
+            value={scIconText}
+            onChange={e => setScIconText(e.target.value)}
+            size="small"
+            fullWidth
+            placeholder="예: G, 사내"
+          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>색상:</Typography>
+            <input
+              type="color"
+              value={scIconColor}
+              onChange={e => setScIconColor(e.target.value)}
+              style={{ width: 40, height: 32, border: 'none', cursor: 'pointer', borderRadius: 4 }}
+            />
           </Box>
-        )}
-      </Box>
+          <FormControlLabel
+            control={<Switch checked={scOpenNewTab} onChange={e => setScOpenNewTab(e.target.checked)} size="small" />}
+            label={<Typography variant="body2" sx={{ fontSize: '0.85rem' }}>새 탭에서 열기</Typography>}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setDialogOpen(false)} sx={{ textTransform: 'none' }}>취소</Button>
+          <Button
+            variant="contained"
+            onClick={handleSave}
+            disabled={!scName.trim() || !scUrl.trim() || createUserScMut.isPending}
+            sx={{ textTransform: 'none' }}
+          >
+            추가
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -393,14 +393,23 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
     setSelectedNodeId(null);
   }, []);
 
-  // A-2: Auto zoom on selection change
+  // A-2: Auto zoom on selection change (debounced, flowNodes excluded from deps)
+  const flowNodesRef = useRef<Node[]>([]);
+  useEffect(() => { flowNodesRef.current = flowNodes; }, [flowNodes]);
+
+  const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (selectedNodeId && connectedIds.size > 0 && flowNodes.length > 0) {
-      zoomToNodes(flowNodes, connectedIds);
-    } else if (!selectedNodeId && flowNodes.length > 0) {
-      zoomToAll();
-    }
-  }, [selectedNodeId, connectedIds, flowNodes, zoomToNodes, zoomToAll]);
+    if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
+    zoomTimerRef.current = setTimeout(() => {
+      const nodes = flowNodesRef.current;
+      if (selectedNodeId && connectedIds.size > 0 && nodes.length > 0) {
+        zoomToNodes(nodes, connectedIds);
+      } else if (!selectedNodeId && nodes.length > 0) {
+        zoomToAll();
+      }
+    }, 80);
+    return () => { if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current); };
+  }, [selectedNodeId, connectedIds, zoomToNodes, zoomToAll]);
 
   // v1.2: Find closest drop target during drag for visual highlight
   const onNodeDrag: NodeDragHandler = useCallback(

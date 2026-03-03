@@ -17,6 +17,7 @@ import { MainLayout } from './layouts/MainLayout';
 import TaskDrawer from './components/TaskDrawer';
 import { UserProvider } from './context/UserContext';
 import MentionsPage from './pages/MentionsPage';
+import AccessDeniedPage from './pages/AccessDeniedPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -134,6 +135,9 @@ const App: React.FC = () => {
               <Route path="/roadmap" element={withMainLayout(<GlobalRoadmapPage />)} />
               <Route path="/mentions" element={withMainLayout(<MentionsPage />)} />
               <Route path="/admin" element={withMainLayout(<AdminPage />)} />
+
+              {/* ✅ 접근 거부 페이지 (레이아웃 없이) */}
+              <Route path="/access-denied" element={<AccessDeniedPage />} />
 
               {/* ✅ fallback */}
               <Route path="*" element={<Navigate to="/" replace />} />

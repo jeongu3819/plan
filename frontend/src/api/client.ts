@@ -75,6 +75,12 @@ client.interceptors.response.use(
       // 백엔드: /api/auth/login
       window.location.href = `${API_URL}/auth/login`;
     }
+    if (status === 403) {
+      const detail = err?.response?.data?.detail || '';
+      if (detail.includes('등록') || detail.includes('접근 권한')) {
+        window.location.href = '/access-denied';
+      }
+    }
     return Promise.reject(err);
   }
 );
@@ -111,6 +117,19 @@ export interface Shortcut {
   name: string;
   url: string;
   icon_text: string;
+  icon_color: string;
+  order: number;
+  open_new_tab: boolean;
+  active: boolean;
+  created_at?: string;
+}
+
+export interface UserShortcut {
+  id: number;
+  user_id: number;
+  name: string;
+  url: string;
+  icon_text?: string;
   icon_color: string;
   order: number;
   open_new_tab: boolean;
@@ -589,6 +608,10 @@ export const api = {
     return res.data;
   },
 
+  deleteAdminUser: async (targetId: number, adminUserId: number): Promise<void> => {
+    await client.delete(`/admin/users/${targetId}`, { params: { user_id: requireUserId(adminUserId) } });
+  },
+
   /**
    * ⚠️ 백엔드 코드에 /api/admin/users/{id}/role 이 아직 안 보임
    * - 우선 admin endpoint를 시도하고, 404면 /api/users/{id} patch로 fallback
@@ -792,7 +815,36 @@ export const api = {
   // =========================
   // Knox Employee Search (D-2)
   // =========================
-  searchKnoxEmployees: async (params: { fullName?: string }): Promise<any[]> => {
+  // =========================
+  // User Shortcuts (per-user, DB)
+  // =========================
+  getUserShortcuts: async (userId: number): Promise<UserShortcut[]> => {
+    const res = await client.get('/user-shortcuts', { params: { user_id: requireUserId(userId) } });
+    return res.data.shortcuts || [];
+  },
+
+  createUserShortcut: async (
+    userId: number,
+    data: { name: string; url: string; icon_text?: string; icon_color?: string; order?: number; open_new_tab?: boolean }
+  ): Promise<UserShortcut> => {
+    const res = await client.post('/user-shortcuts', data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  updateUserShortcut: async (
+    shortcutId: number,
+    userId: number,
+    data: Partial<UserShortcut>
+  ): Promise<UserShortcut> => {
+    const res = await client.patch(`/user-shortcuts/${shortcutId}`, data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  deleteUserShortcut: async (shortcutId: number, userId: number): Promise<void> => {
+    await client.delete(`/user-shortcuts/${shortcutId}`, { params: { user_id: requireUserId(userId) } });
+  },
+
+  searchKnoxEmployees: async (params: { fullName?: string; userIds?: string; query?: string }): Promise<any[]> => {
     const res = await client.get('/employees', { params });
     return res.data.employees || res.data || [];
   },

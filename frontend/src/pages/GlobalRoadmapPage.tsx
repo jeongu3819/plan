@@ -167,23 +167,7 @@ const GlobalRoadmapPage: React.FC = () => {
 
   const today = useMemo(() => new Date(), []);
 
-  // Auto-expand all projects on data load
-  useEffect(() => {
-    const items = roadmapData?.items || [];
-    if (items.length > 0) {
-      const ids = new Set<string>();
-      const collect = (list: RoadmapItem[]) => {
-        list.forEach(it => {
-          if (it.children && it.children.length > 0) {
-            ids.add(it.id);
-            collect(it.children);
-          }
-        });
-      };
-      collect(items);
-      setExpandedProjects(ids);
-    }
-  }, [roadmapData]);
+  // Auto-expand 제거: 초기에는 프로젝트만 표시, 클릭 시 toggle
 
   // ── Sorting logic ──
   const sortItems = useCallback(

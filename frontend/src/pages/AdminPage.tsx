@@ -157,6 +157,17 @@ const AdminPage: React.FC = () => {
     },
   });
 
+  const deleteUserMut = useMutation({
+    mutationFn: (targetId: number) => api.deleteAdminUser(targetId, requireAdminUserId()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.detail || '사용자 비활성화 실패');
+    },
+  });
+
   const createGroupMut = useMutation({
     mutationFn: (data: { name: string }) => api.createGroup(data, requireAdminUserId()),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['adminGroups'] }),
@@ -259,7 +270,7 @@ const AdminPage: React.FC = () => {
     if (!dialogKnoxQuery.trim()) return;
     setDialogKnoxSearching(true);
     try {
-      const results = await api.searchKnoxEmployees({ fullName: dialogKnoxQuery.trim() });
+      const results = await api.searchKnoxEmployees({ query: dialogKnoxQuery.trim() });
       setDialogKnoxResults(results);
     } catch {
       setDialogKnoxResults([]);
@@ -277,7 +288,7 @@ const AdminPage: React.FC = () => {
     if (!groupKnoxQuery.trim()) return;
     setGroupKnoxSearching(true);
     try {
-      const results = await api.searchKnoxEmployees({ fullName: groupKnoxQuery.trim() });
+      const results = await api.searchKnoxEmployees({ query: groupKnoxQuery.trim() });
       // Extract unique department names from results
       setGroupKnoxResults(results);
     } catch {
@@ -293,7 +304,7 @@ const AdminPage: React.FC = () => {
     setKnoxSearch(query.trim());
     setKnoxSearching(true);
     try {
-      const results = await api.searchKnoxEmployees({ fullName: query.trim() });
+      const results = await api.searchKnoxEmployees({ query: query.trim() });
       setKnoxResults(results);
     } catch (err: any) {
       alert(err?.response?.data?.detail || 'Knox 검색 실패');
@@ -503,6 +514,9 @@ const AdminPage: React.FC = () => {
                   <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }} align="center">
                     활성/비활성
                   </TableCell>
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }} align="center">
+                    삭제
+                  </TableCell>
                 </TableRow>
               </TableHead>
 
@@ -628,6 +642,28 @@ const AdminPage: React.FC = () => {
                         }
                         size="small"
                       />
+                    </TableCell>
+                    <TableCell align="center">
+                      <Tooltip title="비활성화 (접근 차단)">
+                        <span>
+                          <IconButton
+                            size="small"
+                            color="error"
+                            disabled={
+                              user.role === 'super_admin' ||
+                              user.id === resolvedCurrentUserId ||
+                              deleteUserMut.isPending
+                            }
+                            onClick={() => {
+                              if (window.confirm(`"${user.username}" 사용자를 비활성화하시겠습니까?\n즉시 접근이 차단됩니다.`)) {
+                                deleteUserMut.mutate(user.id);
+                              }
+                            }}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))}

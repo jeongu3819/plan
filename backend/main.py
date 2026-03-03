@@ -28,7 +28,7 @@ from app.db_connections.sqlalchemy import SessionLocal, engine, Base
 from app.models import (
     Project, User, Task, UserPreference, VisitLog, GroupMembership, Group,
     ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
-    NoteMention, ProjectMember as ProjectMemberModel,
+    NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
 )
 from app.environment import CORS_ORIGINS
 from app.llm.dsllm_adapter import chat as dsllm_chat
@@ -57,6 +57,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_ensure_super_admin():
+    # user_shortcuts 테이블 자동 생성 (없으면)
+    from app.models import UserShortcut as _UserShortcut
+    _UserShortcut.__table__.create(bind=engine, checkfirst=True)
+
     db = SessionLocal()
     try:
         ensure_super_owner(db)
@@ -100,6 +104,25 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def get_active_user(request: Request, db: Session = Depends(get_db)):
+    """등록된 활성 사용자만 통과. 미등록/비활성이면 403."""
+    from app.routers.auth import load_session
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    token = auth.replace("Bearer ", "").strip()
+    user_info = load_session(token)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    loginid = (user_info or {}).get("loginid", "")
+    user = db.query(User).filter(User.loginid == loginid).first()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="접근 권한이 없습니다. 관리자에게 등록을 요청하세요."
+        )
+    return user
 
 # 시간
 KST = ZoneInfo("Asia/Seoul")
@@ -534,7 +557,7 @@ def user_dict(u: User, state: dict):
         "mail": getattr(u, "mail", None),
         "created_at": iso(u.created_at),
         "last_login_at": iso(u.last_login_at),
-        "group_name": meta.get("group_name"),
+        "group_name": getattr(u, "group_name", None) or meta.get("group_name"),
     }
 
 def task_dict(t: Task, state: dict):
@@ -1003,7 +1026,7 @@ def save_user_layout(user_id: int, body: LayoutUpdate, db: Session = Depends(get
 # Project Endpoints (DB + project_meta + members sidecar)
 # =========================
 @app.get("/api/projects")
-def get_projects(user_id: Optional[int] = None, db: Session = Depends(get_db)):
+def get_projects(user_id: Optional[int] = None, db: Session = Depends(get_db), _active: User = Depends(get_active_user)):
     state = load_state()
     rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
     projects = [project_dict(p, state) for p in rows]
@@ -1094,11 +1117,23 @@ def update_project(project_id: int, updates: ProjectUpdate, db: Session = Depend
     return project_dict(p, state)
 
 @app.delete("/api/projects/{project_id}")
-def delete_project(project_id: int, db: Session = Depends(get_db)):
+def delete_project(project_id: int, request: Request, db: Session = Depends(get_db)):
     state = load_state()
     p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # owner 체크: owner_id가 있으면 owner 또는 admin만 삭제 가능
+    caller_info = try_get_user_from_token(request)
+    if caller_info:
+        caller_loginid = caller_info.get("loginid", "")
+        caller = db.query(User).filter(User.loginid == caller_loginid).first()
+        meta = get_project_meta(state, project_id)
+        owner_id = p.owner_id or meta.get("owner_id")
+        if owner_id and caller:
+            caller_is_admin = caller.role in ("admin", "super_admin")
+            if not caller_is_admin and caller.id != owner_id:
+                raise HTTPException(status_code=403, detail="프로젝트 삭제 권한이 없습니다. (owner만 가능)")
 
     now = datetime.now()
     p.archived_at = now
@@ -1324,6 +1359,7 @@ def get_tasks(
     assignee_id: Optional[int] = None,
     user_id: Optional[int] = None,
     db: Session = Depends(get_db),
+    _active: User = Depends(get_active_user),
 ):
     state = load_state()
 
@@ -2969,6 +3005,20 @@ def admin_toggle_user_active(target_id: int, user_id: int = Query(...), db: Sess
     db.refresh(target)
     return user_dict(target, state)
 
+@app.delete("/api/admin/users/{target_id}")
+def admin_deactivate_user(target_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """관리자: 사용자 비활성화 (소프트 삭제)"""
+    state = load_state()
+    require_admin(db, state, user_id)
+    target = db.query(User).filter(User.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if (target.loginid or "").lower() in [x.lower() for x in SUPER_OWNER_LOGINID]:
+        raise HTTPException(status_code=400, detail="Super owner 계정은 삭제할 수 없습니다.")
+    target.is_active = False
+    db.commit()
+    return {"message": "사용자가 비활성화되었습니다."}
+
 @app.patch("/api/admin/users/{target_id}/role")
 def admin_update_user_role(target_id: int, body: dict, user_id: int = Query(...), db: Session = Depends(get_db)):
     """v1.2: 프론트엔드에서 호출하던 누락 엔드포인트"""
@@ -3332,6 +3382,97 @@ def delete_shortcut(shortcut_id: int, user_id: int = Query(...), db: Session = D
 
     state["shortcuts"] = [s for s in state.get("shortcuts", []) if int(s.get("id")) != shortcut_id]
     save_state(state)
+    return {"message": "Shortcut deleted"}
+
+
+# =========================
+# User Shortcuts (per-user, DB)
+# =========================
+class UserShortcutCreate(BaseModel):
+    name: str
+    url: str
+    icon_text: Optional[str] = None
+    icon_color: str = "#2955FF"
+    order: int = 0
+    open_new_tab: bool = True
+
+class UserShortcutUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    icon_text: Optional[str] = None
+    icon_color: Optional[str] = None
+    order: Optional[int] = None
+    open_new_tab: Optional[bool] = None
+    active: Optional[bool] = None
+
+def user_shortcut_dict(s: UserShortcut) -> dict:
+    return {
+        "id": s.id,
+        "user_id": s.user_id,
+        "name": s.name,
+        "url": s.url,
+        "icon_text": s.icon_text,
+        "icon_color": s.icon_color,
+        "order": s.order,
+        "open_new_tab": s.open_new_tab,
+        "active": s.active,
+        "created_at": iso(s.created_at),
+    }
+
+@app.get("/api/user-shortcuts")
+def get_user_shortcuts(user_id: int = Query(...), db: Session = Depends(get_db)):
+    shortcuts = db.query(UserShortcut).filter(
+        UserShortcut.user_id == user_id,
+        UserShortcut.active == True,
+    ).order_by(UserShortcut.order).all()
+    return {"shortcuts": [user_shortcut_dict(s) for s in shortcuts]}
+
+@app.post("/api/user-shortcuts")
+def create_user_shortcut(body: UserShortcutCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    s = UserShortcut(
+        user_id=user_id,
+        name=body.name,
+        url=body.url,
+        icon_text=body.icon_text,
+        icon_color=body.icon_color,
+        order=body.order,
+        open_new_tab=body.open_new_tab,
+    )
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return user_shortcut_dict(s)
+
+@app.patch("/api/user-shortcuts/{shortcut_id}")
+def update_user_shortcut(shortcut_id: int, body: UserShortcutUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    s = db.query(UserShortcut).filter(UserShortcut.id == shortcut_id, UserShortcut.user_id == user_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Shortcut not found")
+    if body.name is not None:
+        s.name = body.name
+    if body.url is not None:
+        s.url = body.url
+    if body.icon_text is not None:
+        s.icon_text = body.icon_text
+    if body.icon_color is not None:
+        s.icon_color = body.icon_color
+    if body.order is not None:
+        s.order = body.order
+    if body.open_new_tab is not None:
+        s.open_new_tab = body.open_new_tab
+    if body.active is not None:
+        s.active = body.active
+    db.commit()
+    db.refresh(s)
+    return user_shortcut_dict(s)
+
+@app.delete("/api/user-shortcuts/{shortcut_id}")
+def delete_user_shortcut(shortcut_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    s = db.query(UserShortcut).filter(UserShortcut.id == shortcut_id, UserShortcut.user_id == user_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Shortcut not found")
+    db.delete(s)
+    db.commit()
     return {"message": "Shortcut deleted"}
 
 
