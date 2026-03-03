@@ -27,6 +27,25 @@ const client = axios.create({
   timeout: 180000, // 3 minutes for AI requests
 });
 
+/** localStorage에 저장된 me에서 user_id 꺼내기 (없으면 undefined) */
+function getStoredUserId(): number | undefined {
+  try {
+    const raw = localStorage.getItem('me');
+    if (!raw) return undefined;
+    const me = JSON.parse(raw);
+    const uid = Number(me?.user_id);
+    return Number.isFinite(uid) && uid > 0 ? uid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** userId가 없으면 me.user_id로 자동 채움 */
+function resolveUserId(userId?: number): number | undefined {
+  if (userId && userId > 0) return userId;
+  return getStoredUserId();
+}
+
 /**
  * ✅ Request Interceptor
  * - localStorage.session_token 이 있으면 Authorization 자동 부착
@@ -410,6 +429,32 @@ export const api = {
     return res.data;
   },
 
+  // =========================
+  // Report
+  // =========================
+  getReportData: async (projectId: number, userId?: number): Promise<any> => {
+    const uid = resolveUserId(userId);
+    const res = await client.get(`/report/data/${projectId}`, {
+      params: uid ? { user_id: uid } : {},
+    });
+    return res.data;
+  },
+
+  deleteReportData: async (projectId: number, userId?: number): Promise<any> => {
+    const uid = resolveUserId(userId);
+    const res = await client.delete(`/report/data/${projectId}`, {
+      params: uid ? { user_id: uid } : {},
+    });
+    return res.data;
+  },
+
+  generateReport: async (projectId: number): Promise<ReportResponse> => {
+    // generate는 보통 권한체크를 내부에서 project access로 하니까 params 없어도 되는데,
+    // 통일하고 싶으면 uid 붙여도 됨(백엔드가 받게 만들었을 때)
+    const res = await client.post('/report/generate', { project_id: projectId });
+    return res.data;
+  },
+  
   // =========================
   // Project Files (sidecar metadata + 실제 업로드)
   // =========================
