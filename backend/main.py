@@ -25,7 +25,11 @@ from zoneinfo import ZoneInfo
 # DB / ENV / AUTH
 # =========================
 from app.db_connections.sqlalchemy import SessionLocal, engine, Base
-from app.models import Project, User, Task, UserPreference, VisitLog, GroupMembership, Group, ProjectAiQuery, AiSetting
+from app.models import (
+    Project, User, Task, UserPreference, VisitLog, GroupMembership, Group,
+    ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
+    NoteMention, ProjectMember as ProjectMemberModel,
+)
 from app.environment import CORS_ORIGINS
 from app.llm.dsllm_adapter import chat as dsllm_chat
 from app.llm.dsllm_adapter import list_model_keys
@@ -254,6 +258,7 @@ DEFAULT_STATE = {
     "project_ai_queries": [],
     "ai_summaries": [],
     "search_feedback": [],
+    "list_orders": {},
 }
 
 def _deepcopy_state(obj: dict) -> dict:
@@ -372,6 +377,9 @@ class UserUpdate(BaseModel):
 
 class LayoutUpdate(BaseModel):
     layout: Dict[str, Any]
+
+class ListOrderUpdate(BaseModel):
+    order: List[int]
 
 class SubProjectCreate(BaseModel):
     name: str
@@ -575,12 +583,42 @@ def resolve_user_id_from_token(request: Request, db: Session) -> Optional[int]:
     row = db.query(User).filter(User.loginid == loginid).first()
     return row.id if row else None
 
-def get_members_for_project(state: dict, project_id: int) -> List[dict]:
+def get_subprojects_from_db(db: Session, project_id: Optional[int] = None) -> List[dict]:
+    """C-2: Get subprojects from DB as dicts (replaces state.get('sub_projects'))"""
+    q = db.query(SubProjectModel)
+    if project_id:
+        q = q.filter(SubProjectModel.project_id == project_id)
+    return [{
+        "id": sp.id,
+        "project_id": sp.project_id,
+        "name": sp.name,
+        "description": sp.description,
+        "parent_id": sp.parent_id,
+        "created_at": iso(sp.created_at),
+    } for sp in q.all()]
+
+def get_members_for_project(state: dict, project_id: int, db: Session = None) -> List[dict]:
+    """C-3: Try DB first, fallback to sidecar"""
+    if db:
+        rows = db.query(ProjectMemberModel).filter(ProjectMemberModel.project_id == int(project_id)).all()
+        if rows:
+            return [{"project_id": r.project_id, "user_id": r.user_id, "role": r.role} for r in rows]
     return [m for m in state.get("project_members", []) if int(m.get("project_id")) == int(project_id)]
 
-def ensure_owner_membership(state: dict, project_id: int, owner_id: Optional[int]):
+def ensure_owner_membership(state: dict, project_id: int, owner_id: Optional[int], db: Session = None):
     if not owner_id:
         return
+    if db:
+        existing = db.query(ProjectMemberModel).filter(
+            ProjectMemberModel.project_id == int(project_id),
+            ProjectMemberModel.user_id == int(owner_id),
+        ).first()
+        if not existing:
+            pm = ProjectMemberModel(project_id=project_id, user_id=owner_id, role="owner")
+            db.add(pm)
+            db.flush()
+        return
+    # Fallback: sidecar
     members = state.get("project_members", [])
     exists = any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(owner_id) for m in members)
     if not exists:
@@ -612,7 +650,12 @@ def require_admin(db: Session, state: dict, user_id: int):
 def get_user_project_ids(db: Session, state: dict, user_id: int) -> set:
     pids = set()
 
-    # state members
+    # C-3: DB members first
+    db_memberships = db.query(ProjectMemberModel).filter(ProjectMemberModel.user_id == int(user_id)).all()
+    for m in db_memberships:
+        pids.add(m.project_id)
+
+    # Fallback: sidecar members
     for m in state.get("project_members", []):
         if int(m.get("user_id")) == int(user_id):
             pids.add(int(m.get("project_id")))
@@ -624,7 +667,6 @@ def get_user_project_ids(db: Session, state: dict, user_id: int) -> set:
         if int(meta.get("owner_id") or 0) == int(user_id):
             pids.add(p.id)
 
-    # public projects are "접근 가능"로 볼지 여부는 호출부에서 처리
     return pids
 
 def check_project_access(db: Session, state: dict, project_id: int, user_id: int):
@@ -639,6 +681,14 @@ def check_project_access(db: Session, state: dict, project_id: int, user_id: int
     meta = get_project_meta(state, p.id)
 
     if int(meta.get("owner_id") or 0) == int(user_id):
+        return True
+
+    # C-3: Check DB members
+    db_member = db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == int(project_id),
+        ProjectMemberModel.user_id == int(user_id),
+    ).first()
+    if db_member:
         return True
 
     if any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(user_id) for m in state.get("project_members", [])):
@@ -670,7 +720,12 @@ def check_project_permission(db: Session, state: dict, project_id: int, user_id:
     elif perm_value == "admin":
         raise HTTPException(status_code=403, detail=f"권한이 없습니다: {permission_key} 은(는) 관리자만 가능합니다")
     elif perm_value == "members_only":
-        is_member = any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(user_id) for m in state.get("project_members", []))
+        # C-3: Check DB members first
+        db_member = db.query(ProjectMemberModel).filter(
+            ProjectMemberModel.project_id == int(project_id),
+            ProjectMemberModel.user_id == int(user_id),
+        ).first()
+        is_member = bool(db_member) or any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(user_id) for m in state.get("project_members", []))
         if is_member:
             return True
         raise HTTPException(status_code=403, detail=f"권한이 없습니다: {permission_key} 은(는) 프로젝트 담당자만 가능합니다")
@@ -792,8 +847,8 @@ def get_all_data(user_id: Optional[int] = None, db: Session = Depends(get_db)):
         "activity_logs": [],  # 미구현 유지
         "user_preferences": prefs,
 
-        # 기존/신규 프론트 호환용 sidecar
-        "sub_projects": state.get("sub_projects", []),
+        # C-2: sub_projects from DB
+        "sub_projects": get_subprojects_from_db(db),
         "notes": state.get("notes", []),
         "attachments": state.get("attachments", []),
         "project_members": state.get("project_members", []),
@@ -899,10 +954,24 @@ def write_visit_log(request: Request, db: Session = Depends(get_db)):
     user = try_get_user_from_token(request)
     ip = get_client_ip(request)
 
+    # C-1: resolve user_id from token
+    uid = resolve_user_id_from_token(request, db)
+
+    # C-1: 1-day dedup — if user_id exists and already logged today, skip
+    if uid:
+        today_start = datetime.combine(_today_kst(), datetime.min.time())
+        existing = db.query(VisitLog).filter(
+            VisitLog.user_id == uid,
+            VisitLog.timestamp >= today_start,
+        ).first()
+        if existing:
+            return {"message": "already logged today", "ip": ip}
+
     row = VisitLog(
         ip_address=ip,
         deptname=user.get("deptname"),
         username=user.get("username"),
+        user_id=uid,
     )
     db.add(row)
     db.commit()
@@ -954,15 +1023,20 @@ def get_projects(user_id: Optional[int] = None, db: Session = Depends(get_db)):
 def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     state = load_state()
 
-    p = Project(name=project.name, description=project.description)
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-
-    # owner 기본값: 요청값 > super owner > 1
+    # C-4: Calculate owner before creating project
     default_owner_id = project.owner_id
     if not default_owner_id:
         default_owner_id = get_super_owner_id(db) or 1
+
+    p = Project(
+        name=project.name,
+        description=project.description,
+        owner_id=default_owner_id,
+        created_by=default_owner_id,
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
 
     set_project_meta(state, p.id, {
         "owner_id": default_owner_id,
@@ -971,17 +1045,20 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         "permissions": project.permissions or dict(DEFAULT_PERMISSIONS),
     })
 
-    ensure_owner_membership(state, p.id, default_owner_id)
+    # C-3: Owner membership via DB
+    ensure_owner_membership(state, p.id, default_owner_id, db=db)
 
     for mid in (project.member_ids or []):
         if mid == default_owner_id:
             continue
-        exists = any(
-            int(m.get("project_id")) == p.id and int(m.get("user_id")) == int(mid)
-            for m in state.get("project_members", [])
-        )
-        if not exists:
-            state["project_members"].append({"project_id": p.id, "user_id": mid, "role": "member"})
+        existing = db.query(ProjectMemberModel).filter(
+            ProjectMemberModel.project_id == p.id,
+            ProjectMemberModel.user_id == int(mid),
+        ).first()
+        if not existing:
+            pm = ProjectMemberModel(project_id=p.id, user_id=mid, role="member")
+            db.add(pm)
+    db.flush()
 
     save_state(state)
     return project_dict(p, state)
@@ -1032,7 +1109,19 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
         if not t.archived_at:
             t.archived_at = now
 
-    # sidecar cleanup
+    # C-2: Delete subprojects from DB
+    db.query(SubProjectModel).filter(SubProjectModel.project_id == project_id).delete()
+
+    # C-5: Delete notes and mentions from DB
+    project_notes = db.query(NoteModel).filter(NoteModel.project_id == project_id).all()
+    for pn in project_notes:
+        db.query(NoteMention).filter(NoteMention.note_id == pn.id).delete()
+    db.query(NoteModel).filter(NoteModel.project_id == project_id).delete()
+
+    # C-3: Delete members from DB
+    db.query(ProjectMemberModel).filter(ProjectMemberModel.project_id == project_id).delete()
+
+    # sidecar cleanup (legacy)
     state["sub_projects"] = [s for s in state.get("sub_projects", []) if int(s.get("project_id")) != project_id]
     state["notes"] = [n for n in state.get("notes", []) if int(n.get("project_id")) != project_id]
     state["project_members"] = [m for m in state.get("project_members", []) if int(m.get("project_id")) != project_id]
@@ -1056,12 +1145,12 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
     return {"message": "Project deleted"}
 
 # =========================
-# Project Members / Join Requests (sidecar)
+# Project Members / Join Requests (C-3: DB + sidecar fallback)
 # =========================
 @app.get("/api/projects/{project_id}/members")
 def get_project_members(project_id: int, db: Session = Depends(get_db)):
     state = load_state()
-    members = get_members_for_project(state, project_id)
+    members = get_members_for_project(state, project_id, db=db)
     users_map = {u.id: u for u in db.query(User).all()}
 
     enriched = []
@@ -1083,11 +1172,19 @@ def add_project_member(project_id: int, member: MemberAdd, db: Session = Depends
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 유저 존재 체크
     u = db.query(User).filter(User.id == member.user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # C-3: Check DB for existing membership
+    existing = db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == project_id,
+        ProjectMemberModel.user_id == member.user_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="User is already a member")
+
+    # Also check sidecar for legacy compat
     members = state.get("project_members", [])
     if any(int(m.get("project_id")) == project_id and int(m.get("user_id")) == member.user_id for m in members):
         raise HTTPException(status_code=400, detail="User is already a member")
@@ -1116,13 +1213,25 @@ def add_project_member(project_id: int, member: MemberAdd, db: Session = Depends
         save_state(state)
         return {"message": "참여 요청이 등록되었습니다. 관리자 승인 후 참여 가능합니다.", "status": "pending"}
 
+    # C-3: Add to DB
+    pm = ProjectMemberModel(project_id=project_id, user_id=member.user_id, role=member.role or "member")
+    db.add(pm)
+    db.commit()
+    # Also keep sidecar in sync for backward compat
     members.append({"project_id": project_id, "user_id": member.user_id, "role": member.role or "member"})
     state["project_members"] = members
     save_state(state)
     return {"message": "Member added"}
 
 @app.delete("/api/projects/{project_id}/members/{user_id}")
-def remove_project_member(project_id: int, user_id: int):
+def remove_project_member(project_id: int, user_id: int, db: Session = Depends(get_db)):
+    # C-3: Remove from DB
+    db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == project_id,
+        ProjectMemberModel.user_id == user_id,
+    ).delete()
+    db.commit()
+    # Also remove from sidecar
     state = load_state()
     state["project_members"] = [
         m for m in state.get("project_members", [])
@@ -1469,64 +1578,107 @@ def delete_project_file(project_id: int, file_id: int):
     return {"message": "File deleted"}
 
 # =========================
-# SubProjects (sidecar)
+# List Order (B-1)
 # =========================
-@app.get("/api/projects/{project_id}/subprojects")
-def get_subprojects(project_id: int):
+@app.get("/api/projects/{project_id}/list/order")
+def get_list_order(project_id: int):
     state = load_state()
-    subs = [s for s in state.get("sub_projects", []) if int(s.get("project_id")) == project_id]
-    return {"sub_projects": subs}
+    orders = state.get("list_orders", {})
+    return {"order": orders.get(str(project_id), [])}
+
+@app.put("/api/projects/{project_id}/list/order")
+def save_list_order(project_id: int, body: ListOrderUpdate):
+    state = load_state()
+    if "list_orders" not in state:
+        state["list_orders"] = {}
+    state["list_orders"][str(project_id)] = body.order
+    save_state(state)
+    return {"message": "Order saved"}
+
+# =========================
+# SubProjects (C-2: DB)
+# =========================
+def _subproject_dict(sp: SubProjectModel) -> dict:
+    return {
+        "id": sp.id,
+        "project_id": sp.project_id,
+        "name": sp.name,
+        "description": sp.description,
+        "parent_id": sp.parent_id,
+        "created_at": iso(sp.created_at),
+    }
+
+@app.get("/api/projects/{project_id}/subprojects")
+def get_subprojects(project_id: int, db: Session = Depends(get_db)):
+    subs = db.query(SubProjectModel).filter(SubProjectModel.project_id == project_id).all()
+    return {"sub_projects": [_subproject_dict(s) for s in subs]}
 
 @app.post("/api/projects/{project_id}/subprojects")
 def create_subproject(project_id: int, sub: SubProjectCreate, db: Session = Depends(get_db)):
-    state = load_state()
-
     p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    subs = state.get("sub_projects", [])
-    new_sub = sub.model_dump()
-    new_sub["id"] = next_id(subs)
-    new_sub["project_id"] = project_id
-    new_sub["created_at"] = datetime.now().isoformat()
-
-    subs.append(new_sub)
-    state["sub_projects"] = subs
-    save_state(state)
-    return new_sub
+    new_sub = SubProjectModel(
+        project_id=project_id,
+        name=sub.name,
+        description=sub.description,
+        parent_id=sub.parent_id,
+    )
+    db.add(new_sub)
+    db.commit()
+    db.refresh(new_sub)
+    return _subproject_dict(new_sub)
 
 @app.patch("/api/subprojects/{sub_id}")
-def update_subproject(sub_id: int, updates: SubProjectUpdate):
-    state = load_state()
-    subs = state.get("sub_projects", [])
+def update_subproject(sub_id: int, updates: SubProjectUpdate, db: Session = Depends(get_db)):
+    sp = db.query(SubProjectModel).filter(SubProjectModel.id == sub_id).first()
+    if not sp:
+        raise HTTPException(status_code=404, detail="SubProject not found")
 
-    for i, s in enumerate(subs):
-        if int(s.get("id")) == sub_id:
-            subs[i].update(updates.model_dump(exclude_unset=True))
-            state["sub_projects"] = subs
-            save_state(state)
-            return subs[i]
-
-    raise HTTPException(status_code=404, detail="SubProject not found")
+    data = updates.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(sp, k, v)
+    db.commit()
+    db.refresh(sp)
+    return _subproject_dict(sp)
 
 @app.delete("/api/subprojects/{sub_id}")
-def delete_subproject(sub_id: int):
+def delete_subproject(sub_id: int, db: Session = Depends(get_db)):
+    sp = db.query(SubProjectModel).filter(SubProjectModel.id == sub_id).first()
+    if not sp:
+        raise HTTPException(status_code=404, detail="SubProject not found")
+
+    # Unassign tasks from this subproject
+    tasks = db.query(Task).filter(Task.sub_project_id == sub_id).all()
+    for t in tasks:
+        t.sub_project_id = None
+
+    # Also clear sidecar task_meta references
     state = load_state()
-
-    state["sub_projects"] = [s for s in state.get("sub_projects", []) if int(s.get("id")) != sub_id]
-
-    # task_meta에서 sub_project_id 제거
     for key, meta in state.get("task_meta", {}).items():
         if meta.get("sub_project_id") == sub_id:
             meta["sub_project_id"] = None
-
     save_state(state)
+
+    db.delete(sp)
+    db.commit()
     return {"message": "SubProject deleted"}
 
 # =========================
-# Notes (sidecar)
+# Notes (C-5: DB + NoteMention)
 # =========================
+def _note_dict(n: NoteModel, mentioned_user_ids: List[int] = None) -> dict:
+    return {
+        "id": n.id,
+        "project_id": n.project_id,
+        "author_id": n.author_id,
+        "content": n.content,
+        "created_at": iso(n.created_at),
+        "updated_at": iso(n.updated_at),
+        "mentioned_user_ids": mentioned_user_ids or [],
+    }
+
 @app.get("/api/projects/{project_id}/notes")
 def get_notes(project_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     state = load_state()
@@ -1534,26 +1686,38 @@ def get_notes(project_id: int, user_id: Optional[int] = None, db: Session = Depe
     if user_id:
         check_project_access(db, state, project_id, user_id)
 
-    notes = [n.copy() for n in state.get("notes", []) if int(n.get("project_id")) == project_id]
-    notes.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    db_notes = db.query(NoteModel).filter(NoteModel.project_id == project_id).order_by(NoteModel.created_at.desc()).all()
 
     users_map = {u.id: u for u in db.query(User).all()}
-    for n in notes:
-        author = users_map.get(int(n.get("author_id", 0)))
-        n["author_name"] = author.username if author else "Unknown"
-        n["author_color"] = author.avatar_color if author else "#ccc"
+    result = []
+    for n in db_notes:
+        mentions = db.query(NoteMention).filter(NoteMention.note_id == n.id).all()
+        d = _note_dict(n, [m.user_id for m in mentions])
+        author = users_map.get(n.author_id or 0)
+        d["author_name"] = author.username if author else "Unknown"
+        d["author_color"] = author.avatar_color if author else "#ccc"
+        result.append(d)
 
-    return {"notes": notes}
+    # Also include legacy sidecar notes
+    sidecar_notes = [nc.copy() for nc in state.get("notes", []) if int(nc.get("project_id")) == project_id]
+    sidecar_ids = {n["id"] for n in result}
+    for sn in sidecar_notes:
+        if sn.get("id") not in sidecar_ids:
+            author = users_map.get(int(sn.get("author_id", 0)))
+            sn["author_name"] = author.username if author else "Unknown"
+            sn["author_color"] = author.avatar_color if author else "#ccc"
+            result.append(sn)
+
+    result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"notes": result}
 
 @app.post("/api/projects/{project_id}/notes")
 def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=1), db: Session = Depends(get_db)):
-    state = load_state()
-
     p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # v1.2: Parse @mentions from content
+    # C-5: Parse @mentions from content
     mentioned_user_ids = []
     mentioned_usernames = []
     mention_matches = re.findall(r'@(\S+)', note.content)
@@ -1569,38 +1733,65 @@ def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=
                         mentioned_usernames.append(u.username or u.loginid)
                     break
 
-    notes = state.get("notes", [])
-    new_note = note.model_dump()
-    new_note["id"] = next_id(notes)
-    new_note["project_id"] = project_id
-    new_note["author_id"] = user_id
-    new_note["created_at"] = datetime.now().isoformat()
-    new_note["updated_at"] = datetime.now().isoformat()
-    new_note["mentioned_user_ids"] = mentioned_user_ids
-    new_note["mentioned_usernames"] = mentioned_usernames
+    # C-5: Save note to DB
+    new_note = NoteModel(
+        project_id=project_id,
+        author_id=user_id,
+        content=note.content,
+    )
+    db.add(new_note)
+    db.commit()
+    db.refresh(new_note)
 
-    notes.append(new_note)
-    state["notes"] = notes
+    # C-5: Save mentions to DB
+    for uid in mentioned_user_ids:
+        mention = NoteMention(note_id=new_note.id, user_id=uid)
+        db.add(mention)
+    if mentioned_user_ids:
+        db.commit()
+
+    result = _note_dict(new_note, mentioned_user_ids)
+    result["mentioned_usernames"] = mentioned_usernames
+
+    # Also save to sidecar for backward compat
+    state = load_state()
+    sidecar_note = {
+        "id": new_note.id,
+        "project_id": project_id,
+        "author_id": user_id,
+        "content": note.content,
+        "created_at": iso(new_note.created_at),
+        "updated_at": iso(new_note.updated_at),
+        "mentioned_user_ids": mentioned_user_ids,
+        "mentioned_usernames": mentioned_usernames,
+    }
+    notes_list = state.get("notes", [])
+    notes_list.append(sidecar_note)
+    state["notes"] = notes_list
     save_state(state)
-    return {**new_note, "message": "메모가 등록되었습니다"}
+
+    return {**result, "message": "메모가 등록되었습니다"}
 
 @app.delete("/api/notes/{note_id}")
-def delete_note(note_id: int):
+def delete_note(note_id: int, db: Session = Depends(get_db)):
+    # C-5: Delete from DB
+    db.query(NoteMention).filter(NoteMention.note_id == note_id).delete()
+    db.query(NoteModel).filter(NoteModel.id == note_id).delete()
+    db.commit()
+    # Also clean sidecar
     state = load_state()
     state["notes"] = [n for n in state.get("notes", []) if int(n.get("id")) != note_id]
     save_state(state)
     return {"message": "Note deleted"}
 
 # =========================
-# Mentions (v1.2)
+# Mentions (C-5: DB + sidecar fallback)
 # =========================
 @app.get("/api/mentions")
 def get_mentions(user_id: int = Query(...), db: Session = Depends(get_db)):
-    """사용자가 멘션된 모든 notes를 반환 (user_id 또는 username 기반 매칭)"""
+    """사용자가 멘션된 모든 notes를 반환"""
     state = load_state()
-    all_notes = state.get("notes", [])
 
-    # 현재 유저 정보
     current_user = db.query(User).filter(User.id == user_id).first()
     if not current_user:
         return {"mentions": []}
@@ -1608,27 +1799,47 @@ def get_mentions(user_id: int = Query(...), db: Session = Depends(get_db)):
     current_username_lower = (current_user.username or "").lower()
     current_loginid_lower = (current_user.loginid or "").lower()
 
-    result = []
     users_map = {u.id: u for u in db.query(User).all()}
     projects_map = {}
     for p in db.query(Project).filter(Project.archived_at.is_(None)).all():
         projects_map[p.id] = p
 
+    result = []
+    seen_ids = set()
+
+    # C-5: Check DB NoteMention first
+    db_mentions = db.query(NoteMention).filter(NoteMention.user_id == user_id).all()
+    for nm in db_mentions:
+        note = db.query(NoteModel).filter(NoteModel.id == nm.note_id).first()
+        if not note:
+            continue
+        seen_ids.add(note.id)
+        all_mentions = db.query(NoteMention).filter(NoteMention.note_id == note.id).all()
+        d = _note_dict(note, [m.user_id for m in all_mentions])
+        author = users_map.get(note.author_id or 0)
+        project = projects_map.get(note.project_id)
+        d["author_name"] = author.username if author else "Unknown"
+        d["author_color"] = author.avatar_color if author else "#ccc"
+        d["project_name"] = project.name if project else "Unknown"
+        result.append(d)
+
+    # Fallback: sidecar notes
+    all_notes = state.get("notes", [])
     for n in all_notes:
+        if n.get("id") in seen_ids:
+            continue
+
         mentioned_ids = n.get("mentioned_user_ids", [])
         mentioned_names = n.get("mentioned_usernames", [])
 
-        # 방법1: mentioned_user_ids에 user_id가 있으면 매칭
         is_mentioned = user_id in mentioned_ids
 
-        # 방법2: mentioned_usernames에서 loginid/username 매칭
         if not is_mentioned and mentioned_names:
             for name in mentioned_names:
                 if name.lower() == current_username_lower or name.lower() == current_loginid_lower:
                     is_mentioned = True
                     break
 
-        # 방법3: 레거시 노트 — content에서 @username/@loginid 검색
         if not is_mentioned and not mentioned_ids and not mentioned_names:
             content = n.get("content", "")
             mentions_in_content = re.findall(r'@(\S+)', content)
@@ -1672,7 +1883,7 @@ def get_roadmap(
         raise HTTPException(status_code=404, detail="Project not found")
 
     project = project_dict(p, state)
-    sub_projects = [s for s in state.get("sub_projects", []) if int(s.get("project_id")) == project_id]
+    sub_projects = get_subprojects_from_db(db, project_id)
 
     all_task_rows = db.query(Task).filter(Task.project_id == project_id, Task.archived_at.is_(None)).all()
     all_tasks = [task_dict(t, state) for t in all_task_rows]
@@ -1805,14 +2016,14 @@ def get_global_roadmap(
 
     task_rows = db.query(Task).filter(Task.archived_at.is_(None)).all()
     all_tasks = [task_dict(t, state) for t in task_rows]
-    sub_projects = state.get("sub_projects", [])
+    all_sub_projects = get_subprojects_from_db(db)
 
     items = []
 
     for project in projects:
         pid = project["id"]
         p_tasks = [t for t in all_tasks if t.get("project_id") == pid]
-        p_subs = [s for s in sub_projects if int(s.get("project_id")) == pid]
+        p_subs = [s for s in all_sub_projects if int(s.get("project_id")) == pid]
 
         active_tasks = [t for t in p_tasks if t.get("status") != "hold"]
         total = len(active_tasks)
@@ -1987,11 +2198,10 @@ def get_project_graph(project_id: int, db: Session = Depends(get_db)):
 
     nodes.append({"id": f"project-{project_id}", "type": "project", "label": project["name"]})
 
-    for sp in state.get("sub_projects", []):
-        if int(sp.get("project_id")) == project_id:
-            sp_id = f"subproject-{sp['id']}"
-            nodes.append({"id": sp_id, "type": "subproject", "label": sp.get("name", "")})
-            edges.append({"source": f"project-{project_id}", "target": sp_id})
+    for sp in get_subprojects_from_db(db, project_id):
+        sp_id = f"subproject-{sp['id']}"
+        nodes.append({"id": sp_id, "type": "subproject", "label": sp.get("name", "")})
+        edges.append({"source": f"project-{project_id}", "target": sp_id})
 
     task_rows = db.query(Task).filter(Task.project_id == project_id, Task.archived_at.is_(None)).all()
     tasks = [task_dict(t, state) for t in task_rows]
@@ -2011,8 +2221,20 @@ def get_project_graph(project_id: int, db: Session = Depends(get_db)):
                 nodes.append({"id": a_id, "type": "attachment", "label": a.get("filename") or a.get("url", "")})
                 edges.append({"source": t_id, "target": a_id})
 
+    # C-5: Notes from DB
+    db_notes = db.query(NoteModel).filter(NoteModel.project_id == project_id).all()
+    seen_note_ids = set()
+    for n in db_notes:
+        content = n.content or ""
+        label = content[:30] + ("..." if len(content) > 30 else "")
+        n_id = f"note-{n.id}"
+        nodes.append({"id": n_id, "type": "note", "label": label})
+        edges.append({"source": f"project-{project_id}", "target": n_id})
+        seen_note_ids.add(n.id)
+
+    # Fallback: sidecar notes
     for n in state.get("notes", []):
-        if int(n.get("project_id")) == project_id:
+        if int(n.get("project_id")) == project_id and n.get("id") not in seen_note_ids:
             content = n.get("content", "")
             label = content[:30] + ("..." if len(content) > 30 else "")
             n_id = f"note-{n['id']}"
@@ -2096,7 +2318,7 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
     task_rows = db.query(Task).filter(Task.project_id == body.project_id, Task.archived_at.is_(None)).all()
     tasks = [task_dict(t, state) for t in task_rows]
 
-    sub_projects = [sp for sp in state.get("sub_projects", []) if int(sp.get("project_id")) == body.project_id]
+    sub_projects = get_subprojects_from_db(db, body.project_id)
     all_attachments = state.get("attachments", [])
     members = [m for m in state.get("project_members", []) if int(m.get("project_id")) == body.project_id]
     notes = [n for n in state.get("notes", []) if int(n.get("project_id")) == body.project_id]
@@ -2377,7 +2599,7 @@ def generate_project_ai_query(
     tasks = [task_dict(t, state) for t in task_rows]
 
     members = [m for m in state.get("project_members", []) if int(m.get("project_id")) == project_id]
-    sub_projects = [sp for sp in state.get("sub_projects", []) if int(sp.get("project_id")) == project_id]
+    sub_projects = get_subprojects_from_db(db, project_id)
     all_attachments = state.get("attachments", [])
 
     users_map = {u.id: user_dict(u, state) for u in db.query(User).all()}

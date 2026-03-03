@@ -32,6 +32,9 @@ import EditIcon from '@mui/icons-material/Edit';
 import GroupsIcon from '@mui/icons-material/Groups';
 import LinkIcon from '@mui/icons-material/Link';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import SearchIcon from '@mui/icons-material/Search';
+import CircularProgress from '@mui/material/CircularProgress';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, User, Shortcut, Group } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
@@ -214,10 +217,64 @@ const AdminPage: React.FC = () => {
     },
   });
 
+  // ─── D-1: Create user mutation ───
+  const createUserMut = useMutation({
+    mutationFn: (data: { username: string; loginid: string; role?: string }) =>
+      api.createUser(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setCreateUserDialogOpen(false);
+      setNewUsername('');
+      setNewLoginId('');
+      setNewUserRole('member');
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.detail || '사용자 추가 실패');
+    },
+  });
+
   // ─── Local state ───
   const [userSearch, setUserSearch] = useState('');
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
+
+  // D-1: Create user dialog state
+  const [createUserDialogOpen, setCreateUserDialogOpen] = useState(false);
+  const [newUsername, setNewUsername] = useState('');
+  const [newLoginId, setNewLoginId] = useState('');
+  const [newUserRole, setNewUserRole] = useState('member');
+
+  // D-2: Knox search state
+  const [knoxSearch, setKnoxSearch] = useState('');
+  const [knoxResults, setKnoxResults] = useState<any[]>([]);
+  const [knoxSearching, setKnoxSearching] = useState(false);
+
+  const handleKnoxSearch = async () => {
+    if (!knoxSearch.trim()) return;
+    setKnoxSearching(true);
+    try {
+      const results = await api.searchKnoxEmployees({ fullName: knoxSearch.trim() });
+      setKnoxResults(results);
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || 'Knox 검색 실패');
+      setKnoxResults([]);
+    } finally {
+      setKnoxSearching(false);
+    }
+  };
+
+  const addFromKnoxMut = useMutation({
+    mutationFn: (data: { username: string; loginid: string }) =>
+      api.createUser({ ...data, role: 'member' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.detail || 'Knox 사용자 추가 실패');
+    },
+  });
   const [shortcutDialogOpen, setShortcutDialogOpen] = useState(false);
   const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
   const [scName, setScName] = useState('');
@@ -348,13 +405,33 @@ const AdminPage: React.FC = () => {
       {/* ── Tab 0: User Management ── */}
       {tabIndex === 0 && (
         <Box>
-          <TextField
-            size="small"
-            placeholder="이름 또는 ID로 검색..."
-            value={userSearch}
-            onChange={e => setUserSearch(e.target.value)}
-            sx={{ mb: 2, width: 300 }}
-          />
+          {/* D-1: Role descriptions */}
+          <Alert severity="info" sx={{ borderRadius: 2, mb: 2, fontSize: '0.85rem' }}>
+            <strong>역할 설명:</strong><br />
+            <strong>Super Admin</strong> — 전체 시스템 관리 (사용자/그룹/설정 등 모든 권한)<br />
+            <strong>Admin</strong> — 사이트 관리 (프로젝트/구성원 관리)<br />
+            <strong>중간관리자</strong> — 소속 프로젝트 관리 (담당 프로젝트 내 관리 권한)<br />
+            <strong>Member</strong> — 일반 사용자 (할당된 프로젝트 내 작업 수행)
+          </Alert>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+            <TextField
+              size="small"
+              placeholder="이름 또는 ID로 검색..."
+              value={userSearch}
+              onChange={e => setUserSearch(e.target.value)}
+              sx={{ width: 300 }}
+            />
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<PersonAddIcon />}
+              onClick={() => setCreateUserDialogOpen(true)}
+              sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
+            >
+              구성원 추가
+            </Button>
+          </Box>
 
           <TableContainer
             component={Paper}
@@ -503,6 +580,109 @@ const AdminPage: React.FC = () => {
               </TableBody>
             </Table>
           </TableContainer>
+
+          {/* D-2: Knox Search Panel */}
+          <Paper
+            sx={{ mt: 3, p: 2.5, borderRadius: 2, border: '1px solid #E5E7EB' }}
+            elevation={0}
+          >
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
+              Knox 사내 구성원 검색
+            </Typography>
+            <Typography variant="body2" sx={{ color: '#6B7280', mb: 2, fontSize: '0.85rem' }}>
+              사내 시스템(Knox)에서 직원을 검색하여 사이트에 추가합니다.
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+              <TextField
+                size="small"
+                placeholder="이름으로 검색..."
+                value={knoxSearch}
+                onChange={e => setKnoxSearch(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleKnoxSearch()}
+                sx={{ width: 300 }}
+              />
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={knoxSearching ? <CircularProgress size={16} /> : <SearchIcon />}
+                onClick={handleKnoxSearch}
+                disabled={knoxSearching || !knoxSearch.trim()}
+                sx={{ textTransform: 'none', fontWeight: 600 }}
+              >
+                검색
+              </Button>
+            </Box>
+            {knoxResults.length > 0 && (
+              <TableContainer
+                component={Paper}
+                sx={{ borderRadius: 2, border: '1px solid #E5E7EB' }}
+                elevation={0}
+              >
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: '#F9FAFB' }}>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>이름</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>ID</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>부서</TableCell>
+                      <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }} align="center">작업</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {knoxResults.map((emp: any, idx: number) => {
+                      const loginid = (emp.loginid || emp.login_id || emp.id || '').toString().toLowerCase();
+                      const isRegistered = adminUsers.some(
+                        u => (u.loginid || '').toLowerCase() === loginid
+                      );
+                      return (
+                        <TableRow key={idx} hover>
+                          <TableCell>
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                              {emp.fullName || emp.username || emp.name || '-'}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2" sx={{ color: '#6B7280' }}>
+                              {loginid}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.8rem' }}>
+                              {emp.deptName || emp.deptname || emp.department || '-'}
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="center">
+                            {isRegistered ? (
+                              <Chip
+                                label="등록됨"
+                                size="small"
+                                sx={{ fontSize: '0.7rem', fontWeight: 600, bgcolor: '#DCFCE7', color: '#22C55E' }}
+                              />
+                            ) : (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<AddIcon />}
+                                onClick={() =>
+                                  addFromKnoxMut.mutate({
+                                    username: emp.fullName || emp.username || emp.name || loginid,
+                                    loginid,
+                                  })
+                                }
+                                disabled={addFromKnoxMut.isPending}
+                                sx={{ textTransform: 'none', fontSize: '0.75rem' }}
+                              >
+                                추가
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Paper>
         </Box>
       )}
 
@@ -883,6 +1063,74 @@ const AdminPage: React.FC = () => {
             sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
           >
             {editingShortcut ? '수정' : '추가'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── D-1: Create User Dialog ── */}
+      <Dialog
+        open={createUserDialogOpen}
+        onClose={() => setCreateUserDialogOpen(false)}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 700 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PersonAddIcon sx={{ color: '#2955FF' }} />
+            구성원 추가
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="이름 *"
+            value={newUsername}
+            onChange={e => setNewUsername(e.target.value)}
+            placeholder="예: 홍길동"
+            sx={{ mt: 1, mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            label="Login ID *"
+            value={newLoginId}
+            onChange={e => setNewLoginId(e.target.value)}
+            placeholder="예: gildong.hong"
+            sx={{ mb: 2 }}
+          />
+          <Select
+            fullWidth
+            value={newUserRole}
+            onChange={e => setNewUserRole(e.target.value as string)}
+            size="small"
+            sx={{ mb: 1 }}
+          >
+            <MenuItem value="member">Member — 일반 사용자</MenuItem>
+            <MenuItem value="manager">중간관리자 — 소속 프로젝트 관리</MenuItem>
+            {isSuperAdmin && <MenuItem value="admin">Admin — 사이트 관리</MenuItem>}
+          </Select>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button
+            onClick={() => setCreateUserDialogOpen(false)}
+            sx={{ textTransform: 'none' }}
+          >
+            취소
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              if (!newUsername.trim() || !newLoginId.trim()) return;
+              createUserMut.mutate({
+                username: newUsername.trim(),
+                loginid: newLoginId.trim(),
+                role: newUserRole,
+              });
+            }}
+            disabled={!newUsername.trim() || !newLoginId.trim() || createUserMut.isPending}
+            sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 2 }}
+          >
+            {createUserMut.isPending ? '추가 중...' : '추가'}
           </Button>
         </DialogActions>
       </Dialog>

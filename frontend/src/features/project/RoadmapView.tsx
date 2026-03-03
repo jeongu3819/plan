@@ -400,8 +400,8 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
               sx={{
                 display: 'flex',
                 minHeight: 44,
-                borderBottom: '1px solid #F3F4F6',
-                '&:hover': { bgcolor: '#FAFBFF' },
+                borderBottom: '1px solid rgba(0,0,0,0.06)',
+                '&:hover': { bgcolor: 'rgba(41,85,255,0.03)' },
                 '&:hover .subproject-delete-btn': { opacity: 1 },
                 transition: 'background 0.1s',
               }}
@@ -416,7 +416,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                   gap: 0.5,
                   pl: 0.5 + depth * 2.5,
                   pr: 1,
-                  borderRight: '1px solid #E5E7EB',
+                  borderRight: '1px solid rgba(0,0,0,0.06)',
                 }}
               >
                 <Box
@@ -548,12 +548,13 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                         left: barPos.left,
                         width: barPos.width,
                         height: barHeight,
-                        bgcolor: '#E5E7EB',
+                        bgcolor: `${barColor}18`,
                         borderRadius: `${barRadius}px`,
                         minWidth: 6,
                         zIndex: 1,
                         overflow: 'hidden',
-                        border: `1px solid ${barColor}30`,
+                        border: `1px solid ${barColor}40`,
+                        boxShadow: `0 1px 4px ${barColor}15`,
                       }}
                     >
                       {/* Filled portion = progress */}
@@ -564,7 +565,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                           bgcolor: barColor,
                           borderRadius: `${barRadius}px`,
                           transition: 'width 0.5s ease',
-                          opacity: item.status === 'done' ? 0.7 : 0.9,
+                          opacity: item.status === 'done' ? 0.8 : 1,
                         }}
                       />
                       {/* Progress label on bar */}
@@ -797,17 +798,24 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
       )}
 
       <Paper
-        sx={{ borderRadius: 2, border: '1px solid #E5E7EB', overflow: 'hidden' }}
+        sx={{
+          borderRadius: 2,
+          border: '1px solid rgba(0,0,0,0.1)',
+          overflow: 'hidden',
+          bgcolor: 'rgba(255,255,255,0.7)',
+          backdropFilter: 'blur(8px)',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
+        }}
         elevation={0}
       >
         {/* Header */}
-        <Box sx={{ display: 'flex', borderBottom: '2px solid #E5E7EB', bgcolor: '#FAFBFC' }}>
+        <Box sx={{ display: 'flex', borderBottom: '2px solid rgba(0,0,0,0.08)', bgcolor: 'rgba(255,255,255,0.85)' }}>
           <Box
             sx={{
               width: nameColumnWidth,
               minWidth: nameColumnWidth,
               flexShrink: 0,
-              borderRight: '1px solid #E5E7EB',
+              borderRight: '1px solid rgba(0,0,0,0.06)',
               px: 2,
               py: 1,
               position: 'relative',

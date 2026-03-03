@@ -25,6 +25,7 @@ import CalendarView from '../features/project/CalendarView';
 import RoadmapView from '../features/project/RoadmapView';
 import NotesPanel from '../features/project/NotesPanel';
 import NodeGraphView from '../features/project/NodeGraphView';
+import { ReactFlowProvider } from 'react-flow-renderer';
 import ProjectReportView from '../features/project/ProjectReportView';
 import ProjectFilesView from '../features/project/ProjectFilesView';
 import ProjectSettingsView from '../features/project/ProjectSettingsView';
@@ -181,7 +182,7 @@ const ProjectPage: React.FC = () => {
                     {view === 2 && <CalendarView projectId={projectId} />}
                     {view === 3 && <RoadmapView projectId={projectId} />}
                     {view === 4 && <NotesPanel projectId={projectId} />}
-                    {view === 5 && <NodeGraphView projectId={projectId} />}
+                    {view === 5 && <ReactFlowProvider><NodeGraphView projectId={projectId} /></ReactFlowProvider>}
                     {view === 6 && <ProjectReportView projectId={projectId} />}
                     {view === 7 && <ProjectFilesView projectId={projectId} />}
                     {view === 8 && <ProjectSettingsView projectId={projectId} />}

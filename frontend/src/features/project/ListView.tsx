@@ -18,7 +18,7 @@ import {
 } from '@mui/material';
 
 import { api } from '../../api/client';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../stores/useAppStore';
 import { Task, SubProject } from '../../types';
 import QuickAdd from '../../components/QuickAdd';
@@ -30,6 +30,24 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import FolderSpecialIcon from '@mui/icons-material/FolderSpecial';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+
+// dnd-kit imports
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 interface ListViewProps {
   projectId: number;
@@ -61,9 +79,107 @@ const SORT_OPTIONS: { value: SortField; label: string }[] = [
 
 const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
+// B-1: SortableTaskRow component
+const SortableTaskRow: React.FC<{
+  task: Task;
+  indent: boolean;
+  projectId: number;
+  openDrawer: (task: Task | null, projectId: number) => void;
+  isDragMode: boolean;
+}> = ({ task, indent, projectId, openDrawer, isDragMode }) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: String(task.id),
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const status = statusConfig[task.status] || statusConfig.todo;
+  const priority = task.priority ? priorityConfig[task.priority] : null;
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      hover
+      onClick={() => openDrawer(task, projectId)}
+      sx={{
+        cursor: 'pointer',
+        '&:hover': { bgcolor: 'rgba(41,85,255,0.04)' },
+        '& td': { py: 1.5, borderColor: 'rgba(0,0,0,0.06)' },
+      }}
+    >
+      <TableCell>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pl: indent ? 3 : 0 }}>
+          {isDragMode && (
+            <Box
+              {...attributes}
+              {...listeners}
+              onClick={(e) => e.stopPropagation()}
+              sx={{ cursor: 'grab', display: 'flex', alignItems: 'center', color: '#9CA3AF', '&:hover': { color: '#6B7280' } }}
+            >
+              <DragIndicatorIcon sx={{ fontSize: 18 }} />
+            </Box>
+          )}
+          <Box
+            sx={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              bgcolor: status.color,
+              flexShrink: 0,
+            }}
+          />
+          <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.85rem' }}>
+            {task.title}
+          </Typography>
+        </Box>
+      </TableCell>
+      <TableCell>
+        <Chip
+          label={status.label}
+          size="small"
+          sx={{
+            height: 24,
+            fontSize: '0.7rem',
+            fontWeight: 600,
+            bgcolor: status.bgcolor,
+            color: status.color,
+            border: 'none',
+          }}
+        />
+      </TableCell>
+      <TableCell>
+        {priority && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: priority.color }}>
+            <FlagIcon sx={{ fontSize: '0.85rem' }} />
+            <Typography variant="caption" sx={{ fontWeight: 500, fontSize: '0.75rem' }}>
+              {priority.label}
+            </Typography>
+          </Box>
+        )}
+      </TableCell>
+      <TableCell>
+        <Typography variant="caption" sx={{ color: '#6B7280', fontSize: '0.8rem' }}>
+          {task.due_date || '-'}
+        </Typography>
+      </TableCell>
+      <TableCell>
+        <IconButton size="small" sx={{ color: '#9CA3AF' }}>
+          <EditIcon fontSize="small" />
+        </IconButton>
+      </TableCell>
+    </TableRow>
+  );
+};
+
 const ListView: React.FC<ListViewProps> = ({ projectId }) => {
   const openDrawer = useAppStore(state => state.openDrawer);
   const currentUserId = useAppStore(state => state.currentUserId);
+  const queryClient = useQueryClient();
   const [sortField, setSortField] = useState<SortField>('default');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [collapsedSubs, setCollapsedSubs] = useState<Set<number>>(new Set());
@@ -78,6 +194,25 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
     queryFn: () => api.getSubProjects(projectId),
   });
 
+  // B-1: Load saved order
+  const { data: savedOrderData } = useQuery({
+    queryKey: ['listOrder', projectId],
+    queryFn: () => api.getListOrder(projectId),
+  });
+
+  // B-1: Save order mutation
+  const saveOrderMutation = useMutation({
+    mutationFn: (order: number[]) => api.saveListOrder(projectId, order),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['listOrder', projectId] });
+    },
+  });
+
+  // B-1: dnd-kit sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
   const toggleSubCollapse = useCallback((subId: number) => {
     setCollapsedSubs(prev => {
       const next = new Set(prev);
@@ -89,7 +224,20 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
 
   const sortTasks = useCallback(
     (taskList: Task[]): Task[] => {
-      if (sortField === 'default') return taskList;
+      if (sortField === 'default') {
+        // B-1: Apply saved order if available
+        const savedOrder = savedOrderData?.order;
+        if (savedOrder && savedOrder.length > 0) {
+          const orderMap = new Map<number, number>();
+          savedOrder.forEach((id: number, idx: number) => orderMap.set(id, idx));
+          return [...taskList].sort((a, b) => {
+            const aIdx = orderMap.get(a.id) ?? 99999;
+            const bIdx = orderMap.get(b.id) ?? 99999;
+            return aIdx - bIdx;
+          });
+        }
+        return taskList;
+      }
       return [...taskList].sort((a, b) => {
         let cmp = 0;
         switch (sortField) {
@@ -122,7 +270,7 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
         return sortDirection === 'desc' ? -cmp : cmp;
       });
     },
-    [sortField, sortDirection]
+    [sortField, sortDirection, savedOrderData]
   );
 
   const handleHeaderSort = useCallback(
@@ -150,6 +298,26 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
 
   const hasSubProjects = subProjects.length > 0;
 
+  const sortedRootTasks = sortTasks(groupedTasks.rootTasks);
+  const isDragMode = sortField === 'default';
+
+  // B-1: Handle drag end for reorder
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = sortedRootTasks.findIndex(t => String(t.id) === String(active.id));
+      const newIndex = sortedRootTasks.findIndex(t => String(t.id) === String(over.id));
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = arrayMove(sortedRootTasks, oldIndex, newIndex);
+      const newOrder = reordered.map(t => t.id);
+      saveOrderMutation.mutate(newOrder);
+    },
+    [sortedRootTasks, saveOrderMutation]
+  );
+
   if (isLoading) return <Typography>Loading...</Typography>;
 
   const renderTaskRow = (task: Task, indent: boolean = false) => {
@@ -162,16 +330,16 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
         onClick={() => openDrawer(task, projectId)}
         sx={{
           cursor: 'pointer',
-          '&:hover': { bgcolor: '#F8F9FF' },
-          '& td': { py: 1.5, borderColor: '#F3F4F6' },
+          '&:hover': { bgcolor: 'rgba(41,85,255,0.04)' },
+          '& td': { py: 1.5, borderColor: 'rgba(0,0,0,0.06)' },
         }}
       >
         <TableCell>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pl: indent ? 3 : 0 }}>
             <Box
               sx={{
-                width: 6,
-                height: 6,
+                width: 7,
+                height: 7,
                 borderRadius: '50%',
                 bgcolor: status.color,
                 flexShrink: 0,
@@ -220,8 +388,6 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
     );
   };
 
-  const sortedRootTasks = sortTasks(groupedTasks.rootTasks);
-
   return (
     <Box>
       <QuickAdd projectId={projectId} />
@@ -264,11 +430,17 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
       <TableContainer
         component={Paper}
         elevation={0}
-        sx={{ border: '1px solid #E5E7EB', borderRadius: 2 }}
+        sx={{
+          border: '1px solid rgba(0,0,0,0.1)',
+          borderRadius: 2,
+          bgcolor: 'rgba(255,255,255,0.75)',
+          backdropFilter: 'blur(8px)',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
+        }}
       >
         <Table>
           <TableHead>
-            <TableRow sx={{ bgcolor: '#FAFBFC' }}>
+            <TableRow sx={{ bgcolor: 'rgba(255,255,255,0.85)' }}>
               <TableCell sx={{ fontWeight: 700, color: '#374151', fontSize: '0.8rem', py: 1.5 }}>
                 <TableSortLabel
                   active={sortField === 'title'}
@@ -311,8 +483,32 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {/* Root tasks (no subproject) */}
-            {sortedRootTasks.map(task => renderTaskRow(task, false))}
+            {/* Root tasks with drag reorder when in default sort */}
+            {isDragMode ? (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={sortedRootTasks.map(t => String(t.id))}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {sortedRootTasks.map(task => (
+                    <SortableTaskRow
+                      key={task.id}
+                      task={task}
+                      indent={false}
+                      projectId={projectId}
+                      openDrawer={openDrawer}
+                      isDragMode={isDragMode}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+            ) : (
+              sortedRootTasks.map(task => renderTaskRow(task, false))
+            )}
 
             {/* Subproject groups */}
             {hasSubProjects &&
@@ -325,7 +521,7 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
                       onClick={() => toggleSubCollapse(subProject.id)}
                       sx={{
                         cursor: 'pointer',
-                        bgcolor: '#F8F5FF',
+                        bgcolor: 'rgba(139,92,246,0.08)',
                         '&:hover': { bgcolor: '#F0EBFF' },
                         '& td': { py: 1.2, borderColor: '#E5E7EB' },
                       }}

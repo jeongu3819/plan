@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -20,7 +20,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
+import EditIcon from '@mui/icons-material/Edit';
 import ReactFlow, {
   Background,
   Controls,
@@ -29,12 +29,17 @@ import ReactFlow, {
   Edge,
   Position,
   NodeDragHandler,
+  useNodesState,
+  useEdgesState,
 } from 'react-flow-renderer';
 import dagre from 'dagre';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
 import { GraphNode, GraphEdge } from '../../types';
+import { useGraphAutoZoom } from './useGraphAutoZoom';
+import { useGraphDragPreview } from './useGraphDragPreview';
+import GraphDragOverlay from './GraphDragOverlay';
 
 interface NodeGraphViewProps {
   projectId: number;
@@ -85,9 +90,14 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
 const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
   const [filterType, setFilterType] = useState('all');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [focusMode, setFocusMode] = useState(false);
   const queryClient = useQueryClient();
   const openDrawer = useAppStore(state => state.openDrawer);
+
+  // A-2: Auto zoom hook
+  const { zoomToNodes, zoomToAll } = useGraphAutoZoom();
+
+  // A-3: Drag ghost preview
+  const { isDragging, dragPos, handleDragStart, handleDrag, handleDragEnd } = useGraphDragPreview();
 
   // Subproject creation dialog state
   const [showSubProjectDialog, setShowSubProjectDialog] = useState(false);
@@ -98,14 +108,33 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
   // Subproject delete dialog state
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
 
+  // Subproject edit dialog state
+  const [editSubProject, setEditSubProject] = useState<{ id: number; name: string; description: string } | null>(null);
+
+  // Task edit dialog state
+  const [editTask, setEditTask] = useState<{ id: number; title: string; description: string } | null>(null);
+
   // v1.2: Drag-insert state & feedback
   const [snackMsg, setSnackMsg] = useState<string | null>(null);
   const [dragHighlight, setDragHighlight] = useState<string | null>(null); // node id to glow during drag
+
+  const currentUserId = useAppStore(state => state.currentUserId);
 
   const { data: graphData, isLoading } = useQuery({
     queryKey: ['graph', projectId],
     queryFn: () => api.getProjectGraph(projectId),
     refetchOnWindowFocus: true,
+  });
+
+  // SubProject/Task data for edit dialogs
+  const { data: subProjectsList = [] } = useQuery({
+    queryKey: ['subprojects', projectId],
+    queryFn: () => api.getSubProjects(projectId),
+  });
+
+  const { data: tasksList = [] } = useQuery({
+    queryKey: ['tasks', projectId, currentUserId],
+    queryFn: () => api.getTasks(projectId, currentUserId),
   });
 
   // Subproject creation mutation
@@ -131,6 +160,29 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       queryClient.invalidateQueries({ queryKey: ['subprojects', projectId] });
       setDeleteTarget(null);
       setSelectedNodeId(null);
+    },
+  });
+
+  // Subproject update mutation
+  const updateSubProjectMutation = useMutation({
+    mutationFn: (data: { id: number; name: string; description?: string }) =>
+      api.updateSubProject(data.id, { name: data.name, description: data.description }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['graph', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['subprojects', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['roadmap', projectId] });
+      setEditSubProject(null);
+    },
+  });
+
+  // Task update mutation (title/description from graph)
+  const updateTaskMutation = useMutation({
+    mutationFn: (data: { id: number; title: string; description?: string }) =>
+      api.updateTask(data.id, { title: data.title, description: data.description }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['graph', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['tasks', projectId] });
+      setEditTask(null);
     },
   });
 
@@ -178,8 +230,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       edgeMap.get(e.source)!.push(e.target);
       edgeMap.get(e.target)!.push(e.source);
     });
-    // v1.2: 2-hop BFS when focus mode is on, 1-hop otherwise
-    const maxDepth = focusMode ? 2 : 1;
+    const maxDepth = 1;
     const queue: { id: string; depth: number }[] = [{ id: selectedNodeId, depth: 0 }];
     const visited = new Set<string>([selectedNodeId]);
     while (queue.length > 0) {
@@ -195,7 +246,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       }
     }
     return ids;
-  }, [selectedNodeId, graphData, focusMode]);
+  }, [selectedNodeId, graphData]);
 
   const { nodes, edges } = useMemo(() => {
     if (!graphData) return { nodes: [], edges: [] };
@@ -215,12 +266,6 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       filteredEdges = filteredEdges.filter(e => typeNodes.has(e.source) && typeNodes.has(e.target));
     }
 
-    // v1.2: Focus Mode — hide non-connected nodes entirely
-    if (focusMode && selectedNodeId && connectedIds.size > 0) {
-      filteredNodes = filteredNodes.filter(n => connectedIds.has(n.id));
-      filteredEdges = filteredEdges.filter(e => connectedIds.has(e.source) && connectedIds.has(e.target));
-    }
-
     const hasSelection = selectedNodeId !== null;
 
     const flowNodes: Node[] = filteredNodes.map((n: GraphNode) => {
@@ -238,7 +283,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                 variant="caption"
                 sx={{
                   fontWeight: 700,
-                  fontSize: '0.55rem',
+                  fontSize: '0.65rem',
                   textTransform: 'uppercase',
                   color: colors.text,
                   opacity: isDimmed ? 0.3 : 0.7,
@@ -252,12 +297,12 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                 variant="body2"
                 sx={{
                   fontWeight: 600,
-                  fontSize: '0.75rem',
+                  fontSize: '0.85rem',
                   color: colors.text,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  maxWidth: 180,
+                  maxWidth: 200,
                   opacity: isDimmed ? 0.3 : 1,
                 }}
               >
@@ -268,10 +313,10 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
                   label={n.status}
                   size="small"
                   sx={{
-                    height: 16,
-                    fontSize: '0.55rem',
+                    height: 18,
+                    fontSize: '0.65rem',
                     fontWeight: 600,
-                    mt: 0.3,
+                    mt: 0.4,
                     bgcolor: `${statusColors[n.status] || '#6B7280'}20`,
                     color: statusColors[n.status] || '#6B7280',
                     opacity: isDimmed ? 0.3 : 1,
@@ -318,16 +363,27 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
           stroke: isHighlighted
             ? '#2955FF'
             : isDimmedEdge(e, hasSelection, connectedIds)
-              ? '#F3F4F6'
-              : '#C7D2FE',
+              ? '#D1D5DB'
+              : '#6B7FD7',
           strokeWidth: isHighlighted ? 3 : 2,
+          opacity: isDimmedEdge(e, hasSelection, connectedIds) ? 0.4 : 1,
           transition: 'all 0.3s ease',
         },
       };
     });
 
     return getLayoutedElements(flowNodes, flowEdges);
-  }, [graphData, filterType, selectedNodeId, connectedIds, focusMode, dragHighlight]);
+  }, [graphData, filterType, selectedNodeId, connectedIds, dragHighlight]);
+
+  // Use interactive node/edge state so dragging moves nodes in real-time
+  const [flowNodes, setFlowNodes, onNodesChange] = useNodesState([]);
+  const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState([]);
+
+  // Sync layout → interactive state whenever layout recalculates
+  useEffect(() => {
+    setFlowNodes(nodes);
+    setFlowEdges(edges);
+  }, [nodes, edges, setFlowNodes, setFlowEdges]);
 
   const onNodeClick = useCallback((_: any, node: Node) => {
     setSelectedNodeId(prev => (prev === node.id ? null : node.id));
@@ -336,6 +392,15 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);
   }, []);
+
+  // A-2: Auto zoom on selection change
+  useEffect(() => {
+    if (selectedNodeId && connectedIds.size > 0 && flowNodes.length > 0) {
+      zoomToNodes(flowNodes, connectedIds);
+    } else if (!selectedNodeId && flowNodes.length > 0) {
+      zoomToAll();
+    }
+  }, [selectedNodeId, connectedIds, flowNodes, zoomToNodes, zoomToAll]);
 
   // v1.2: Find closest drop target during drag for visual highlight
   const onNodeDrag: NodeDragHandler = useCallback(
@@ -348,7 +413,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         // Task is being dragged → highlight nearest subproject or project node
         let bestId: string | null = null;
         let bestDist = 150;
-        for (const node of nodes) {
+        for (const node of flowNodes) {
           if (node.id === draggedNode.id) continue;
           if (!node.id.startsWith('subproject-') && !node.id.startsWith('project-')) continue;
           const nx = node.position.x + 100;
@@ -366,7 +431,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         let bestDist = 150;
         for (const edge of graphData.edges) {
           if (!edge.source.startsWith('project-') || !edge.target.startsWith('task-')) continue;
-          const targetNode = nodes.find(n => n.id === edge.target);
+          const targetNode = flowNodes.find(n => n.id === edge.target);
           if (!targetNode) continue;
           const nx = targetNode.position.x + 100;
           const ny = targetNode.position.y + 30;
@@ -379,7 +444,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         setDragHighlight(bestId);
       }
     },
-    [graphData, nodes]
+    [graphData, flowNodes]
   );
 
   // v1.2: Handle drop — reassign task↔subproject
@@ -396,7 +461,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         const taskId = parseInt(draggedNode.id.replace('task-', ''), 10);
         let bestTarget: { id: string; dist: number } | null = null;
 
-        for (const node of nodes) {
+        for (const node of flowNodes) {
           if (node.id === draggedNode.id) continue;
           if (!node.id.startsWith('subproject-') && !node.id.startsWith('project-')) continue;
           const nx = node.position.x + 100;
@@ -433,7 +498,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
 
         for (const edge of graphData.edges) {
           if (!edge.source.startsWith('project-') || !edge.target.startsWith('task-')) continue;
-          const targetNode = nodes.find(n => n.id === edge.target);
+          const targetNode = flowNodes.find(n => n.id === edge.target);
           if (!targetNode) continue;
           const nx = targetNode.position.x + 100;
           const ny = targetNode.position.y + 30;
@@ -448,7 +513,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         }
       }
     },
-    [graphData, nodes, reassignTaskMutation]
+    [graphData, flowNodes, reassignTaskMutation]
   );
 
   // Selected node info
@@ -496,12 +561,16 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         </TextField>
 
         {/* Creation buttons */}
-        <Tooltip title="Create Subproject">
+        <Tooltip title="Create Subproject (drag onto graph to place)">
           <Button
             variant="outlined"
             size="small"
             startIcon={<AccountTreeIcon />}
             onClick={() => setShowSubProjectDialog(true)}
+            draggable
+            onDragStart={handleDragStart}
+            onDrag={handleDrag}
+            onDragEnd={handleDragEnd}
             sx={{
               fontSize: '0.75rem',
               textTransform: 'none',
@@ -528,29 +597,6 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
             }}
           >
             Task
-          </Button>
-        </Tooltip>
-
-        {/* v1.2: Focus Mode Toggle */}
-        <Tooltip title={focusMode ? 'Focus Mode ON — Click to show all nodes' : 'Focus Mode — Select a node then enable to zoom into its neighborhood'}>
-          <Button
-            variant={focusMode ? 'contained' : 'outlined'}
-            size="small"
-            startIcon={<CenterFocusStrongIcon />}
-            onClick={() => setFocusMode(!focusMode)}
-            sx={{
-              fontSize: '0.75rem',
-              textTransform: 'none',
-              borderColor: focusMode ? '#2955FF' : '#9CA3AF',
-              color: focusMode ? '#fff' : '#6B7280',
-              bgcolor: focusMode ? '#2955FF' : 'transparent',
-              '&:hover': {
-                borderColor: '#2955FF',
-                bgcolor: focusMode ? '#1E44CC' : '#EEF2FF',
-              },
-            }}
-          >
-            Focus
           </Button>
         </Tooltip>
 
@@ -610,6 +656,24 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
             {/* Node-specific action buttons */}
             {selectedInfo.type === 'subproject' && (
               <>
+                <Tooltip title="Edit Subproject">
+                  <Button
+                    size="small"
+                    startIcon={<EditIcon />}
+                    onClick={() => {
+                      const spId = parseInt(selectedInfo.id.replace('subproject-', ''));
+                      const sp = subProjectsList.find((s: any) => s.id === spId);
+                      setEditSubProject({
+                        id: spId,
+                        name: sp?.name || selectedInfo.label,
+                        description: sp?.description || '',
+                      });
+                    }}
+                    sx={{ fontSize: '0.65rem', textTransform: 'none', ml: 0.5 }}
+                  >
+                    Edit
+                  </Button>
+                </Tooltip>
                 <Tooltip title="Add Task to this Subproject">
                   <Button
                     size="small"
@@ -640,18 +704,39 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
               </>
             )}
             {selectedInfo.type === 'task' && (
-              <Tooltip title="Edit Task">
-                <Button
-                  size="small"
-                  onClick={() => {
-                    const taskId = parseInt(selectedNodeId!.replace('task-', ''));
-                    openDrawer({ id: taskId } as any, projectId);
-                  }}
-                  sx={{ fontSize: '0.65rem', textTransform: 'none', ml: 0.5 }}
-                >
-                  Edit
-                </Button>
-              </Tooltip>
+              <>
+                <Tooltip title="Edit Task">
+                  <Button
+                    size="small"
+                    startIcon={<EditIcon />}
+                    onClick={() => {
+                      const taskId = parseInt(selectedNodeId!.replace('task-', ''));
+                      const task = tasksList.find((t: any) => t.id === taskId);
+                      setEditTask({
+                        id: taskId,
+                        title: task?.title || selectedInfo.label,
+                        description: task?.description || '',
+                      });
+                    }}
+                    sx={{ fontSize: '0.65rem', textTransform: 'none', ml: 0.5 }}
+                  >
+                    Edit
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Open Full Editor">
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      const taskId = parseInt(selectedNodeId!.replace('task-', ''));
+                      const task = tasksList.find((t: any) => t.id === taskId);
+                      openDrawer(task || { id: taskId } as any, projectId);
+                    }}
+                    sx={{ fontSize: '0.65rem', textTransform: 'none', color: '#6B7280' }}
+                  >
+                    Detail
+                  </Button>
+                </Tooltip>
+              </>
             )}
           </Paper>
         )}
@@ -693,15 +778,33 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       {/* Graph */}
       <Paper
         sx={{
-          height: 'calc(100vh - 320px)',
-          minHeight: 400,
-          borderRadius: 2,
-          border: '1px solid #E5E7EB',
+          height: 'calc(100vh - 240px)',
+          minHeight: 500,
+          borderRadius: 3,
+          bgcolor: 'rgba(255, 255, 255, 0.25)',
+          backdropFilter: 'blur(16px)',
+          border: '1px solid rgba(255, 255, 255, 0.15)',
+          boxShadow: '0 2px 16px rgba(0, 0, 0, 0.03)',
           overflow: 'hidden',
+          '& .react-flow__background': {
+            opacity: 0.5,
+          },
         }}
         elevation={0}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('application/create-subproject')) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+          }
+        }}
+        onDrop={(e) => {
+          if (e.dataTransfer.getData('application/create-subproject')) {
+            e.preventDefault();
+            setShowSubProjectDialog(true);
+          }
+        }}
       >
-        {nodes.length === 0 ? (
+        {flowNodes.length === 0 ? (
           <Box
             sx={{
               p: 6,
@@ -718,16 +821,20 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
           </Box>
         ) : (
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={flowNodes}
+            edges={flowEdges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
             onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             fitView
+            minZoom={0.3}
+            maxZoom={2}
             attributionPosition="bottom-left"
           >
-            <Background color="#E5E7EB" gap={16} />
+            <Background color="rgba(0, 0, 0, 0.04)" gap={24} size={1} />
             <Controls />
             <MiniMap
               nodeStrokeColor={(n: any) => {
@@ -871,6 +978,147 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Subproject Edit Dialog */}
+      <Dialog
+        open={!!editSubProject}
+        onClose={() => setEditSubProject(null)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AccountTreeIcon sx={{ color: '#8B5CF6' }} />
+            Subproject 수정
+          </Box>
+        </DialogTitle>
+        <DialogContent
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}
+        >
+          <TextField
+            label="이름"
+            size="small"
+            value={editSubProject?.name || ''}
+            onChange={e =>
+              setEditSubProject(prev => prev ? { ...prev, name: e.target.value } : null)
+            }
+            fullWidth
+            autoFocus
+          />
+          <TextField
+            label="설명"
+            size="small"
+            value={editSubProject?.description || ''}
+            onChange={e =>
+              setEditSubProject(prev => prev ? { ...prev, description: e.target.value } : null)
+            }
+            fullWidth
+            multiline
+            rows={2}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => setEditSubProject(null)}
+            sx={{ textTransform: 'none', color: '#6B7280' }}
+          >
+            취소
+          </Button>
+          <Button
+            variant="contained"
+            disabled={!editSubProject?.name?.trim() || updateSubProjectMutation.isPending}
+            onClick={() => {
+              if (editSubProject) {
+                updateSubProjectMutation.mutate({
+                  id: editSubProject.id,
+                  name: editSubProject.name.trim(),
+                  description: editSubProject.description.trim() || undefined,
+                });
+              }
+            }}
+            sx={{
+              textTransform: 'none',
+              bgcolor: '#8B5CF6',
+              '&:hover': { bgcolor: '#7C3AED' },
+            }}
+          >
+            {updateSubProjectMutation.isPending ? '저장 중...' : '저장'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Task Edit Dialog */}
+      <Dialog
+        open={!!editTask}
+        onClose={() => setEditTask(null)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TaskAltIcon sx={{ color: '#22C55E' }} />
+            Task 수정
+          </Box>
+        </DialogTitle>
+        <DialogContent
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}
+        >
+          <TextField
+            label="제목"
+            size="small"
+            value={editTask?.title || ''}
+            onChange={e =>
+              setEditTask(prev => prev ? { ...prev, title: e.target.value } : null)
+            }
+            fullWidth
+            autoFocus
+          />
+          <TextField
+            label="설명"
+            size="small"
+            value={editTask?.description || ''}
+            onChange={e =>
+              setEditTask(prev => prev ? { ...prev, description: e.target.value } : null)
+            }
+            fullWidth
+            multiline
+            rows={3}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => setEditTask(null)}
+            sx={{ textTransform: 'none', color: '#6B7280' }}
+          >
+            취소
+          </Button>
+          <Button
+            variant="contained"
+            disabled={!editTask?.title?.trim() || updateTaskMutation.isPending}
+            onClick={() => {
+              if (editTask) {
+                updateTaskMutation.mutate({
+                  id: editTask.id,
+                  title: editTask.title.trim(),
+                  description: editTask.description.trim() || undefined,
+                });
+              }
+            }}
+            sx={{
+              textTransform: 'none',
+              bgcolor: '#22C55E',
+              '&:hover': { bgcolor: '#16A34A' },
+            }}
+          >
+            {updateTaskMutation.isPending ? '저장 중...' : '저장'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* A-3: Drag ghost preview */}
+      <GraphDragOverlay visible={isDragging} x={dragPos.x} y={dragPos.y} />
 
       {/* v1.2: Drag-insert feedback snackbar */}
       <Snackbar

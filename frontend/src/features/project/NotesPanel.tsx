@@ -31,7 +31,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ projectId }) => {
 
   const { data: notes = [], isLoading } = useQuery<Note[]>({
     queryKey: ['notes', projectId],
-    queryFn: () => api.getNotes(projectId),
+    queryFn: () => api.getNotes(projectId, currentUserId),
   });
 
   const createMutation = useMutation({

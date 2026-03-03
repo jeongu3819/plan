@@ -112,6 +112,7 @@ class VisitLog(Base):
     ip_address = Column(String(50), nullable=False)
     deptname = Column(String(100), nullable=True)
     username = Column(String(100), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(KST))
 
 
@@ -161,6 +162,19 @@ class Note(Base):
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class NoteMention(Base):
+    __tablename__ = "note_mentions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    note_id = Column(Integer, ForeignKey("notes.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("note_id", "user_id", name="uq_note_mention"),
+    )
 
 
 class Attachment(Base):

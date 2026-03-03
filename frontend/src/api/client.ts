@@ -748,6 +748,37 @@ export const api = {
     return res.data;
   },
 
+  // =========================
+  // AI Settings
+  // =========================
+  getAiSettings: async (): Promise<AiSettings> => {
+    const res = await client.get('/settings/ai');
+    return res.data;
+  },
+  saveAiSettings: async (data: { api_url: string; model_name: string; api_key?: string }): Promise<any> => {
+    const res = await client.put('/settings/ai', data);
+    return res.data;
+  },
+
+  // =========================
+  // List Order (B-1)
+  // =========================
+  getListOrder: async (projectId: number): Promise<{ order: number[] }> => {
+    const res = await client.get(`/projects/${projectId}/list/order`);
+    return res.data;
+  },
+  saveListOrder: async (projectId: number, order: number[]): Promise<void> => {
+    await client.put(`/projects/${projectId}/list/order`, { order });
+  },
+
+  // =========================
+  // Knox Employee Search (D-2)
+  // =========================
+  searchKnoxEmployees: async (params: { fullName?: string }): Promise<any[]> => {
+    const res = await client.get('/employees', { params });
+    return res.data.employees || res.data || [];
+  },
+
   getUnassignedUsers: async (userId: number) => {
     const res = await client.get('/admin/org/unassigned-users', { params: { user_id: requireUserId(userId) } });
     return res.data.users || [];

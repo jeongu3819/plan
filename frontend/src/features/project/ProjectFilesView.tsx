@@ -82,7 +82,7 @@ const ProjectFilesView: React.FC<ProjectFilesViewProps> = ({ projectId }) => {
     };
 
     const handleDownload = (file: ProjectFile) => {
-        const url = api.downloadProjectFile(projectId, file.id);
+        const url = api.downloadProjectFile(projectId, file.id, currentUserId);
         window.open(url, '_blank');
     };
 

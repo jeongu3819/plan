@@ -94,7 +94,7 @@ const DroppableColumn = ({ id, children }: { id: string; children: React.ReactNo
         padding: '8px',
         minHeight: 100,
         borderRadius: 8,
-        backgroundColor: isOver ? 'rgba(41, 85, 255, 0.04)' : 'transparent',
+        backgroundColor: isOver ? 'rgba(41, 85, 255, 0.08)' : 'transparent',
         transition: 'background-color 0.2s ease',
       }}
     >
@@ -272,8 +272,11 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                 sx={{
                   minWidth: 300,
                   maxWidth: 340,
-                  bgcolor: '#F3F4F6',
+                  bgcolor: 'rgba(255,255,255,0.5)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(0,0,0,0.06)',
                   borderRadius: 2,
+                  boxShadow: '0 1px 8px rgba(0,0,0,0.03)',
                   display: 'flex',
                   flexDirection: 'column',
                   height: '100%',
