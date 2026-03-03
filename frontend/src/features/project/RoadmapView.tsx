@@ -776,7 +776,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
             display: 'flex',
             gap: 2,
             borderRadius: 2,
-            border: '1px solid #E5E7EB',
+            border: '1px solid rgba(0,0,0,0.08)',
           }}
           elevation={0}
         >
@@ -867,7 +867,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                         flex: mh.span,
                         textAlign: 'center',
                         py: 0.3,
-                        borderRight: '1px solid #E5E7EB',
+                        borderRight: '1px solid rgba(0,0,0,0.08)',
                         bgcolor: '#F0F4FF',
                       }}
                     >

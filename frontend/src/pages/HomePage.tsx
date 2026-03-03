@@ -172,10 +172,13 @@ const SortableWidget: React.FC<{ id: string; children: React.ReactNode }> = ({ i
       sx={{
         p: 2.5,
         borderRadius: 3,
-        border: isDragging ? '2px solid #2955FF' : '1px solid #E5E7EB',
+        border: isDragging ? '2px solid #2955FF' : '1px solid rgba(0,0,0,0.08)',
+        bgcolor: 'rgba(255,255,255,0.65)',
+        backdropFilter: 'blur(12px)',
         minHeight: 220,
-        transition: 'box-shadow 0.2s',
-        '&:hover': { boxShadow: '0 4px 16px rgba(0,0,0,0.06)' },
+        transition: 'box-shadow 0.2s, border 0.2s',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
+        '&:hover': { boxShadow: '0 6px 20px rgba(0,0,0,0.08)' },
         '&:hover .drag-handle': { opacity: 1 },
         overflow: 'hidden',
         position: 'relative',
@@ -323,7 +326,7 @@ const HomePage: React.FC = () => {
               px: 1.5,
               borderRadius: 1.5,
               cursor: 'pointer',
-              '&:hover': { bgcolor: '#F3F4F6' },
+              '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
               transition: 'all 0.15s',
             }}
           >
@@ -476,11 +479,11 @@ const HomePage: React.FC = () => {
                         bgcolor:
                           overviewFilter === statusFilterMap[item.label]
                             ? `${item.color}10`
-                            : '#F9FAFB',
+                            : 'rgba(255,255,255,0.5)',
                         border:
                           overviewFilter === statusFilterMap[item.label]
                             ? `2px solid ${item.color}`
-                            : '1px solid #F3F4F6',
+                            : '1px solid rgba(0,0,0,0.06)',
                         transition: 'all 0.15s',
                         '&:hover': { bgcolor: `${item.color}08`, transform: 'translateY(-1px)' },
                       }}
@@ -539,7 +542,7 @@ const HomePage: React.FC = () => {
                             px: 0.5,
                             borderRadius: 1,
                             cursor: 'pointer',
-                            '&:hover': { bgcolor: '#F3F4F6' },
+                            '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
                             transition: 'background 0.1s',
                           }}
                         >
@@ -616,7 +619,7 @@ const HomePage: React.FC = () => {
                       sx={{
                         height: 6,
                         borderRadius: 3,
-                        bgcolor: '#E5E7EB',
+                        bgcolor: 'rgba(0,0,0,0.08)',
                         '& .MuiLinearProgress-bar': { bgcolor: '#22C55E', borderRadius: 3 },
                       }}
                     />
@@ -668,7 +671,7 @@ const HomePage: React.FC = () => {
                     px: 1.5,
                     borderRadius: 1.5,
                     cursor: 'pointer',
-                    '&:hover': { bgcolor: '#F3F4F6' },
+                    '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
                     transition: 'all 0.15s',
                   }}
                 >
@@ -686,7 +689,7 @@ const HomePage: React.FC = () => {
                     sx={{
                       height: 4,
                       borderRadius: 2,
-                      bgcolor: '#E5E7EB',
+                      bgcolor: 'rgba(0,0,0,0.08)',
                       '& .MuiLinearProgress-bar': { bgcolor: '#2955FF', borderRadius: 2 },
                     }}
                   />
@@ -844,7 +847,7 @@ const HomePage: React.FC = () => {
                               ? '#1E44CC'
                               : holiday
                                 ? '#FEE2E2'
-                                : '#F3F4F6',
+                                : 'rgba(0,0,0,0.04)',
                         },
                         transition: 'background 0.15s',
                         outline: isSelected ? '2px solid #2955FF' : 'none',
@@ -947,7 +950,7 @@ const HomePage: React.FC = () => {
                           px: 0.5,
                           borderRadius: 1,
                           cursor: 'pointer',
-                          '&:hover': { bgcolor: '#F3F4F6' },
+                          '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
                           transition: 'background 0.1s',
                         }}
                       >

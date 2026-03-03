@@ -264,7 +264,7 @@ const ExecutiveSummaryBlock: React.FC<ExecutiveSummaryBlockProps> = ({ projectNa
   return (
     <Box
       sx={{
-        border: '1px solid #E5E7EB',
+        border: '1px solid rgba(0,0,0,0.08)',
         borderRadius: 3,
         p: 2.5,
         bgcolor: '#FFFFFF',
@@ -644,8 +644,8 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                   p: 3,
                   mb: 2.5,
                   borderRadius: 3,
-                  border: '1px solid #E5E7EB',
-                  boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+                  border: '1px solid rgba(0,0,0,0.08)',
+                  bgcolor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -829,8 +829,8 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                   p: 3,
                   mb: 2.5,
                   borderRadius: 3,
-                  border: '1px solid #E5E7EB',
-                  boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+                  border: '1px solid rgba(0,0,0,0.08)',
+                  bgcolor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -1073,8 +1073,8 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     p: 3,
                     mb: 2.5,
                     borderRadius: 3,
-                    border: '1px solid #E5E7EB',
-                    boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+                    border: '1px solid rgba(0,0,0,0.08)',
+                    bgcolor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
                   }}
                 >
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -1187,8 +1187,8 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     p: 3,
                     mb: 2.5,
                     borderRadius: 3,
-                    border: '1px solid #E5E7EB',
-                    boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+                    border: '1px solid rgba(0,0,0,0.08)',
+                    bgcolor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
                   }}
                 >
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -1216,8 +1216,8 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     p: 3,
                     mb: 2.5,
                     borderRadius: 3,
-                    border: '1px solid #E5E7EB',
-                    boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+                    border: '1px solid rgba(0,0,0,0.08)',
+                    bgcolor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)', boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
                   }}
                 >
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -1277,7 +1277,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
               alignItems: 'center',
               gap: 2,
               borderRadius: 3,
-              border: '1px solid #E5E7EB',
+              border: '1px solid rgba(0,0,0,0.08)',
             }}
           >
             <TextField
@@ -1339,7 +1339,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                   p: 3,
                   mb: 2,
                   borderRadius: 3,
-                  border: '1px solid #E5E7EB',
+                  border: '1px solid rgba(0,0,0,0.08)',
                   bgcolor: '#EEF2FF',
                 }}
               >

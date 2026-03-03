@@ -72,7 +72,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ projectId }) => {
   return (
     <Box sx={{ maxWidth: 800 }}>
       {/* Create Note */}
-      <Paper sx={{ p: 2.5, borderRadius: 2, border: '1px solid #E5E7EB', mb: 3 }} elevation={0}>
+      <Paper sx={{ p: 2.5, borderRadius: 2, border: '1px solid rgba(0,0,0,0.08)', bgcolor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(8px)', boxShadow: '0 1px 8px rgba(0,0,0,0.04)', mb: 3 }} elevation={0}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
           <Avatar sx={{ bgcolor: '#2955FF', width: 32, height: 32, fontSize: '0.8rem', mt: 0.5 }}>
             {String(currentUserId).charAt(0)}
@@ -124,7 +124,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ projectId }) => {
         </Box>
       ) : notes.length === 0 ? (
         <Paper
-          sx={{ p: 6, textAlign: 'center', borderRadius: 2, border: '1px solid #E5E7EB' }}
+          sx={{ p: 6, textAlign: 'center', borderRadius: 2, border: '1px solid rgba(0,0,0,0.06)', bgcolor: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(8px)' }}
           elevation={0}
         >
           <StickyNote2Icon sx={{ fontSize: '3rem', color: '#D1D5DB', mb: 1 }} />
@@ -143,9 +143,12 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ projectId }) => {
               sx={{
                 p: 2.5,
                 borderRadius: 2,
-                border: '1px solid #E5E7EB',
+                border: '1px solid rgba(0,0,0,0.06)',
+                bgcolor: 'rgba(255,255,255,0.7)',
+                backdropFilter: 'blur(4px)',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                 transition: 'all 0.15s',
-                '&:hover': { borderColor: '#C7D2FE', boxShadow: '0 2px 8px rgba(41,85,255,0.06)' },
+                '&:hover': { borderColor: '#C7D2FE', boxShadow: '0 4px 12px rgba(41,85,255,0.1)' },
               }}
               elevation={0}
             >

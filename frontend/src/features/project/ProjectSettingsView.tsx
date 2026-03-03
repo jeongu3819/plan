@@ -24,6 +24,9 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SecurityIcon from '@mui/icons-material/Security';
 import GroupIcon from '@mui/icons-material/Group';
+import SearchIcon from '@mui/icons-material/Search';
+import TextField from '@mui/material/TextField';
+import CircularProgress from '@mui/material/CircularProgress';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, User } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
@@ -60,6 +63,10 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   // State
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [knoxQuery, setKnoxQuery] = useState('');
+  const [knoxResults, setKnoxResults] = useState<any[]>([]);
+  const [knoxSearching, setKnoxSearching] = useState(false);
   const [requireApproval, setRequireApproval] = useState(project?.require_approval ?? false);
   const [permissions, setPermissions] = useState<Record<string, string>>(
     project?.permissions ?? {
@@ -120,7 +127,45 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
     selectedUserIds.forEach(uid => addMemberMutation.mutate(uid));
     setSelectedUserIds([]);
     setAddMemberOpen(false);
+    setMemberSearch('');
+    setKnoxResults([]);
+    setKnoxQuery('');
   };
+
+  const handleKnoxSearch = async () => {
+    if (!knoxQuery.trim()) return;
+    setKnoxSearching(true);
+    try {
+      const results = await api.searchKnoxEmployees({ fullName: knoxQuery.trim() });
+      setKnoxResults(results);
+    } catch {
+      setKnoxResults([]);
+    } finally {
+      setKnoxSearching(false);
+    }
+  };
+
+  // Create user from Knox result then add as member
+  const createAndAddMutation = useMutation({
+    mutationFn: async (data: { username: string; loginid: string }) => {
+      const newUser = await api.createUser({ ...data, role: 'member' });
+      await api.addProjectMember(projectId, newUser.id, 'member');
+      return newUser;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projectMembers', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (err: any) => {
+      // User already exists — try adding as member directly
+      const detail = err?.response?.data?.detail || '';
+      if (detail.includes('already exists') || detail.includes('이미 등록')) {
+        // Find existing user and add as member
+        const matched = users.find(u => u.loginid === (err as any)._loginid);
+        if (matched) addMemberMutation.mutate(matched.id);
+      }
+    },
+  });
 
   const memberUserIds = new Set(members.map((m: any) => m.user_id));
   const availableUsers = users.filter(u => !memberUserIds.has(u.id));
@@ -137,8 +182,10 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
           p: 3,
           mb: 3,
           borderRadius: 3,
-          border: '1px solid #E5E7EB',
-          boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+          border: '1px solid rgba(0,0,0,0.08)',
+          bgcolor: 'rgba(255,255,255,0.7)',
+          backdropFilter: 'blur(8px)',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
         }}
       >
         <Box
@@ -441,14 +488,17 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         </Paper>
       )}
 
-      {/* ─── Add Member Dialog ─── */}
+      {/* ─── Add Member Dialog (with Knox search) ─── */}
       <Dialog
         open={addMemberOpen}
         onClose={() => {
           setAddMemberOpen(false);
           setSelectedUserIds([]);
+          setMemberSearch('');
+          setKnoxResults([]);
+          setKnoxQuery('');
         }}
-        maxWidth="xs"
+        maxWidth="sm"
         fullWidth
         PaperProps={{ sx: { borderRadius: 3 } }}
       >
@@ -459,15 +509,125 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
           </Box>
         </DialogTitle>
         <DialogContent>
-          {availableUsers.length === 0 ? (
+          {/* Search bar */}
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="이름으로 검색 (Enter: Knox 사내 검색)"
+            value={memberSearch}
+            onChange={e => setMemberSearch(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && memberSearch.trim()) {
+                setKnoxQuery(memberSearch.trim());
+                handleKnoxSearch();
+              }
+            }}
+            sx={{ mt: 1, mb: 1.5 }}
+            InputProps={{
+              endAdornment: (
+                <IconButton
+                  size="small"
+                  onClick={() => {
+                    if (memberSearch.trim()) {
+                      setKnoxQuery(memberSearch.trim());
+                      handleKnoxSearch();
+                    }
+                  }}
+                  disabled={knoxSearching || !memberSearch.trim()}
+                >
+                  {knoxSearching ? <CircularProgress size={16} /> : <SearchIcon sx={{ fontSize: 18 }} />}
+                </IconButton>
+              ),
+            }}
+          />
+
+          {/* Knox search results */}
+          {knoxResults.length > 0 && (
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: '#5B21B6', mb: 0.5, display: 'block' }}>
+                Knox 사내 검색 결과 ({knoxResults.length}명)
+              </Typography>
+              <Box sx={{ maxHeight: 180, overflowY: 'auto', border: '1px solid #EDE9FE', borderRadius: 1 }}>
+                {knoxResults.map((emp: any, idx: number) => {
+                  const lid = (emp.loginid || emp.login_id || emp.id || '').toString().toLowerCase();
+                  const name = emp.fullName || emp.username || emp.name || lid;
+                  const dept = emp.deptName || emp.deptname || emp.department || '';
+                  const isAlreadyMember = members.some((m: any) => {
+                    const mUser = users.find(u => u.id === m.user_id);
+                    return mUser && (mUser.loginid || '').toLowerCase() === lid;
+                  });
+                  const existingUser = users.find(u => (u.loginid || '').toLowerCase() === lid);
+                  return (
+                    <Box
+                      key={idx}
+                      sx={{
+                        px: 1.5, py: 0.8,
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        borderBottom: '1px solid #F3F4F6',
+                        '&:hover': { bgcolor: '#F9FAFB' },
+                      }}
+                    >
+                      <Box>
+                        <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.85rem' }}>{name}</Typography>
+                        <Typography variant="caption" sx={{ color: '#9CA3AF' }}>{lid}{dept ? ` · ${dept}` : ''}</Typography>
+                      </Box>
+                      {isAlreadyMember ? (
+                        <Chip label="멤버" size="small" sx={{ fontSize: '0.65rem', bgcolor: '#DCFCE7', color: '#22C55E' }} />
+                      ) : existingUser ? (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            if (!selectedUserIds.includes(existingUser.id)) {
+                              setSelectedUserIds(prev => [...prev, existingUser.id]);
+                            }
+                          }}
+                          disabled={selectedUserIds.includes(existingUser.id)}
+                          sx={{ textTransform: 'none', fontSize: '0.7rem', minWidth: 50 }}
+                        >
+                          {selectedUserIds.includes(existingUser.id) ? '선택됨' : '선택'}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          onClick={() => createAndAddMutation.mutate({ username: name, loginid: lid })}
+                          disabled={createAndAddMutation.isPending}
+                          sx={{ textTransform: 'none', fontSize: '0.7rem', minWidth: 80, bgcolor: '#8B5CF6', '&:hover': { bgcolor: '#7C3AED' } }}
+                        >
+                          등록+추가
+                        </Button>
+                      )}
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          )}
+
+          {/* Existing users list */}
+          <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', mb: 0.5, display: 'block' }}>
+            등록된 사용자 ({availableUsers.filter(u => {
+              if (!memberSearch) return true;
+              const q = memberSearch.toLowerCase();
+              return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+            }).length}명)
+          </Typography>
+          {availableUsers.length === 0 && knoxResults.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 3 }}>
               <Typography variant="body2" sx={{ color: '#9CA3AF' }}>
-                추가할 수 있는 사용자가 없습니다
+                추가할 수 있는 사용자가 없습니다. Knox 검색을 시도하세요.
               </Typography>
             </Box>
           ) : (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 1 }}>
-              {availableUsers.map(user => (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 250, overflowY: 'auto' }}>
+              {availableUsers
+                .filter(u => {
+                  if (!memberSearch) return true;
+                  const q = memberSearch.toLowerCase();
+                  return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+                })
+                .map(user => (
                 <Box
                   key={user.id}
                   onClick={() =>
@@ -505,11 +665,14 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                       bgcolor: user.avatar_color || '#2955FF',
                     }}
                   >
-                    {user.username.charAt(0).toUpperCase()}
+                    {(user.username || '?').charAt(0).toUpperCase()}
                   </Avatar>
                   <Box sx={{ flexGrow: 1 }}>
                     <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.85rem' }}>
                       {user.username}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
+                      {user.loginid}
                     </Typography>
                   </Box>
                   <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>
@@ -525,6 +688,8 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
             onClick={() => {
               setAddMemberOpen(false);
               setSelectedUserIds([]);
+              setMemberSearch('');
+              setKnoxResults([]);
             }}
             sx={{ color: '#6B7280' }}
           >

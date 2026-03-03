@@ -183,7 +183,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
           display: 'grid',
           gridTemplateColumns: 'repeat(7, 1fr)',
           gap: 0,
-          borderBottom: '2px solid #E5E7EB',
+          borderBottom: '2px solid rgba(0,0,0,0.08)',
           mb: 0,
         }}
       >
@@ -389,7 +389,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
 
             {selectedDayTasks.length === 0 ? (
               <Paper
-                sx={{ p: 3, textAlign: 'center', borderRadius: 2, border: '1px solid #F3F4F6' }}
+                sx={{ p: 3, textAlign: 'center', borderRadius: 2, border: '1px solid rgba(0,0,0,0.06)', bgcolor: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(8px)' }}
                 elevation={0}
               >
                 <Typography variant="body2" sx={{ color: '#9CA3AF' }}>
@@ -412,13 +412,16 @@ const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
                         px: 2,
                         py: 1.5,
                         borderRadius: 2,
-                        border: '1px solid #E5E7EB',
+                        border: '1px solid rgba(0,0,0,0.06)',
                         borderLeft: `4px solid ${color}`,
+                        bgcolor: 'rgba(255,255,255,0.7)',
+                        backdropFilter: 'blur(4px)',
+                        boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                         cursor: 'pointer',
                         transition: 'all 0.15s',
                         '&:hover': {
                           borderColor: '#C7D2FE',
-                          boxShadow: '0 2px 8px rgba(41,85,255,0.06)',
+                          boxShadow: '0 4px 12px rgba(41,85,255,0.1)',
                           transform: 'translateX(2px)',
                         },
                       }}

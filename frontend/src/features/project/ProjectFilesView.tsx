@@ -135,7 +135,7 @@ const ProjectFilesView: React.FC<ProjectFilesViewProps> = ({ projectId }) => {
                 <Paper
                     sx={{
                         p: 6, textAlign: 'center', borderRadius: 3,
-                        border: '2px dashed #E5E7EB', bgcolor: '#FAFAFA',
+                        border: '2px dashed rgba(0,0,0,0.1)', bgcolor: 'rgba(255,255,255,0.5)', backdropFilter: 'blur(8px)',
                     }}
                 >
                     <InsertDriveFileIcon sx={{ fontSize: 48, color: '#D1D5DB', mb: 1 }} />
@@ -153,9 +153,12 @@ const ProjectFilesView: React.FC<ProjectFilesViewProps> = ({ projectId }) => {
                             key={file.id}
                             sx={{
                                 p: 2, borderRadius: 2, display: 'flex', alignItems: 'center', gap: 2,
-                                border: '1px solid #F3F4F6',
+                                border: '1px solid rgba(0,0,0,0.06)',
+                                bgcolor: 'rgba(255,255,255,0.7)',
+                                backdropFilter: 'blur(4px)',
+                                boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
                                 transition: 'all 0.15s',
-                                '&:hover': { borderColor: '#2955FF', boxShadow: '0 2px 8px rgba(41,85,255,0.08)' },
+                                '&:hover': { borderColor: '#2955FF', boxShadow: '0 4px 12px rgba(41,85,255,0.1)' },
                             }}
                         >
                             <Box sx={{ flexShrink: 0, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 1.5, bgcolor: '#F9FAFB' }}>
