@@ -164,7 +164,7 @@ const AdminPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (err: any) => {
-      alert(err?.response?.data?.detail || '사용자 비활성화 실패');
+      alert(err?.response?.data?.detail || '사용자 삭제 실패');
     },
   });
 
@@ -230,7 +230,7 @@ const AdminPage: React.FC = () => {
 
   // ─── D-1: Create user mutation ───
   const createUserMut = useMutation({
-    mutationFn: (data: { username: string; loginid: string; role?: string }) =>
+    mutationFn: (data: { username: string; loginid: string; role?: string; deptname?: string; mail?: string }) =>
       api.createUser(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
@@ -239,6 +239,8 @@ const AdminPage: React.FC = () => {
       setNewUsername('');
       setNewLoginId('');
       setNewUserRole('member');
+      setNewDeptname('');
+      setNewMail('');
     },
     onError: (err: any) => {
       alert(err?.response?.data?.detail || '사용자 추가 실패');
@@ -255,6 +257,8 @@ const AdminPage: React.FC = () => {
   const [newUsername, setNewUsername] = useState('');
   const [newLoginId, setNewLoginId] = useState('');
   const [newUserRole, setNewUserRole] = useState('member');
+  const [newDeptname, setNewDeptname] = useState('');
+  const [newMail, setNewMail] = useState('');
 
   // D-2: Knox search state (Tab 0 inline)
   const [knoxSearch, setKnoxSearch] = useState('');
@@ -655,7 +659,7 @@ const AdminPage: React.FC = () => {
                               deleteUserMut.isPending
                             }
                             onClick={() => {
-                              if (window.confirm(`"${user.username}" 사용자를 비활성화하시겠습니까?\n즉시 접근이 차단됩니다.`)) {
+                              if (window.confirm(`"${user.username}" 사용자를 삭제하시겠습니까?\n관련 데이터가 모두 삭제됩니다.`)) {
                                 deleteUserMut.mutate(user.id);
                               }
                             }}
@@ -1292,6 +1296,8 @@ const AdminPage: React.FC = () => {
                       if (!isRegistered) {
                         setNewUsername(name);
                         setNewLoginId(lid);
+                        setNewDeptname(dept);
+                        setNewMail(emp.email || emp.mail || '');
                         setDialogKnoxResults([]);
                       }
                     }}
@@ -1360,6 +1366,8 @@ const AdminPage: React.FC = () => {
                 username: newUsername.trim(),
                 loginid: newLoginId.trim(),
                 role: newUserRole,
+                deptname: newDeptname.trim() || undefined,
+                mail: newMail.trim() || undefined,
               });
             }}
             disabled={!newUsername.trim() || !newLoginId.trim() || createUserMut.isPending}

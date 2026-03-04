@@ -41,6 +41,7 @@ import PaletteIcon from '@mui/icons-material/Palette';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -168,10 +169,28 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     users[0];
 
   // projects
-  const { data: projects = [] } = useQuery<Project[]>({
+  const { data: allProjects = [] } = useQuery<Project[]>({
     queryKey: ['projects', effectiveUserId],
     queryFn: () => api.getProjects(effectiveUserId),
     enabled: !!me && effectiveUserId > 0,
+  });
+
+  // hidden projects
+  const { data: hiddenProjectIds = [] } = useQuery<number[]>({
+    queryKey: ['hiddenProjects', effectiveUserId],
+    queryFn: () => api.getHiddenProjects(effectiveUserId),
+    enabled: !!me && effectiveUserId > 0,
+  });
+
+  const [showHidden, setShowHidden] = useState(false);
+  const hiddenSet = new Set(hiddenProjectIds);
+  const projects = showHidden ? allProjects : allProjects.filter(p => !hiddenSet.has(p.id));
+
+  const toggleHideMut = useMutation({
+    mutationFn: (projectId: number) => api.toggleHiddenProject(effectiveUserId, projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['hiddenProjects', effectiveUserId] });
+    },
   });
 
   // non-super_admin에게 super_admin 계정 노출 최소화 (프론트 1차)
@@ -187,6 +206,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectVisibility, setNewProjectVisibility] = useState<'private' | 'public'>('private');
   const [requireApproval, setRequireApproval] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [permissions, setPermissions] = useState({
@@ -218,10 +238,11 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       api.createProject({
         name: newProjectName.trim(),
         description: newProjectDescription.trim() || undefined,
-        owner_id: effectiveUserId, // ✅ 실제 동작 사용자 기준 (super_admin이면 전환된 사용자, 아니면 본인)
-        require_approval: requireApproval,
-        permissions,
-        member_ids: selectedMemberIds,
+        owner_id: effectiveUserId,
+        visibility: newProjectVisibility,
+        require_approval: isAdminLike ? requireApproval : false,
+        permissions: isAdminLike ? permissions : undefined,
+        member_ids: isAdminLike ? selectedMemberIds : [],
       }),
     onSuccess: newProject => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -229,6 +250,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       setProjectDialogOpen(false);
       setNewProjectName('');
       setNewProjectDescription('');
+      setNewProjectVisibility('private');
       setRequireApproval(false);
       setAdvancedOpen(false);
       setSelectedMemberIds([]);
@@ -426,6 +448,19 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               Projects
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              {hiddenProjectIds.length > 0 && (
+                <Tooltip title={showHidden ? '숨긴 프로젝트 숨기기' : `숨긴 프로젝트 ${hiddenProjectIds.length}개 보기`}>
+                  <VisibilityOffIcon
+                    onClick={e => { e.stopPropagation(); setShowHidden(!showHidden); }}
+                    sx={{
+                      fontSize: 14, cursor: 'pointer',
+                      color: showHidden ? '#2955FF' : theme.sidebarMuted,
+                      '&:hover': { color: theme.sidebarText },
+                      transition: 'color 0.15s',
+                    }}
+                  />
+                </Tooltip>
+              )}
               <Tooltip title="New Project">
                 <AddIcon
                   onClick={e => {
@@ -745,15 +780,32 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         >
           Open Project
         </MenuItem>
-        <Divider />
         <MenuItem
           onClick={() => {
-            if (projectMenuId) handleDeleteProject(projectMenuId);
+            if (projectMenuId) toggleHideMut.mutate(projectMenuId);
+            setProjectMenuAnchor(null);
           }}
-          sx={{ fontSize: '0.85rem', color: '#EF4444' }}
+          sx={{ fontSize: '0.85rem', color: '#6B7280' }}
         >
-          <DeleteOutlineIcon sx={{ fontSize: '1rem', mr: 1 }} /> Delete
+          {projectMenuId && hiddenSet.has(projectMenuId) ? '숨기기 해제' : '숨기기'}
         </MenuItem>
+        {(() => {
+          const menuProject = allProjects.find(p => p.id === projectMenuId);
+          const canDelete = isAdminLike || (menuProject?.owner_id === effectiveUserId);
+          return canDelete ? (
+            <>
+              <Divider />
+              <MenuItem
+                onClick={() => {
+                  if (projectMenuId) handleDeleteProject(projectMenuId);
+                }}
+                sx={{ fontSize: '0.85rem', color: '#EF4444' }}
+              >
+                <DeleteOutlineIcon sx={{ fontSize: '1rem', mr: 1 }} /> Delete
+              </MenuItem>
+            </>
+          ) : null;
+        })()}
       </Menu>
 
       {/* ─── User Switch Menu ─── */}
@@ -860,31 +912,63 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             onChange={e => setNewProjectDescription(e.target.value)}
             sx={{ mb: 2 }}
           />
-          <FormControlLabel
-            control={
-              <Switch
-                checked={requireApproval}
-                onChange={e => setRequireApproval(e.target.checked)}
-                color="primary"
-              />
-            }
-            label={
-              <Box>
-                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>
-                  관리자 승인 후 참여 가능
-                </Typography>
-                <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>
-                  {requireApproval
-                    ? 'ON: 참여 요청 후 관리자가 승인해야 합니다'
-                    : 'OFF: 즉시 참여 가능'}
-                </Typography>
-              </Box>
-            }
-            sx={{ mb: 1, ml: 0 }}
-          />
-
-          {/* Member Selection */}
+          {/* 공개 범위 */}
           <Box sx={{ mb: 2 }}>
+            <Typography
+              variant="caption"
+              sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: '0.05em', mb: 0.5, display: 'block' }}
+            >
+              공개 범위
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              {[
+                { value: 'private' as const, label: '비공개', desc: '나와 담당자만 볼 수 있습니다' },
+                { value: 'public' as const, label: '공개', desc: '모든 사용자가 볼 수 있습니다' },
+              ].map(opt => (
+                <Box
+                  key={opt.value}
+                  onClick={() => setNewProjectVisibility(opt.value)}
+                  sx={{
+                    flex: 1, p: 1.5, borderRadius: 2, cursor: 'pointer',
+                    border: newProjectVisibility === opt.value ? '2px solid #2955FF' : '1px solid #E5E7EB',
+                    bgcolor: newProjectVisibility === opt.value ? '#EEF2FF' : 'transparent',
+                    '&:hover': { borderColor: '#2955FF' },
+                  }}
+                >
+                  <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>{opt.label}</Typography>
+                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>{opt.desc}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+
+          {isAdminLike && (
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={requireApproval}
+                  onChange={e => setRequireApproval(e.target.checked)}
+                  color="primary"
+                />
+              }
+              label={
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>
+                    관리자 승인 후 참여 가능
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>
+                    {requireApproval
+                      ? 'ON: 참여 요청 후 관리자가 승인해야 합니다'
+                      : 'OFF: 즉시 참여 가능'}
+                  </Typography>
+                </Box>
+              }
+              sx={{ mb: 1, ml: 0 }}
+            />
+          )}
+
+          {/* Member Selection - admin/super_admin만 */}
+          {isAdminLike && <Box sx={{ mb: 2 }}>
             <Typography
               variant="caption"
               sx={{
@@ -971,8 +1055,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 </Typography>
               )}
             </Box>
-          </Box>
+          </Box>}
 
+          {isAdminLike && <>
           <Divider sx={{ my: 1.5 }} />
           {/* Collapsible Advanced Settings */}
           <Box
@@ -1148,6 +1233,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               </Box>
             </Box>
           </Collapse>
+          </>}
         </DialogContent>
 
         <DialogActions sx={{ px: 3, pb: 2 }}>

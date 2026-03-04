@@ -55,6 +55,14 @@ BYPASS_USER_INFO = {
     "mail": os.getenv("BYPASS_MAIL") or os.getenv("USER_MAIL", "local.dev@example.com"),
 }
 
+# ===== Super Admin =====
+def _parse_list(v: str):
+    return [x.strip() for x in (v or "").split(",") if x.strip()]
+
+SUPER_ADMIN_LOGINIDS = _parse_list(
+    os.getenv("SUPER_ADMIN_LOGINIDS", "jimi.lee,juhui07.kim,zoltas.roh")
+)
+
 # ===== Front redirect =====
 FRONTEND_REDIRECT_URI = (
     os.getenv("FRONTEND_REDIRECT_URI")

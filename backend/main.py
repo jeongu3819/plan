@@ -30,7 +30,7 @@ from app.models import (
     ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
     NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
 )
-from app.environment import CORS_ORIGINS
+from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS
 from app.llm.dsllm_adapter import chat as dsllm_chat
 from app.llm.dsllm_adapter import list_model_keys
 from app.llm.dsllm_adapter import MODEL_CONFIGS
@@ -388,6 +388,8 @@ class UserCreate(BaseModel):
     loginid: str
     role: Optional[str] = "member"
     avatar_color: Optional[str] = "#2955FF"
+    deptname: Optional[str] = None
+    mail: Optional[str] = None
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
@@ -759,7 +761,7 @@ def check_project_permission(db: Session, state: dict, project_id: int, user_id:
 # Role / Super Admin Helpers
 # =========================
 ADMIN_ROLES = {"super_admin"}
-SUPER_OWNER_LOGINID = ["jimi.lee", "juhui07.kim", "zoltas.roh"]
+SUPER_OWNER_LOGINID = SUPER_ADMIN_LOGINIDS  # from environment.py (env var)
 
 def normalize_loginid(loginid: Optional[str]) -> str:
     return (loginid or "").strip().lower()
@@ -906,6 +908,8 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         username=user.username,
         role=user.role or "member",
         avatar_color=user.avatar_color or "#2955FF",
+        deptname=user.deptname,
+        mail=user.mail,
         is_active=True,
     )
     db.add(u)
@@ -1021,6 +1025,37 @@ def save_user_layout(user_id: int, body: LayoutUpdate, db: Session = Depends(get
 
     db.commit()
     return {"message": "Layout saved", "layout": body.layout}
+
+@app.post("/api/users/{user_id}/hidden-projects/{project_id}")
+def toggle_hidden_project(user_id: int, project_id: int, db: Session = Depends(get_db)):
+    """사용자별 프로젝트 숨기기/보이기 토글"""
+    pref = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+    if not pref:
+        pref = UserPreference(user_id=user_id, layout={})
+        db.add(pref)
+        db.flush()
+
+    layout = dict(pref.layout or {})
+    hidden = list(layout.get("hidden_projects", []))
+
+    if project_id in hidden:
+        hidden.remove(project_id)
+        action = "shown"
+    else:
+        hidden.append(project_id)
+        action = "hidden"
+
+    layout["hidden_projects"] = hidden
+    pref.layout = layout
+    db.commit()
+    return {"action": action, "hidden_projects": hidden}
+
+@app.get("/api/users/{user_id}/hidden-projects")
+def get_hidden_projects(user_id: int, db: Session = Depends(get_db)):
+    """사용자별 숨긴 프로젝트 목록"""
+    pref = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
+    hidden = (pref.layout or {}).get("hidden_projects", []) if pref else []
+    return {"hidden_projects": hidden}
 
 # =========================
 # Project Endpoints (DB + project_meta + members sidecar)
@@ -2997,7 +3032,7 @@ def admin_toggle_user_active(target_id: int, user_id: int = Query(...), db: Sess
         raise HTTPException(status_code=404, detail="User not found")
 
     # 슈퍼운영자 비활성화 방지
-    if (target.loginid or "").lower() == SUPER_OWNER_LOGINID.lower():
+    if is_super_owner_loginid(target.loginid):
         raise HTTPException(status_code=400, detail="Super owner 계정은 비활성화할 수 없습니다.")
 
     target.is_active = not bool(target.is_active)
@@ -3006,18 +3041,44 @@ def admin_toggle_user_active(target_id: int, user_id: int = Query(...), db: Sess
     return user_dict(target, state)
 
 @app.delete("/api/admin/users/{target_id}")
-def admin_deactivate_user(target_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
-    """관리자: 사용자 비활성화 (소프트 삭제)"""
+def admin_delete_user(target_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """관리자: 사용자 완전 삭제 (hard delete)"""
     state = load_state()
     require_admin(db, state, user_id)
     target = db.query(User).filter(User.id == target_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    if (target.loginid or "").lower() in [x.lower() for x in SUPER_OWNER_LOGINID]:
+    if is_super_owner_loginid(target.loginid):
         raise HTTPException(status_code=400, detail="Super owner 계정은 삭제할 수 없습니다.")
-    target.is_active = False
+
+    # tasks.assignee_ids(JSON)에서 제거
+    tasks = db.query(Task).filter(Task.archived_at.is_(None)).all()
+    for t in tasks:
+        ids = list(t.assignee_ids or [])
+        if target_id in ids:
+            ids.remove(target_id)
+            t.assignee_ids = ids
+
+    # preferences / user_shortcuts 삭제
+    db.query(UserPreference).filter(UserPreference.user_id == target_id).delete()
+    db.query(UserShortcut).filter(UserShortcut.user_id == target_id).delete()
+
+    # group memberships 삭제
+    db.query(GroupMembership).filter(GroupMembership.user_id == target_id).delete()
+
+    # project memberships 삭제
+    db.query(ProjectMemberModel).filter(ProjectMemberModel.user_id == target_id).delete()
+
+    # sidecar 정리
+    state["project_members"] = [m for m in state.get("project_members", []) if int(m.get("user_id", 0)) != target_id]
+    state["join_requests"] = [jr for jr in state.get("join_requests", []) if int(jr.get("user_id", 0)) != target_id]
+    state["notes"] = [n for n in state.get("notes", []) if int(n.get("author_id", -1)) != target_id]
+    state.get("user_meta", {}).pop(str(target_id), None)
+
+    db.delete(target)
     db.commit()
-    return {"message": "사용자가 비활성화되었습니다."}
+    save_state(state)
+    return {"message": "사용자가 삭제되었습니다."}
 
 @app.patch("/api/admin/users/{target_id}/role")
 def admin_update_user_role(target_id: int, body: dict, user_id: int = Query(...), db: Session = Depends(get_db)):

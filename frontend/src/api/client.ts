@@ -228,6 +228,19 @@ export const api = {
   },
 
   // =========================
+  // Project Hiding (per-user)
+  // =========================
+  toggleHiddenProject: async (userId: number, projectId: number): Promise<{ action: string; hidden_projects: number[] }> => {
+    const res = await client.post(`/users/${requireUserId(userId)}/hidden-projects/${projectId}`);
+    return res.data;
+  },
+
+  getHiddenProjects: async (userId: number): Promise<number[]> => {
+    const res = await client.get(`/users/${requireUserId(userId)}/hidden-projects`);
+    return res.data.hidden_projects || [];
+  },
+
+  // =========================
   // Users (DB)
   // =========================
   getUsers: async (): Promise<User[]> => {
@@ -245,6 +258,8 @@ export const api = {
     loginid: string;
     role?: string;
     avatar_color?: string;
+    deptname?: string;
+    mail?: string;
   }): Promise<User> => {
     const payload = {
       ...user,

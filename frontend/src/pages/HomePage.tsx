@@ -1192,22 +1192,25 @@ const ShortcutSection: React.FC<{
 }> = ({ currentUserId }) => {
   const queryClient = useQueryClient();
 
-  const { data: shortcuts = [] } = useQuery<Shortcut[]>({
+  // 프리셋 (관리자가 등록한 공용 바로가기)
+  const { data: presets = [] } = useQuery<Shortcut[]>({
     queryKey: ['shortcuts'],
     queryFn: api.getShortcuts,
   });
+  // 내 바로가기 (사용자별 DB)
   const { data: userShortcuts = [] } = useQuery<UserShortcut[]>({
     queryKey: ['userShortcuts', currentUserId],
     queryFn: () => api.getUserShortcuts(currentUserId),
     enabled: currentUserId > 0,
   });
 
-  const activeShortcuts = shortcuts
+  const activePresets = presets
     .filter(s => s.active !== false)
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
-  // User shortcut dialog state
+  // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogTab, setDialogTab] = useState<'preset' | 'custom'>('preset');
   const [scName, setScName] = useState('');
   const [scUrl, setScUrl] = useState('');
   const [scIconText, setScIconText] = useState('');
@@ -1215,14 +1218,8 @@ const ShortcutSection: React.FC<{
   const [scOpenNewTab, setScOpenNewTab] = useState(true);
 
   const createUserScMut = useMutation({
-    mutationFn: () => api.createUserShortcut(currentUserId, {
-      name: scName.trim(),
-      url: scUrl.trim(),
-      icon_text: scIconText.trim() || undefined,
-      icon_color: scIconColor,
-      open_new_tab: scOpenNewTab,
-      order: userShortcuts.length,
-    }),
+    mutationFn: (data: { name: string; url: string; icon_text?: string; icon_color?: string; open_new_tab?: boolean; order?: number }) =>
+      api.createUserShortcut(currentUserId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userShortcuts', currentUserId] });
       setDialogOpen(false);
@@ -1235,126 +1232,188 @@ const ShortcutSection: React.FC<{
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['userShortcuts', currentUserId] }),
   });
 
-  const handleSave = () => {
+  const handleSaveCustom = () => {
     if (!scName.trim() || !scUrl.trim()) return;
-    createUserScMut.mutate();
+    createUserScMut.mutate({
+      name: scName.trim(),
+      url: scUrl.trim(),
+      icon_text: scIconText.trim() || undefined,
+      icon_color: scIconColor,
+      open_new_tab: scOpenNewTab,
+      order: userShortcuts.length,
+    });
   };
 
-  if (activeShortcuts.length === 0 && userShortcuts.length === 0 && currentUserId <= 0) return null;
+  const handleAddPreset = (preset: Shortcut) => {
+    createUserScMut.mutate({
+      name: preset.name,
+      url: preset.url,
+      icon_text: preset.icon_text || undefined,
+      icon_color: preset.icon_color || '#2955FF',
+      open_new_tab: preset.open_new_tab !== false,
+      order: userShortcuts.length,
+    });
+  };
+
+  // 이미 추가된 프리셋 URL 체크
+  const addedUrls = new Set(userShortcuts.map(s => s.url));
+
+  if (userShortcuts.length === 0 && currentUserId <= 0) return null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'center' }}>
-      {/* 공용 바로가기 */}
-      {activeShortcuts.length > 0 && (
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start' }}>
-          {activeShortcuts.map(sc => (
-            <ShortcutIcon key={sc.id} sc={sc} />
-          ))}
-        </Box>
-      )}
-
-      {/* 내 바로가기 */}
-      {(userShortcuts.length > 0 || currentUserId > 0) && (
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start' }}>
-          {userShortcuts.map(sc => (
-            <Box key={sc.id} sx={{ position: 'relative', '&:hover .del-btn': { opacity: 1 } }}>
-              <ShortcutIcon sc={sc} />
-              <IconButton
-                className="del-btn"
-                size="small"
-                onClick={e => { e.stopPropagation(); deleteUserScMut.mutate(sc.id); }}
-                sx={{
-                  position: 'absolute', top: -6, right: -6, opacity: 0,
-                  transition: 'opacity 0.15s', bgcolor: '#FEE2E2', color: '#EF4444',
-                  width: 18, height: 18,
-                  '&:hover': { bgcolor: '#EF4444', color: '#fff' },
-                }}
-              >
-                <DeleteIcon sx={{ fontSize: 11 }} />
-              </IconButton>
-            </Box>
-          ))}
-          {/* "+" 버튼 */}
-          <Tooltip title="내 바로가기 추가">
-            <Box
-              onClick={() => setDialogOpen(true)}
+      {/* 내 바로가기만 표시 */}
+      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', justifyContent: 'center', alignItems: 'flex-start' }}>
+        {userShortcuts.map(sc => (
+          <Box key={sc.id} sx={{ position: 'relative', '&:hover .del-btn': { opacity: 1 } }}>
+            <ShortcutIcon sc={sc} />
+            <IconButton
+              className="del-btn"
+              size="small"
+              onClick={e => { e.stopPropagation(); deleteUserScMut.mutate(sc.id); }}
               sx={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8,
-                cursor: 'pointer', width: 72,
-                '&:hover .my-add-icon': { transform: 'scale(1.08)', borderColor: '#22C55E' },
+                position: 'absolute', top: -6, right: -6, opacity: 0,
+                transition: 'opacity 0.15s', bgcolor: '#FEE2E2', color: '#EF4444',
+                width: 18, height: 18,
+                '&:hover': { bgcolor: '#EF4444', color: '#fff' },
               }}
             >
-              <Box
-                className="my-add-icon"
-                sx={{
-                  width: 48, height: 48, borderRadius: 2.5,
-                  border: '2px dashed #86EFAC',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: '#22C55E', fontSize: '1.5rem', transition: 'all 0.2s ease',
-                }}
-              >
-                +
-              </Box>
-              <Typography variant="caption" sx={{ fontSize: '0.65rem', fontWeight: 500, color: '#22C55E' }}>
-                내 추가
-              </Typography>
-            </Box>
-          </Tooltip>
-        </Box>
-      )}
-
-      {/* Add user shortcut dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>내 바로가기 추가</DialogTitle>
-        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
-          <TextField
-            label="이름"
-            value={scName}
-            onChange={e => setScName(e.target.value)}
-            size="small"
-            required
-            fullWidth
-          />
-          <TextField
-            label="URL (https://...)"
-            value={scUrl}
-            onChange={e => setScUrl(e.target.value)}
-            size="small"
-            required
-            fullWidth
-          />
-          <TextField
-            label="아이콘 텍스트 (선택)"
-            value={scIconText}
-            onChange={e => setScIconText(e.target.value)}
-            size="small"
-            fullWidth
-            placeholder="예: G, 사내"
-          />
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>색상:</Typography>
-            <input
-              type="color"
-              value={scIconColor}
-              onChange={e => setScIconColor(e.target.value)}
-              style={{ width: 40, height: 32, border: 'none', cursor: 'pointer', borderRadius: 4 }}
-            />
+              <DeleteIcon sx={{ fontSize: 11 }} />
+            </IconButton>
           </Box>
-          <FormControlLabel
-            control={<Switch checked={scOpenNewTab} onChange={e => setScOpenNewTab(e.target.checked)} size="small" />}
-            label={<Typography variant="body2" sx={{ fontSize: '0.85rem' }}>새 탭에서 열기</Typography>}
-          />
+        ))}
+        {/* "+" 버튼 */}
+        <Tooltip title="바로가기 추가">
+          <Box
+            onClick={() => { setDialogTab(activePresets.length > 0 ? 'preset' : 'custom'); setDialogOpen(true); }}
+            sx={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8,
+              cursor: 'pointer', width: 72,
+              '&:hover .my-add-icon': { transform: 'scale(1.08)', borderColor: '#22C55E' },
+            }}
+          >
+            <Box
+              className="my-add-icon"
+              sx={{
+                width: 48, height: 48, borderRadius: 2.5,
+                border: '2px dashed #86EFAC',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#22C55E', fontSize: '1.5rem', transition: 'all 0.2s ease',
+              }}
+            >
+              +
+            </Box>
+            <Typography variant="caption" sx={{ fontSize: '0.65rem', fontWeight: 500, color: '#22C55E' }}>
+              추가
+            </Typography>
+          </Box>
+        </Tooltip>
+      </Box>
+
+      {/* 바로가기 추가 다이얼로그 */}
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 0 }}>바로가기 추가</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {/* 탭 전환 */}
+          {activePresets.length > 0 && (
+            <Box sx={{ display: 'flex', gap: 1, mb: 2, mt: 1 }}>
+              <Chip
+                label="프리셋"
+                size="small"
+                onClick={() => setDialogTab('preset')}
+                sx={{
+                  fontWeight: dialogTab === 'preset' ? 700 : 400,
+                  bgcolor: dialogTab === 'preset' ? '#2955FF' : '#F3F4F6',
+                  color: dialogTab === 'preset' ? '#fff' : '#6B7280',
+                  cursor: 'pointer',
+                  '&:hover': { opacity: 0.85 },
+                }}
+              />
+              <Chip
+                label="직접 추가"
+                size="small"
+                onClick={() => setDialogTab('custom')}
+                sx={{
+                  fontWeight: dialogTab === 'custom' ? 700 : 400,
+                  bgcolor: dialogTab === 'custom' ? '#2955FF' : '#F3F4F6',
+                  color: dialogTab === 'custom' ? '#fff' : '#6B7280',
+                  cursor: 'pointer',
+                  '&:hover': { opacity: 0.85 },
+                }}
+              />
+            </Box>
+          )}
+
+          {/* 프리셋 탭 */}
+          {dialogTab === 'preset' && activePresets.length > 0 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {activePresets.map(preset => {
+                const alreadyAdded = addedUrls.has(preset.url);
+                return (
+                  <Box
+                    key={preset.id}
+                    sx={{
+                      display: 'flex', alignItems: 'center', gap: 1.5,
+                      px: 1.5, py: 1, borderRadius: 1.5,
+                      border: '1px solid #E5E7EB',
+                      cursor: alreadyAdded ? 'default' : 'pointer',
+                      opacity: alreadyAdded ? 0.5 : 1,
+                      '&:hover': alreadyAdded ? {} : { bgcolor: '#F9FAFB', borderColor: '#2955FF' },
+                    }}
+                    onClick={() => { if (!alreadyAdded) handleAddPreset(preset); }}
+                  >
+                    <Box sx={{
+                      width: 36, height: 36, borderRadius: 2,
+                      bgcolor: preset.icon_color || '#2955FF',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: '#fff', fontWeight: 700, fontSize: '0.9rem', flexShrink: 0,
+                    }}>
+                      {preset.icon_text || preset.name.charAt(0).toUpperCase()}
+                    </Box>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>{preset.name}</Typography>
+                      <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preset.url}</Typography>
+                    </Box>
+                    {alreadyAdded ? (
+                      <Chip label="추가됨" size="small" sx={{ fontSize: '0.65rem', bgcolor: '#DCFCE7', color: '#22C55E' }} />
+                    ) : (
+                      <AddIcon sx={{ color: '#2955FF', fontSize: 20 }} />
+                    )}
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+
+          {/* 직접 추가 탭 */}
+          {dialogTab === 'custom' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+              <TextField label="이름" value={scName} onChange={e => setScName(e.target.value)} size="small" required fullWidth />
+              <TextField label="URL (https://...)" value={scUrl} onChange={e => setScUrl(e.target.value)} size="small" required fullWidth />
+              <TextField label="아이콘 텍스트 (선택)" value={scIconText} onChange={e => setScIconText(e.target.value)} size="small" fullWidth placeholder="예: G, 사내" />
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>색상:</Typography>
+                <input type="color" value={scIconColor} onChange={e => setScIconColor(e.target.value)} style={{ width: 40, height: 32, border: 'none', cursor: 'pointer', borderRadius: 4 }} />
+              </Box>
+              <FormControlLabel
+                control={<Switch checked={scOpenNewTab} onChange={e => setScOpenNewTab(e.target.checked)} size="small" />}
+                label={<Typography variant="body2" sx={{ fontSize: '0.85rem' }}>새 탭에서 열기</Typography>}
+              />
+            </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setDialogOpen(false)} sx={{ textTransform: 'none' }}>취소</Button>
-          <Button
-            variant="contained"
-            onClick={handleSave}
-            disabled={!scName.trim() || !scUrl.trim() || createUserScMut.isPending}
-            sx={{ textTransform: 'none' }}
-          >
-            추가
-          </Button>
+          <Button onClick={() => setDialogOpen(false)} sx={{ textTransform: 'none' }}>닫기</Button>
+          {dialogTab === 'custom' && (
+            <Button
+              variant="contained"
+              onClick={handleSaveCustom}
+              disabled={!scName.trim() || !scUrl.trim() || createUserScMut.isPending}
+              sx={{ textTransform: 'none' }}
+            >
+              추가
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
     </Box>
