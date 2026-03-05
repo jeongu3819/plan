@@ -319,7 +319,7 @@ const AdminPage: React.FC = () => {
   };
 
   const addFromKnoxMut = useMutation({
-    mutationFn: (data: { username: string; loginid: string }) =>
+    mutationFn: (data: { username: string; loginid: string; deptname?: string; mail?: string }) =>
       api.createUser({ ...data, role: 'member' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['adminUsers'] });
@@ -741,6 +741,8 @@ const AdminPage: React.FC = () => {
                                   addFromKnoxMut.mutate({
                                     username: emp.fullName || emp.username || emp.name || loginid,
                                     loginid,
+                                    deptname: emp.deptName || emp.deptname || emp.department || undefined,
+                                    mail: emp.email || emp.mail || undefined,
                                   })
                                 }
                                 disabled={addFromKnoxMut.isPending}

@@ -173,7 +173,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
 
   // Create user from Knox result then add as member
   const createAndAddMutation = useMutation({
-    mutationFn: async (data: { username: string; loginid: string }) => {
+    mutationFn: async (data: { username: string; loginid: string; deptname?: string; mail?: string }) => {
       const newUser = await api.createUser({ ...data, role: 'member' });
       await api.addProjectMember(projectId, newUser.id, 'member');
       return newUser;
@@ -288,15 +288,13 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                 >
                   {(m.username || '?').charAt(0).toUpperCase()}
                 </Avatar>
-                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                <Box sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <Typography
                     variant="body2"
+                    noWrap
                     sx={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151' }}
                   >
-                    {m.username || `User ${m.user_id}`}
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>
-                    {[m.loginid, m.deptname].filter(Boolean).join(' · ') || '-'}
+                    {[m.username || `User ${m.user_id}`, m.loginid, m.deptname].filter(Boolean).join(' | ')}
                   </Typography>
                 </Box>
                 {isCurrentOwner ? (
@@ -791,7 +789,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                         <Button
                           size="small"
                           variant="contained"
-                          onClick={() => createAndAddMutation.mutate({ username: name, loginid: lid })}
+                          onClick={() => createAndAddMutation.mutate({ username: name, loginid: lid, deptname: dept || undefined, mail: (emp.email || emp.mail || '') || undefined })}
                           disabled={createAndAddMutation.isPending}
                           sx={{ textTransform: 'none', fontSize: '0.7rem', minWidth: 80, bgcolor: '#8B5CF6', '&:hover': { bgcolor: '#7C3AED' } }}
                         >
