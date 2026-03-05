@@ -29,11 +29,25 @@ const TaskDrawer: React.FC = () => {
     const [newAttachmentName, setNewAttachmentName] = useState('');
     const [showAttachmentForm, setShowAttachmentForm] = useState(false);
 
-    // Fetch users
-    const { data: users = [] } = useQuery<User[]>({
+    // Fetch users (all - for fallback/display)
+    const { data: allUsers = [] } = useQuery<User[]>({
         queryKey: ['users'],
         queryFn: () => api.getUsers(),
     });
+
+    // Fetch project members - 담당자 선택은 프로젝트 멤버만
+    const activeProjectId = selectedTask?.project_id || drawerProjectId;
+    const { data: projectMembers = [] } = useQuery<any[]>({
+        queryKey: ['projectMembers', activeProjectId],
+        queryFn: () => api.getProjectMembers(activeProjectId!),
+        enabled: !!activeProjectId,
+    });
+
+    // 프로젝트 멤버 user_id로 필터링된 사용자 목록
+    const memberUserIds = new Set(projectMembers.map((m: any) => m.user_id));
+    const users = activeProjectId
+        ? allUsers.filter(u => memberUserIds.has(u.id))
+        : allUsers;
 
     // Fetch attachments when editing existing task
     const { data: attachments = [], isLoading: attachmentsLoading } = useQuery<Attachment[]>({
