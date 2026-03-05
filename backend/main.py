@@ -29,6 +29,7 @@ from app.models import (
     Project, User, Task, UserPreference, VisitLog, GroupMembership, Group,
     ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
     NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
+    MemberGroup, MemberGroupUser,
 )
 from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS
 from app.llm.dsllm_adapter import chat as dsllm_chat
@@ -37,8 +38,8 @@ from app.llm.dsllm_adapter import MODEL_CONFIGS
 from app.utils.text import sanitize_llm_text, sanitize_llm_text_ai
 from app.routers import auth, knox
 
-# ✅ 필요시만 켜세요 (운영에서는 보통 migration 권장)
-# Base.metadata.create_all(bind=engine)
+# ✅ 새 테이블 자동 생성 (member_groups, member_group_users 등)
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Antigravity Schedule Platform API")
 
@@ -502,6 +503,16 @@ class GroupUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+
+class MemberGroupCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    member_user_ids: Optional[List[int]] = None
+
+class MemberGroupUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    member_user_ids: Optional[List[int]] = None
 
 class ShortcutCreate(BaseModel):
     name: str
@@ -3485,6 +3496,76 @@ def admin_apply_group(group_id: int, user_id: int = Query(...), db: Session = De
         "activated": activated,
         "total_matched": total_matched,
     }
+
+
+# =========================
+# Member Groups (DB)
+# =========================
+def _member_group_dict(g: MemberGroup, db: Session) -> dict:
+    members = db.query(MemberGroupUser).filter(MemberGroupUser.group_id == g.id).all()
+    user_ids = [m.user_id for m in members]
+    users = db.query(User).filter(User.id.in_(user_ids)).all() if user_ids else []
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_by": g.created_by,
+        "created_at": g.created_at.isoformat() if g.created_at else None,
+        "member_count": len(user_ids),
+        "members": [
+            {
+                "user_id": u.id,
+                "username": u.username,
+                "loginid": u.loginid,
+                "avatar_color": u.avatar_color,
+                "deptname": getattr(u, "deptname", None) or getattr(u, "group_name", None),
+            }
+            for u in users
+        ],
+    }
+
+@app.get("/api/member-groups")
+def get_member_groups(user_id: int = Query(...), db: Session = Depends(get_db)):
+    groups = db.query(MemberGroup).filter(MemberGroup.created_by == user_id).order_by(MemberGroup.created_at.desc()).all()
+    return {"groups": [_member_group_dict(g, db) for g in groups]}
+
+@app.post("/api/member-groups")
+def create_member_group(body: MemberGroupCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    g = MemberGroup(name=body.name, description=body.description, created_by=user_id)
+    db.add(g)
+    db.flush()
+    for uid in (body.member_user_ids or []):
+        db.add(MemberGroupUser(group_id=g.id, user_id=uid))
+    db.commit()
+    db.refresh(g)
+    return _member_group_dict(g, db)
+
+@app.patch("/api/member-groups/{group_id}")
+def update_member_group(group_id: int, body: MemberGroupUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    g = db.query(MemberGroup).filter(MemberGroup.id == group_id).first()
+    if not g:
+        raise HTTPException(404, "Group not found")
+    if body.name is not None:
+        g.name = body.name
+    if body.description is not None:
+        g.description = body.description
+    if body.member_user_ids is not None:
+        db.query(MemberGroupUser).filter(MemberGroupUser.group_id == group_id).delete()
+        for uid in body.member_user_ids:
+            db.add(MemberGroupUser(group_id=group_id, user_id=uid))
+    db.commit()
+    db.refresh(g)
+    return _member_group_dict(g, db)
+
+@app.delete("/api/member-groups/{group_id}")
+def delete_member_group(group_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    g = db.query(MemberGroup).filter(MemberGroup.id == group_id).first()
+    if not g:
+        raise HTTPException(404, "Group not found")
+    db.query(MemberGroupUser).filter(MemberGroupUser.group_id == group_id).delete()
+    db.delete(g)
+    db.commit()
+    return {"message": "Group deleted"}
 
 
 # =========================

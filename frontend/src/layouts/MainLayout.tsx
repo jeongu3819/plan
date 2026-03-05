@@ -26,6 +26,7 @@ import {
   FormControl,
   InputLabel,
   Checkbox,
+  Chip,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -42,10 +43,11 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import GroupsIcon from '@mui/icons-material/Groups';
 
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, Project, User } from '../api/client';
+import { api, Project, User, MemberGroup } from '../api/client';
 import {
   deriveSidebarColor,
   deriveSidebarHover,
@@ -172,6 +174,12 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const { data: allProjects = [] } = useQuery<Project[]>({
     queryKey: ['projects', effectiveUserId],
     queryFn: () => api.getProjects(effectiveUserId),
+    enabled: !!me && effectiveUserId > 0,
+  });
+
+  const { data: memberGroups = [] } = useQuery<MemberGroup[]>({
+    queryKey: ['memberGroups', effectiveUserId],
+    queryFn: () => api.getMemberGroups(effectiveUserId),
     enabled: !!me && effectiveUserId > 0,
   });
 
@@ -344,6 +352,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             { text: '전체 로드맵', icon: <TimelineIcon />, path: '/roadmap' },
             // ✅ 추가된 메뉴
             { text: '@나를 언급', icon: <AlternateEmailIcon />, path: '/mentions' },
+            { text: '그룹', icon: <GroupsIcon />, path: '/groups' },
             {
               text: 'AI Settings',
               icon: <AutoAwesomeIcon />,
@@ -949,6 +958,45 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             >
               선택된 사용자만 이 프로젝트를 조회할 수 있습니다. (생성자는 자동 포함)
             </Typography>
+            {/* Group quick-add */}
+            {memberGroups.length > 0 && (
+              <Box sx={{ mb: 1.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 700, color: '#2955FF', mb: 0.5, display: 'block', fontSize: '0.65rem' }}>
+                  그룹으로 추가
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {memberGroups.map(g => {
+                    const newIds = g.members
+                      .map(m => m.user_id)
+                      .filter(uid => uid !== effectiveUserId && !selectedMemberIds.includes(uid));
+                    return (
+                      <Chip
+                        key={g.id}
+                        label={`${g.name} (${g.member_count})`}
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          if (newIds.length > 0) {
+                            setSelectedMemberIds(prev => [...new Set([...prev, ...newIds])]);
+                          }
+                        }}
+                        disabled={newIds.length === 0}
+                        sx={{
+                          cursor: newIds.length > 0 ? 'pointer' : 'default',
+                          fontWeight: 600,
+                          fontSize: '0.7rem',
+                          height: 24,
+                          borderColor: newIds.length > 0 ? '#2955FF' : '#E5E7EB',
+                          color: newIds.length > 0 ? '#2955FF' : '#9CA3AF',
+                          '&:hover': newIds.length > 0 ? { bgcolor: '#EEF2FF' } : {},
+                        }}
+                      />
+                    );
+                  })}
+                </Box>
+              </Box>
+            )}
+
             <Box
               sx={{
                 maxHeight: 160,

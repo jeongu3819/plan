@@ -146,6 +146,24 @@ export interface Group {
   created_at?: string;
 }
 
+export interface MemberGroupMember {
+  user_id: number;
+  username: string;
+  loginid: string;
+  avatar_color?: string;
+  deptname?: string;
+}
+
+export interface MemberGroup {
+  id: number;
+  name: string;
+  description?: string;
+  created_by: number;
+  created_at?: string;
+  member_count: number;
+  members: MemberGroupMember[];
+}
+
 export interface AiSettings {
   api_url: string;
   model_name: string;
@@ -756,6 +774,43 @@ export const api = {
       { params: { user_id: requireUserId(userId) } }
     );
     return res.data;
+  },
+
+  // =========================
+  // Member Groups (DB)
+  // =========================
+  getMemberGroups: async (userId: number): Promise<MemberGroup[]> => {
+    const res = await client.get('/member-groups', {
+      params: { user_id: requireUserId(userId) },
+    });
+    return res.data.groups || [];
+  },
+
+  createMemberGroup: async (
+    data: { name: string; description?: string; member_user_ids?: number[] },
+    userId: number
+  ): Promise<MemberGroup> => {
+    const res = await client.post('/member-groups', data, {
+      params: { user_id: requireUserId(userId) },
+    });
+    return res.data;
+  },
+
+  updateMemberGroup: async (
+    groupId: number,
+    data: { name?: string; description?: string; member_user_ids?: number[] },
+    userId: number
+  ): Promise<MemberGroup> => {
+    const res = await client.patch(`/member-groups/${groupId}`, data, {
+      params: { user_id: requireUserId(userId) },
+    });
+    return res.data;
+  },
+
+  deleteMemberGroup: async (groupId: number, userId: number): Promise<void> => {
+    await client.delete(`/member-groups/${groupId}`, {
+      params: { user_id: requireUserId(userId) },
+    });
   },
 
   // =========================

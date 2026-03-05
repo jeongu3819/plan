@@ -31,7 +31,7 @@ import LockIcon from '@mui/icons-material/Lock';
 import TextField from '@mui/material/TextField';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, User } from '../../api/client';
+import { api, User, MemberGroup } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
 
@@ -61,6 +61,12 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   const { data: projects = [] } = useQuery<any[]>({
     queryKey: ['projects', currentUserId],
     queryFn: () => api.getProjects(currentUserId),
+  });
+
+  const { data: memberGroups = [] } = useQuery<MemberGroup[]>({
+    queryKey: ['memberGroups', currentUserId],
+    queryFn: () => api.getMemberGroups(currentUserId),
+    enabled: currentUserId > 0,
   });
 
   const project = projects.find((p: any) => p.id === projectId);
@@ -692,6 +698,44 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
               ),
             }}
           />
+
+          {/* Group quick-add */}
+          {memberGroups.length > 0 && (
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: '#2955FF', mb: 0.5, display: 'block' }}>
+                그룹으로 추가
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.8 }}>
+                {memberGroups.map(g => {
+                  const newIds = g.members
+                    .map(m => m.user_id)
+                    .filter(uid => !memberUserIds.has(uid) && !selectedUserIds.includes(uid));
+                  return (
+                    <Chip
+                      key={g.id}
+                      label={`${g.name} (${g.member_count}명)`}
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        if (newIds.length > 0) {
+                          setSelectedUserIds(prev => [...new Set([...prev, ...newIds])]);
+                        }
+                      }}
+                      disabled={newIds.length === 0}
+                      sx={{
+                        cursor: newIds.length > 0 ? 'pointer' : 'default',
+                        fontWeight: 600,
+                        fontSize: '0.75rem',
+                        borderColor: newIds.length > 0 ? '#2955FF' : '#E5E7EB',
+                        color: newIds.length > 0 ? '#2955FF' : '#9CA3AF',
+                        '&:hover': newIds.length > 0 ? { bgcolor: '#EEF2FF' } : {},
+                      }}
+                    />
+                  );
+                })}
+              </Box>
+            </Box>
+          )}
 
           {/* Knox search results */}
           {knoxResults.length > 0 && (

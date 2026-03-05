@@ -305,6 +305,29 @@ class UserShortcut(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class MemberGroup(Base):
+    __tablename__ = "member_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class MemberGroupUser(Base):
+    __tablename__ = "member_group_users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("member_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_member_group_user"),
+    )
+
+
 class AiSetting(Base):
     __tablename__ = "ai_settings"
 
