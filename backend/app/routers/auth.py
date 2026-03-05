@@ -196,8 +196,12 @@ async def auth_callback(request: Request, db: Session = Depends(get_db)):
                 detail="관리자 승인 후 이용 가능합니다."
             )
 
-        # 로그인 시간 갱신
+        # 로그인 시간 갱신 + SSO에서 받은 deptname/mail로 DB 동기화
         row.last_login_at = datetime.now()
+        if user_info.get("deptname"):
+            row.deptname = user_info["deptname"]
+        if user_info.get("mail"):
+            row.mail = user_info["mail"]
         db.commit()
         db.refresh(row)
 

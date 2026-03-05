@@ -113,6 +113,7 @@ class VisitLog(Base):
     deptname = Column(String(100), nullable=True)
     username = Column(String(100), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    visit_date = Column(String(10), nullable=True, index=True)  # YYYY-MM-DD
     timestamp = Column(DateTime, default=lambda: datetime.now(KST))
 
 
@@ -199,6 +200,8 @@ class ProjectMember(Base):
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
 
     role = Column(String(30), nullable=False, default="member")  # owner / admin / member
+    loginid = Column(String(128), nullable=True)
+    deptname = Column(String(120), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

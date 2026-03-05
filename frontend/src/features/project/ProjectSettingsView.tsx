@@ -295,6 +295,9 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                   >
                     {m.username || `User ${m.user_id}`}
                   </Typography>
+                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>
+                    {[m.loginid, m.deptname].filter(Boolean).join(' · ') || '-'}
+                  </Typography>
                 </Box>
                 {isCurrentOwner ? (
                   <Chip

@@ -77,6 +77,7 @@ async def visit_log_middleware(request: Request, call_next):
 
     try:
         ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host if request.client else "unknown"
+        today_str = datetime.now(KST).strftime("%Y-%m-%d")
 
         user_id = None
         username = None
@@ -96,14 +97,21 @@ async def visit_log_middleware(request: Request, call_next):
                         user_id = u.id
                         username = u.username
                         deptname = u.deptname
-                    log_entry = VisitLog(
-                        ip_address=ip[:50],
-                        user_id=user_id,
-                        username=username,
-                        deptname=deptname,
-                    )
-                    db.add(log_entry)
-                    db.commit()
+                    # 동일 IP는 하루 1회만 기록
+                    existing = db.query(VisitLog).filter(
+                        VisitLog.ip_address == ip[:50],
+                        VisitLog.visit_date == today_str,
+                    ).first()
+                    if not existing:
+                        log_entry = VisitLog(
+                            ip_address=ip[:50],
+                            user_id=user_id,
+                            username=username,
+                            deptname=deptname,
+                            visit_date=today_str,
+                        )
+                        db.add(log_entry)
+                        db.commit()
                 finally:
                     db.close()
     except Exception:
@@ -693,7 +701,7 @@ def get_members_for_project(state: dict, project_id: int, db: Session = None) ->
     if db:
         rows = db.query(ProjectMemberModel).filter(ProjectMemberModel.project_id == int(project_id)).all()
         if rows:
-            return [{"project_id": r.project_id, "user_id": r.user_id, "role": r.role} for r in rows]
+            return [{"project_id": r.project_id, "user_id": r.user_id, "role": r.role, "loginid": r.loginid, "deptname": r.deptname} for r in rows]
     return [m for m in state.get("project_members", []) if int(m.get("project_id")) == int(project_id)]
 
 def ensure_owner_membership(state: dict, project_id: int, owner_id: Optional[int], db: Session = None):
@@ -705,7 +713,12 @@ def ensure_owner_membership(state: dict, project_id: int, owner_id: Optional[int
             ProjectMemberModel.user_id == int(owner_id),
         ).first()
         if not existing:
-            pm = ProjectMemberModel(project_id=project_id, user_id=owner_id, role="owner")
+            owner_user = db.query(User).filter(User.id == int(owner_id)).first()
+            pm = ProjectMemberModel(
+                project_id=project_id, user_id=owner_id, role="owner",
+                loginid=owner_user.loginid if owner_user else None,
+                deptname=getattr(owner_user, "deptname", None) if owner_user else None,
+            )
             db.add(pm)
             db.flush()
         return
@@ -1051,25 +1064,23 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
 def write_visit_log(request: Request, db: Session = Depends(get_db)):
     user = try_get_user_from_token(request)
     ip = get_client_ip(request)
-
-    # C-1: resolve user_id from token
     uid = resolve_user_id_from_token(request, db)
+    today_str = datetime.now(KST).strftime("%Y-%m-%d")
 
-    # C-1: 1-day dedup — if user_id exists and already logged today, skip
-    if uid:
-        today_start = datetime.combine(_today_kst(), datetime.min.time())
-        existing = db.query(VisitLog).filter(
-            VisitLog.user_id == uid,
-            VisitLog.timestamp >= today_start,
-        ).first()
-        if existing:
-            return {"message": "already logged today", "ip": ip}
+    # 동일 IP는 하루 1회만 기록
+    existing = db.query(VisitLog).filter(
+        VisitLog.ip_address == ip,
+        VisitLog.visit_date == today_str,
+    ).first()
+    if existing:
+        return {"message": "already logged today", "ip": ip}
 
     row = VisitLog(
         ip_address=ip,
         deptname=user.get("deptname"),
         username=user.get("username"),
         user_id=uid,
+        visit_date=today_str,
     )
     db.add(row)
     db.commit()
@@ -1183,7 +1194,12 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
             ProjectMemberModel.user_id == int(mid),
         ).first()
         if not existing:
-            pm = ProjectMemberModel(project_id=p.id, user_id=mid, role="member")
+            mu = db.query(User).filter(User.id == int(mid)).first()
+            pm = ProjectMemberModel(
+                project_id=p.id, user_id=mid, role="member",
+                loginid=mu.loginid if mu else None,
+                deptname=getattr(mu, "deptname", None) if mu else None,
+            )
             db.add(pm)
     db.flush()
 
@@ -1350,8 +1366,14 @@ def add_project_member(project_id: int, member: MemberAdd, db: Session = Depends
         save_state(state)
         return {"message": "참여 요청이 등록되었습니다. 관리자 승인 후 참여 가능합니다.", "status": "pending"}
 
-    # C-3: Add to DB
-    pm = ProjectMemberModel(project_id=project_id, user_id=member.user_id, role=member.role or "member")
+    # C-3: Add to DB (denormalize loginid/deptname from user)
+    pm = ProjectMemberModel(
+        project_id=project_id,
+        user_id=member.user_id,
+        role=member.role or "member",
+        loginid=u.loginid,
+        deptname=getattr(u, "deptname", None),
+    )
     db.add(pm)
     db.commit()
     # Also keep sidecar in sync for backward compat
@@ -3567,6 +3589,27 @@ def delete_member_group(group_id: int, user_id: int = Query(...), db: Session = 
     db.delete(g)
     db.commit()
     return {"message": "Group deleted"}
+
+
+# =========================
+# Backfill: project_members loginid/deptname
+# =========================
+@app.post("/api/admin/backfill-project-members")
+def backfill_project_members(user_id: int = Query(...), db: Session = Depends(get_db)):
+    state = load_state()
+    require_admin(db, state, user_id)
+    rows = db.query(ProjectMemberModel).filter(
+        (ProjectMemberModel.loginid.is_(None)) | (ProjectMemberModel.deptname.is_(None))
+    ).all()
+    updated = 0
+    for pm in rows:
+        u = db.query(User).filter(User.id == pm.user_id).first()
+        if u:
+            pm.loginid = u.loginid
+            pm.deptname = getattr(u, "deptname", None)
+            updated += 1
+    db.commit()
+    return {"message": f"Backfilled {updated} project_member rows"}
 
 
 # =========================
