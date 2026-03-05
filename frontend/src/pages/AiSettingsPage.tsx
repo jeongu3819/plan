@@ -31,7 +31,7 @@ const AiSettingsPage: React.FC = () => {
   const currentUser = users.find(u => u.id === currentUserId) || users[0];
 
   // Admin guard – block non-admin direct URL access
-  if (currentUser && currentUser.role !== 'admin' && currentUser.role !== 'super_admin') {
+  if (currentUser && currentUser.role !== 'super_admin') {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <BlockIcon sx={{ fontSize: 48, color: '#EF4444', mb: 2 }} />
@@ -39,7 +39,7 @@ const AiSettingsPage: React.FC = () => {
           접근 권한이 없습니다
         </Typography>
         <Typography variant="body2" sx={{ color: '#6B7280', mb: 3 }}>
-          AI Settings는 관리자만 접근할 수 있습니다.
+          AI Settings는 Super Admin만 접근할 수 있습니다.
         </Typography>
         <Button
           variant="contained"
@@ -78,7 +78,7 @@ const AiSettingsPage: React.FC = () => {
 
   const saveMutation = useMutation({
     mutationFn: () =>
-      api.saveAiSettings({ api_url: apiUrl, model_name: modelName, api_key: apiKey }),
+      api.saveAiSettings({ api_url: apiUrl, model_name: modelName, api_key: apiKey }, currentUserId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ai-settings'] });
       setSaved(true);

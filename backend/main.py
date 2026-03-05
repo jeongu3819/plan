@@ -55,6 +55,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# =========================
+# Visit Log Middleware
+# =========================
+SKIP_LOG_PREFIXES = ("/docs", "/openapi.json", "/favicon", "/static", "/health")
+SKIP_LOG_PATHS = {"/", "/api/health", "/api/docs"}
+
+@app.middleware("http")
+async def visit_log_middleware(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+
+    # 정적/healthcheck/favicon 등 제외
+    if path in SKIP_LOG_PATHS or any(path.startswith(p) for p in SKIP_LOG_PREFIXES):
+        return response
+
+    # GET /api/* 요청만 로깅 (쓰기 요청은 제외해 로그 폭증 방지)
+    if request.method != "GET" or not path.startswith("/api/"):
+        return response
+
+    try:
+        ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host if request.client else "unknown"
+
+        user_id = None
+        username = None
+        deptname = None
+
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            from app.routers.auth import load_session
+            token = auth.replace("Bearer ", "").strip()
+            user_info = load_session(token)
+            if user_info:
+                loginid = user_info.get("loginid", "")
+                db = SessionLocal()
+                try:
+                    u = db.query(User).filter(User.loginid == loginid).first()
+                    if u:
+                        user_id = u.id
+                        username = u.username
+                        deptname = u.deptname
+                    log_entry = VisitLog(
+                        ip_address=ip[:50],
+                        user_id=user_id,
+                        username=username,
+                        deptname=deptname,
+                    )
+                    db.add(log_entry)
+                    db.commit()
+                finally:
+                    db.close()
+    except Exception:
+        pass  # 로깅 실패가 서비스에 영향주지 않도록
+
+    return response
+
 @app.on_event("startup")
 def startup_ensure_super_admin():
     # user_shortcuts 테이블 자동 생성 (없으면)
@@ -661,16 +716,24 @@ def is_super_admin_user(db: Session, user_id: int) -> bool:
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
         return False
-    return bool(u.is_active) and u.role == "super_admin" and u.loginid in ["jimi.lee", "juhui07.kim", "zoltas.roh"]
+    return bool(u.is_active) and u.role == "super_admin" and is_super_owner_loginid(u.loginid)
 
 def require_admin(db: Session, state: dict, user_id: int):
+    """super_admin 또는 admin만 허용"""
     u = db.query(User).filter(User.id == user_id).first()
     if not u or not bool(u.is_active):
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    # 오직 jimi.lee + super_admin만 허용
-    if not (u.loginid in ["jimi.lee", "juhui07.kim", "zoltas.roh"] and u.role == "super_admin"):
+    if u.role not in ("super_admin", "admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
+
+def require_super_admin(db: Session, user_id: int):
+    """super_admin만 허용 (AI settings 등)"""
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u or not bool(u.is_active):
+        raise HTTPException(status_code=403, detail="Super admin access required")
+    if u.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin access required")
 
 def get_user_project_ids(db: Session, state: dict, user_id: int) -> set:
     pids = set()
@@ -789,10 +852,7 @@ def get_super_owner_id(db: Session) -> Optional[int]:
     return u.id if u else None
 
 def ensure_super_owner(db: Session) -> Optional[User]:
-    """
-    jimi.lee, juhui07.kim, zoltas.roh 계정이 존재하면 super_admin + 활성 상태를 강제 보장.
-    (존재하지 않으면 생성하지 않고 None 반환)
-    """
+    """SUPER_ADMIN_LOGINIDS에 해당하는 계정이 있으면 super_admin + 활성 상태를 강제 보장."""
     u = db.query(User).filter(
         User.loginid.in_(SUPER_OWNER_LOGINID)
     ).first()
@@ -1067,13 +1127,11 @@ def get_projects(user_id: Optional[int] = None, db: Session = Depends(get_db), _
     projects = [project_dict(p, state) for p in rows]
 
     if user_id:
-        role = get_user_role(db, user_id)
-        if not is_admin_like_role(role):
-            accessible_project_ids = get_user_project_ids(db, state, user_id)
-            projects = [
-                p for p in projects
-                if p["id"] in accessible_project_ids or p.get("visibility") == "public"
-            ]
+        accessible_project_ids = get_user_project_ids(db, state, user_id)
+        projects = [
+            p for p in projects
+            if p["id"] in accessible_project_ids or p.get("visibility") == "public"
+        ]
 
     return {"projects": projects}
 
@@ -1231,6 +1289,9 @@ def get_project_members(project_id: int, db: Session = Depends(get_db)):
             **m,
             "username": u.username if u else "Unknown",
             "avatar_color": (u.avatar_color if u else "#ccc"),
+            "deptname": u.deptname if u else None,
+            "mail": u.mail if u else None,
+            "loginid": u.loginid if u else None,
         })
     return {"members": enriched}
 
@@ -1292,6 +1353,45 @@ def add_project_member(project_id: int, member: MemberAdd, db: Session = Depends
     state["project_members"] = members
     save_state(state)
     return {"message": "Member added"}
+
+@app.patch("/api/projects/{project_id}/members/{target_user_id}/role")
+def update_project_member_role(
+    project_id: int, target_user_id: int,
+    body: dict, user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """프로젝트 내 멤버 역할(manager/member) 변경. owner 또는 super_admin만 가능."""
+    state = load_state()
+    meta = get_project_meta(state, project_id)
+    caller = db.query(User).filter(User.id == user_id).first()
+    if not caller:
+        raise HTTPException(status_code=403, detail="권한 없음")
+    is_owner = int(meta.get("owner_id", 0)) == user_id
+    is_sa = caller.role == "super_admin"
+    # manager도 다른 멤버 역할 변경 가능
+    caller_pm = db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == project_id,
+        ProjectMemberModel.user_id == user_id,
+    ).first()
+    is_manager = caller_pm and caller_pm.role == "manager"
+    if not (is_owner or is_sa or is_manager):
+        raise HTTPException(status_code=403, detail="프로젝트 역할 변경 권한이 없습니다.")
+
+    new_role = body.get("role", "member")
+    if new_role not in ("member", "manager"):
+        raise HTTPException(status_code=400, detail="유효하지 않은 역할입니다.")
+
+    pm = db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == project_id,
+        ProjectMemberModel.user_id == target_user_id,
+    ).first()
+    if not pm:
+        raise HTTPException(status_code=404, detail="프로젝트 멤버가 아닙니다.")
+    if pm.role == "owner":
+        raise HTTPException(status_code=400, detail="Owner 역할은 변경할 수 없습니다.")
+    pm.role = new_role
+    db.commit()
+    return {"message": f"역할이 {new_role}로 변경되었습니다."}
 
 @app.delete("/api/projects/{project_id}/members/{user_id}")
 def remove_project_member(project_id: int, user_id: int, db: Session = Depends(get_db)):
@@ -1408,24 +1508,20 @@ def get_tasks(
     if assignee_id:
         tasks = [t for t in tasks if assignee_id in (t.get("assignee_ids") or [])]
 
-    # user 권한 기반 필터 (새 프론트 호환)
+    # user 권한 기반 필터: 멤버인 프로젝트의 모든 task + public 프로젝트 task
     if user_id:
-        role = get_user_role(db, user_id)
-        if not is_admin_like_role(role):
-            user_project_ids = get_user_project_ids(db, state, user_id)
-            public_pids = {
-                project_dict(p, state)["id"]
-                for p in db.query(Project).filter(Project.archived_at.is_(None)).all()
-                if get_project_meta(state, p.id).get("visibility") == "public"
-            }
-            user_project_ids |= public_pids
+        user_project_ids = get_user_project_ids(db, state, user_id)
+        public_pids = {
+            p.id
+            for p in db.query(Project).filter(Project.archived_at.is_(None)).all()
+            if get_project_meta(state, p.id).get("visibility") == "public"
+        }
+        user_project_ids |= public_pids
 
-            tasks = [
-                t for t in tasks
-                if t.get("project_id") in user_project_ids and (
-                    not t.get("assignee_ids") or user_id in (t.get("assignee_ids") or [])
-                )
-            ]
+        tasks = [
+            t for t in tasks
+            if t.get("project_id") in user_project_ids
+        ]
 
     return {"tasks": tasks}
 
@@ -2394,7 +2490,8 @@ def get_ai_settings(db: Session = Depends(get_db)):
     return {"api_url": row.api_url or "", "model_name": row.model_name or ""}
 
 @app.put("/api/settings/ai")
-def save_ai_settings(body: AiSettingsUpdate, db: Session = Depends(get_db)):
+def save_ai_settings(body: AiSettingsUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    require_super_admin(db, user_id)
     row = get_or_create_ai_setting(db)
     row.api_url = body.api_url.strip()
     row.model_name = body.model_name.strip()

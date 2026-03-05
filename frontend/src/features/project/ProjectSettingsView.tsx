@@ -172,7 +172,15 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   const isOwner = project?.owner_id === currentUserId;
   const currentUserObj = users.find(u => u.id === currentUserId);
   const isSuperAdmin = currentUserObj?.role === 'super_admin';
-  const canManage = isOwner || isSuperAdmin;
+  const currentMember = members.find((m: any) => m.user_id === currentUserId);
+  const isProjectManager = currentMember?.role === 'manager';
+  const canManage = isOwner || isSuperAdmin || isProjectManager;
+
+  const updateMemberRoleMut = useMutation({
+    mutationFn: ({ targetUserId, role }: { targetUserId: number; role: string }) =>
+      api.updateProjectMemberRole(projectId, targetUserId, role, currentUserId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projectMembers', projectId] }),
+  });
 
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto', py: 2 }}>
@@ -258,17 +266,41 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                     {m.username || `User ${m.user_id}`}
                   </Typography>
                 </Box>
-                <Chip
-                  label={isCurrentOwner ? '소유자' : '멤버'}
-                  size="small"
-                  sx={{
-                    height: 22,
-                    fontSize: '0.65rem',
-                    fontWeight: 700,
-                    bgcolor: isCurrentOwner ? '#FEF3C7' : '#E5E7EB',
-                    color: isCurrentOwner ? '#D97706' : '#6B7280',
-                  }}
-                />
+                {isCurrentOwner ? (
+                  <Chip
+                    label="소유자"
+                    size="small"
+                    sx={{ height: 22, fontSize: '0.65rem', fontWeight: 700, bgcolor: '#FEF3C7', color: '#D97706' }}
+                  />
+                ) : canManage ? (
+                  <Select
+                    native
+                    value={m.role || 'member'}
+                    size="small"
+                    onChange={e => updateMemberRoleMut.mutate({ targetUserId: m.user_id, role: e.target.value as string })}
+                    sx={{
+                      height: 26, fontSize: '0.7rem', fontWeight: 600,
+                      bgcolor: m.role === 'manager' ? '#FEF3C7' : '#E5E7EB',
+                      color: m.role === 'manager' ? '#D97706' : '#6B7280',
+                      '& .MuiNativeSelect-select': { py: 0.2, px: 1 },
+                      '& .MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' },
+                      borderRadius: 2,
+                    }}
+                  >
+                    <option value="member" style={{ fontSize: '0.8rem' }}>멤버</option>
+                    <option value="manager" style={{ fontSize: '0.8rem' }}>중간관리자</option>
+                  </Select>
+                ) : (
+                  <Chip
+                    label={m.role === 'manager' ? '중간관리자' : '멤버'}
+                    size="small"
+                    sx={{
+                      height: 22, fontSize: '0.65rem', fontWeight: 700,
+                      bgcolor: m.role === 'manager' ? '#FEF3C7' : '#E5E7EB',
+                      color: m.role === 'manager' ? '#D97706' : '#6B7280',
+                    }}
+                  />
+                )}
                 {canManage && !isCurrentOwner && (
                   <Tooltip title="멤버 제거">
                     <IconButton

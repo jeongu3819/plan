@@ -433,6 +433,11 @@ export const api = {
     await client.delete(`/projects/${projectId}/members/${userId}`);
   },
 
+  updateProjectMemberRole: async (projectId: number, targetUserId: number, role: string, callerUserId: number): Promise<any> => {
+    const res = await client.patch(`/projects/${projectId}/members/${targetUserId}/role`, { role }, { params: { user_id: requireUserId(callerUserId) } });
+    return res.data;
+  },
+
   requestJoin: async (projectId: number, userId: number): Promise<any> => {
     const res = await client.post(`/projects/${projectId}/join-request`, null, {
       params: { user_id: requireUserId(userId) },
@@ -793,8 +798,8 @@ export const api = {
     const res = await client.get('/settings/ai');
     return res.data;
   },
-  saveAiSettings: async (data: { api_url: string; model_name: string; api_key?: string }): Promise<any> => {
-    const res = await client.put('/settings/ai', data);
+  saveAiSettings: async (data: { api_url: string; model_name: string; api_key?: string }, userId: number): Promise<any> => {
+    const res = await client.put('/settings/ai', data, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
 

@@ -6,6 +6,8 @@ export interface User {
   avatar_color?: string;
   is_active?: boolean;
   group_name?: string;
+  deptname?: string;
+  mail?: string;
 }
 
 export interface Project {

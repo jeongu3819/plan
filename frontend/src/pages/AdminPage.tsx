@@ -512,7 +512,8 @@ const AdminPage: React.FC = () => {
                 <TableRow sx={{ bgcolor: '#F9FAFB' }}>
                   <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>사용자</TableCell>
                   <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>Login ID</TableCell>
-                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>소속 그룹</TableCell>
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>소속그룹</TableCell>
+                  <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>메일</TableCell>
                   <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>역할</TableCell>
                   <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }}>상태</TableCell>
                   <TableCell sx={{ fontWeight: 600, fontSize: '0.8rem' }} align="center">
@@ -562,9 +563,18 @@ const AdminPage: React.FC = () => {
                     <TableCell>
                       <Typography
                         variant="body2"
-                        sx={{ color: user.group_name ? '#374151' : '#9CA3AF', fontSize: '0.8rem' }}
+                        sx={{ color: user.deptname ? '#374151' : '#9CA3AF', fontSize: '0.8rem' }}
                       >
-                        {user.group_name || '-'}
+                        {user.deptname || '-'}
+                      </Typography>
+                    </TableCell>
+
+                    <TableCell>
+                      <Typography
+                        variant="body2"
+                        sx={{ color: user.mail ? '#374151' : '#9CA3AF', fontSize: '0.8rem' }}
+                      >
+                        {user.mail || '-'}
                       </Typography>
                     </TableCell>
 
@@ -593,9 +603,6 @@ const AdminPage: React.FC = () => {
                         >
                           <MenuItem value="member" sx={{ fontSize: '0.8rem' }}>
                             Member
-                          </MenuItem>
-                          <MenuItem value="manager" sx={{ fontSize: '0.8rem' }}>
-                            중간관리자
                           </MenuItem>
                           {isSuperAdmin && (
                             <MenuItem value="admin" sx={{ fontSize: '0.8rem' }}>

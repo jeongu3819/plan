@@ -371,10 +371,10 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               text: 'AI Settings',
               icon: <AutoAwesomeIcon />,
               path: '/ai-settings',
-              adminOnly: true,
+              superAdminOnly: true,
             },
           ]
-            .filter(item => !item.adminOnly || isAdminLike)
+            .filter(item => !(item as any).superAdminOnly || isSuperAdmin)
             .map(item => {
               const isActive =
                 item.path === '/'
