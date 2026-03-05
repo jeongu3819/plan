@@ -1201,7 +1201,7 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
                 deptname=getattr(mu, "deptname", None) if mu else None,
             )
             db.add(pm)
-    db.flush()
+    db.commit()
 
     save_state(state)
     return project_dict(p, state)
@@ -1229,7 +1229,7 @@ def update_project(project_id: int, updates: ProjectUpdate, db: Session = Depend
     if meta_updates:
         set_project_meta(state, project_id, meta_updates)
         if "owner_id" in meta_updates:
-            ensure_owner_membership(state, project_id, meta_updates["owner_id"])
+            ensure_owner_membership(state, project_id, meta_updates["owner_id"], db=db)
 
     db.commit()
     db.refresh(p)
