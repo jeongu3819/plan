@@ -112,9 +112,6 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   // Mutations
   const addMemberMutation = useMutation({
     mutationFn: (userId: number) => api.addProjectMember(projectId, userId, 'member'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projectMembers', projectId] });
-    },
   });
 
   const removeMemberMutation = useMutation({
@@ -185,13 +182,17 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
       queryClient.invalidateQueries({ queryKey: ['projectMembers', projectId] });
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
-    onError: (err: any) => {
+    onError: async (err: any) => {
       // User already exists — try adding as member directly
       const detail = err?.response?.data?.detail || '';
       if (detail.includes('already exists') || detail.includes('이미 등록')) {
-        // Find existing user and add as member
         const matched = users.find(u => u.loginid === (err as any)._loginid);
-        if (matched) addMemberMutation.mutate(matched.id);
+        if (matched) {
+          try {
+            await addMemberMutation.mutateAsync(matched.id);
+          } catch { /* ignore */ }
+          queryClient.invalidateQueries({ queryKey: ['projectMembers', projectId] });
+        }
       }
     },
   });

@@ -1324,12 +1324,7 @@ def add_project_member(project_id: int, member: MemberAdd, db: Session = Depends
         ProjectMemberModel.user_id == member.user_id,
     ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="User is already a member")
-
-    # Also check sidecar for legacy compat
-    members = state.get("project_members", [])
-    if any(int(m.get("project_id")) == project_id and int(m.get("user_id")) == member.user_id for m in members):
-        raise HTTPException(status_code=400, detail="User is already a member")
+        return {"message": "Already a member", "status": "exists"}
 
     meta = get_project_meta(state, project_id)
     if meta.get("require_approval", False):
@@ -1360,9 +1355,15 @@ def add_project_member(project_id: int, member: MemberAdd, db: Session = Depends
     db.add(pm)
     db.commit()
     # Also keep sidecar in sync for backward compat
-    members.append({"project_id": project_id, "user_id": member.user_id, "role": member.role or "member"})
-    state["project_members"] = members
-    save_state(state)
+    sidecar_members = state.get("project_members", [])
+    already_in_sidecar = any(
+        int(m.get("project_id")) == project_id and int(m.get("user_id")) == member.user_id
+        for m in sidecar_members
+    )
+    if not already_in_sidecar:
+        sidecar_members.append({"project_id": project_id, "user_id": member.user_id, "role": member.role or "member"})
+        state["project_members"] = sidecar_members
+        save_state(state)
     return {"message": "Member added"}
 
 @app.patch("/api/projects/{project_id}/members/{target_user_id}/role")
