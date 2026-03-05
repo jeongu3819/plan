@@ -258,50 +258,79 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
           )}
         </Box>
 
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ border: '1px solid #E5E7EB', borderRadius: 2, overflow: 'hidden' }}>
+          {/* Table Header */}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: canManage ? '1fr 100px 120px 100px 40px' : '1fr 100px 120px 100px',
+              gap: 1,
+              px: 2,
+              py: 1,
+              bgcolor: '#F9FAFB',
+              borderBottom: '1px solid #E5E7EB',
+            }}
+          >
+            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', fontSize: '0.7rem' }}>이름</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', fontSize: '0.7rem' }}>ID</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', fontSize: '0.7rem' }}>소속</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', fontSize: '0.7rem' }}>역할</Typography>
+            {canManage && <Box />}
+          </Box>
+
+          {/* Table Rows */}
           {members.map((m: any) => {
             const isCurrentOwner = m.role === 'owner';
             return (
               <Box
                 key={m.user_id}
                 sx={{
-                  display: 'flex',
+                  display: 'grid',
+                  gridTemplateColumns: canManage ? '1fr 100px 120px 100px 40px' : '1fr 100px 120px 100px',
+                  gap: 1,
                   alignItems: 'center',
-                  gap: 1.5,
-                  py: 1.2,
                   px: 2,
-                  borderRadius: 2,
-                  bgcolor: isCurrentOwner ? '#FFFBEB' : '#F9FAFB',
-                  border: `1px solid ${isCurrentOwner ? '#FDE68A' : '#F3F4F6'}`,
-                  transition: 'all 0.15s',
-                  '&:hover': { bgcolor: isCurrentOwner ? '#FEF9C3' : '#F3F4F6' },
+                  py: 1,
+                  borderBottom: '1px solid #F3F4F6',
+                  bgcolor: isCurrentOwner ? '#FFFBEB' : 'transparent',
+                  '&:hover': { bgcolor: isCurrentOwner ? '#FEF9C3' : '#F9FAFB' },
+                  '&:last-child': { borderBottom: 'none' },
                 }}
               >
-                <Avatar
-                  sx={{
-                    width: 32,
-                    height: 32,
-                    fontSize: '0.7rem',
-                    bgcolor: m.avatar_color || '#2955FF',
-                    boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
-                  }}
-                >
-                  {(m.username || '?').charAt(0).toUpperCase()}
-                </Avatar>
-                <Box sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <Typography
-                    variant="body2"
-                    noWrap
-                    sx={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151' }}
+                {/* 이름 */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                  <Avatar
+                    sx={{
+                      width: 28,
+                      height: 28,
+                      fontSize: '0.65rem',
+                      bgcolor: m.avatar_color || '#2955FF',
+                      flexShrink: 0,
+                    }}
                   >
-                    {[m.username || `User ${m.user_id}`, m.loginid, m.deptname].filter(Boolean).join(' | ')}
+                    {(m.username || '?').charAt(0).toUpperCase()}
+                  </Avatar>
+                  <Typography variant="body2" noWrap sx={{ fontWeight: 600, fontSize: '0.8rem', color: '#374151' }}>
+                    {m.username || `User ${m.user_id}`}
                   </Typography>
                 </Box>
+
+                {/* ID */}
+                <Typography variant="body2" noWrap sx={{ color: m.loginid ? '#374151' : '#9CA3AF', fontSize: '0.75rem' }}>
+                  {m.loginid || '-'}
+                </Typography>
+
+                {/* 소속 */}
+                <Typography variant="body2" noWrap sx={{ color: m.deptname ? '#374151' : '#9CA3AF', fontSize: '0.75rem' }}>
+                  {m.deptname || '-'}
+                </Typography>
+
+                {/* 역할 */}
                 {isCurrentOwner ? (
                   <Chip
                     label="소유자"
                     size="small"
-                    sx={{ height: 22, fontSize: '0.65rem', fontWeight: 700, bgcolor: '#FEF3C7', color: '#D97706' }}
+                    sx={{ height: 22, fontSize: '0.65rem', fontWeight: 700, bgcolor: '#FEF3C7', color: '#D97706', width: 'fit-content' }}
                   />
                 ) : canManage ? (
                   <Select
@@ -326,22 +355,28 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                     label={m.role === 'manager' ? '중간관리자' : '멤버'}
                     size="small"
                     sx={{
-                      height: 22, fontSize: '0.65rem', fontWeight: 700,
+                      height: 22, fontSize: '0.65rem', fontWeight: 700, width: 'fit-content',
                       bgcolor: m.role === 'manager' ? '#FEF3C7' : '#E5E7EB',
                       color: m.role === 'manager' ? '#D97706' : '#6B7280',
                     }}
                   />
                 )}
-                {canManage && !isCurrentOwner && (
-                  <Tooltip title="멤버 제거">
-                    <IconButton
-                      size="small"
-                      onClick={() => removeMemberMutation.mutate(m.user_id)}
-                      sx={{ color: '#EF4444', '&:hover': { bgcolor: '#FEF2F2' } }}
-                    >
-                      <DeleteOutlineIcon sx={{ fontSize: '1rem' }} />
-                    </IconButton>
-                  </Tooltip>
+
+                {/* 액션 */}
+                {canManage && (
+                  <Box>
+                    {!isCurrentOwner ? (
+                      <Tooltip title="멤버 제거">
+                        <IconButton
+                          size="small"
+                          onClick={() => removeMemberMutation.mutate(m.user_id)}
+                          sx={{ color: '#EF4444', '&:hover': { bgcolor: '#FEF2F2' } }}
+                        >
+                          <DeleteOutlineIcon sx={{ fontSize: '1rem' }} />
+                        </IconButton>
+                      </Tooltip>
+                    ) : <Box />}
+                  </Box>
                 )}
               </Box>
             );

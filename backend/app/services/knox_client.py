@@ -12,6 +12,7 @@ REQUEST_BODY = {
         "departmentCode",
         "departmentName",
         "description",
+        "mail",
     ],
 }
 
