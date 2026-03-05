@@ -21,15 +21,19 @@ import {
   Tooltip,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SecurityIcon from '@mui/icons-material/Security';
 import GroupIcon from '@mui/icons-material/Group';
 import SearchIcon from '@mui/icons-material/Search';
+import PublicIcon from '@mui/icons-material/Public';
+import LockIcon from '@mui/icons-material/Lock';
 import TextField from '@mui/material/TextField';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, User } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
+import { useNavigate } from 'react-router-dom';
 
 interface ProjectSettingsViewProps {
   projectId: number;
@@ -37,6 +41,7 @@ interface ProjectSettingsViewProps {
 
 const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const currentUserId = useAppStore(state => state.currentUserId);
 
   // Fetch data
@@ -67,6 +72,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   const [knoxQuery, setKnoxQuery] = useState('');
   const [knoxResults, setKnoxResults] = useState<any[]>([]);
   const [knoxSearching, setKnoxSearching] = useState(false);
+  const [visibility, setVisibility] = useState<string>(project?.visibility || 'private');
   const [requireApproval, setRequireApproval] = useState(project?.require_approval ?? false);
   const [permissions, setPermissions] = useState<Record<string, string>>(
     project?.permissions ?? {
@@ -82,6 +88,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   // Sync state when project data loads
   React.useEffect(() => {
     if (project) {
+      setVisibility(project.visibility || 'private');
       setRequireApproval(project.require_approval ?? false);
       setPermissions(
         project.permissions ?? {
@@ -120,11 +127,27 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   });
 
   const handleSavePermissions = () => {
-    updateProjectMutation.mutate({ require_approval: requireApproval, permissions });
+    updateProjectMutation.mutate({ visibility, require_approval: requireApproval, permissions });
   };
 
-  const handleAddMembers = () => {
-    selectedUserIds.forEach(uid => addMemberMutation.mutate(uid));
+  const deleteProjectMutation = useMutation({
+    mutationFn: () => api.deleteProject(projectId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      navigate('/');
+    },
+  });
+
+  const handleAddMembers = async () => {
+    for (const uid of selectedUserIds) {
+      try {
+        await addMemberMutation.mutateAsync(uid);
+      } catch {
+        // 이미 멤버인 경우 무시
+      }
+    }
+    queryClient.invalidateQueries({ queryKey: ['projectMembers', projectId] });
     setSelectedUserIds([]);
     setAddMemberOpen(false);
     setMemberSearch('');
@@ -327,6 +350,62 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         </Box>
       </Paper>
 
+      {/* ─── Visibility Section ─── */}
+      {canManage && (
+        <Paper
+          sx={{
+            p: 3,
+            mb: 3,
+            borderRadius: 3,
+            border: '1px solid #E5E7EB',
+            boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            {visibility === 'public' ? (
+              <PublicIcon sx={{ color: '#2955FF', fontSize: '1.3rem' }} />
+            ) : (
+              <LockIcon sx={{ color: '#6B7280', fontSize: '1.3rem' }} />
+            )}
+            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', color: '#1A1D29' }}>
+              공개 범위
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+            {[
+              { value: 'private', label: '비공개', desc: '나와 담당자만 볼 수 있습니다' },
+              { value: 'public', label: '공개', desc: '모든 사용자가 볼 수 있습니다' },
+            ].map(opt => (
+              <Box
+                key={opt.value}
+                onClick={() => setVisibility(opt.value)}
+                sx={{
+                  flex: 1, p: 1.5, borderRadius: 2, cursor: 'pointer',
+                  border: visibility === opt.value ? '2px solid #2955FF' : '1px solid #E5E7EB',
+                  bgcolor: visibility === opt.value ? '#EEF2FF' : 'transparent',
+                  '&:hover': { borderColor: '#2955FF' },
+                  transition: 'all 0.15s',
+                }}
+              >
+                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>{opt.label}</Typography>
+                <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>{opt.desc}</Typography>
+              </Box>
+            ))}
+          </Box>
+          {visibility !== (project?.visibility || 'private') && (
+            <Button
+              size="small"
+              variant="contained"
+              onClick={() => updateProjectMutation.mutate({ visibility })}
+              disabled={updateProjectMutation.isPending}
+              sx={{ bgcolor: '#2955FF', fontWeight: 600, fontSize: '0.8rem', '&:hover': { bgcolor: '#1E44CC' } }}
+            >
+              공개 범위 저장
+            </Button>
+          )}
+        </Paper>
+      )}
+
       {/* ─── Permissions Section ─── */}
       {canManage && (
         <Paper
@@ -517,6 +596,47 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
               ✓ 저장되었습니다
             </Typography>
           )}
+        </Paper>
+      )}
+
+      {/* ─── Delete Project Section (Owner only) ─── */}
+      {isOwner && (
+        <Paper
+          sx={{
+            p: 3,
+            mb: 3,
+            borderRadius: 3,
+            border: '1px solid #FCA5A5',
+            bgcolor: '#FEF2F2',
+            boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+            <DeleteForeverIcon sx={{ color: '#EF4444', fontSize: '1.3rem' }} />
+            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', color: '#DC2626' }}>
+              프로젝트 삭제
+            </Typography>
+          </Box>
+          <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.8rem', mb: 2 }}>
+            프로젝트를 삭제하면 모든 태스크, 멤버, 파일이 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다.
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={<DeleteForeverIcon />}
+            onClick={() => {
+              if (window.confirm(`"${project?.name}" 프로젝트를 삭제하시겠습니까?\n모든 데이터가 삭제됩니다.`)) {
+                deleteProjectMutation.mutate();
+              }
+            }}
+            disabled={deleteProjectMutation.isPending}
+            sx={{
+              bgcolor: '#EF4444',
+              fontWeight: 600,
+              '&:hover': { bgcolor: '#DC2626' },
+            }}
+          >
+            {deleteProjectMutation.isPending ? '삭제 중...' : '프로젝트 삭제'}
+          </Button>
         </Paper>
       )}
 

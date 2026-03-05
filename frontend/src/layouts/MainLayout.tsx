@@ -224,9 +224,6 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const [projectMenuAnchor, setProjectMenuAnchor] = useState<null | HTMLElement>(null);
   const [projectMenuId, setProjectMenuId] = useState<number | null>(null);
 
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [deleteProjectId, setDeleteProjectId] = useState<number | null>(null);
-
   // ✅ Add Member(사용자 추가) 기능 추가
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [newUsername, setNewUsername] = useState('');
@@ -272,20 +269,6 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     },
   });
 
-  const deleteProjectMutation = useMutation({
-    mutationFn: (id: number) => api.deleteProject(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      setDeleteConfirmOpen(false);
-      setDeleteProjectId(null);
-      if (location.pathname.includes(`/project/${deleteProjectId}`)) {
-        navigate('/');
-      }
-    },
-  });
-
   const createUserMutation = useMutation({
     mutationFn: () =>
       api.createUser({
@@ -303,12 +286,6 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       alert(err?.response?.data?.detail || '사용자 추가 실패');
     },
   });
-
-  const handleDeleteProject = (projectId: number) => {
-    setDeleteProjectId(projectId);
-    setDeleteConfirmOpen(true);
-    setProjectMenuAnchor(null);
-  };
 
   if (meLoading) return null;
   if (!me) return null; // UserProvider가 로그인 리다이렉트 처리
@@ -789,23 +766,6 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         >
           {projectMenuId && hiddenSet.has(projectMenuId) ? '숨기기 해제' : '숨기기'}
         </MenuItem>
-        {(() => {
-          const menuProject = allProjects.find(p => p.id === projectMenuId);
-          const canDelete = isAdminLike || (menuProject?.owner_id === effectiveUserId);
-          return canDelete ? (
-            <>
-              <Divider />
-              <MenuItem
-                onClick={() => {
-                  if (projectMenuId) handleDeleteProject(projectMenuId);
-                }}
-                sx={{ fontSize: '0.85rem', color: '#EF4444' }}
-              >
-                <DeleteOutlineIcon sx={{ fontSize: '1rem', mr: 1 }} /> Delete
-              </MenuItem>
-            </>
-          ) : null;
-        })()}
       </Menu>
 
       {/* ─── User Switch Menu ─── */}
@@ -1298,37 +1258,6 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         </DialogActions>
       </Dialog>
 
-      {/* ─── Delete Confirm Dialog ─── */}
-      <Dialog
-        open={deleteConfirmOpen}
-        onClose={() => setDeleteConfirmOpen(false)}
-        maxWidth="xs"
-        fullWidth
-        PaperProps={{ sx: { borderRadius: 3 } }}
-      >
-        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', color: '#EF4444' }}>
-          Delete Project?
-        </DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ color: '#6B7280' }}>
-            This will archive all tasks in this project. This action cannot be easily undone.
-          </Typography>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setDeleteConfirmOpen(false)} sx={{ color: '#6B7280' }}>
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            onClick={() => {
-              if (deleteProjectId) deleteProjectMutation.mutate(deleteProjectId);
-            }}
-            sx={{ bgcolor: '#EF4444', '&:hover': { bgcolor: '#DC2626' } }}
-          >
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 };
