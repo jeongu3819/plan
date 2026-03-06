@@ -96,6 +96,7 @@ export interface Attachment {
 export interface TaskActivity {
   id: number;
   task_id: number;
+  block_type: 'checkbox' | 'text';
   order_index: number;
   content: string;
   checked: boolean;

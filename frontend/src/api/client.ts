@@ -432,7 +432,7 @@ export const api = {
     const res = await client.get(`/tasks/${taskId}/activities`);
     return res.data.activities || [];
   },
-  createTaskActivity: async (taskId: number, data: { content: string; checked?: boolean; style?: any }): Promise<TaskActivity> => {
+  createTaskActivity: async (taskId: number, data: { content: string; block_type?: string; checked?: boolean; style?: any }): Promise<TaskActivity> => {
     const res = await client.post(`/tasks/${taskId}/activities`, data);
     return res.data;
   },

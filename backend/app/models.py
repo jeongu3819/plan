@@ -102,6 +102,7 @@ class TaskActivity(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    block_type = Column(String(20), nullable=False, default="checkbox")  # checkbox / text
     order_index = Column(Integer, nullable=False, default=0)
     content = Column(Text, nullable=False, default="")
     checked = Column(Boolean, nullable=False, default=False)

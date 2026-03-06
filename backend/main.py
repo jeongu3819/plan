@@ -44,6 +44,19 @@ from app.routers import auth, knox
 # ✅ 새 테이블 자동 생성 (member_groups, member_group_users 등)
 Base.metadata.create_all(bind=engine)
 
+# ✅ 기존 테이블에 새 컬럼 추가 (ALTER TABLE)
+def _run_migrations():
+    from sqlalchemy import text, inspect
+    insp = inspect(engine)
+    # task_activities.block_type
+    if "task_activities" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("task_activities")]
+        if "block_type" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE task_activities ADD COLUMN block_type VARCHAR(20) NOT NULL DEFAULT "checkbox"'))
+
+_run_migrations()
+
 app = FastAPI(title="Antigravity Schedule Platform API")
 
 # SSO 라우터 (/api/auth/*)
@@ -2573,6 +2586,7 @@ def get_task_activities(task_id: int, db: Session = Depends(get_db)):
         {
             "id": a.id,
             "task_id": a.task_id,
+            "block_type": a.block_type or "checkbox",
             "order_index": a.order_index,
             "content": a.content,
             "checked": a.checked,
@@ -2592,6 +2606,7 @@ def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Dep
     ).scalar() or 0
     activity = TaskActivityModel(
         task_id=task_id,
+        block_type=body.get("block_type", "checkbox"),
         order_index=max_order + 1,
         content=body.get("content", ""),
         checked=body.get("checked", False),
@@ -2604,6 +2619,7 @@ def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Dep
     return {
         "id": activity.id,
         "task_id": activity.task_id,
+        "block_type": activity.block_type or "checkbox",
         "order_index": activity.order_index,
         "content": activity.content,
         "checked": activity.checked,
@@ -2618,6 +2634,8 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
         raise HTTPException(status_code=404, detail="Activity not found")
     if "content" in body:
         activity.content = body["content"]
+    if "block_type" in body:
+        activity.block_type = body["block_type"]
     if "checked" in body:
         activity.checked = body["checked"]
     if "style" in body:
@@ -2630,6 +2648,7 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
     return {
         "id": activity.id,
         "task_id": activity.task_id,
+        "block_type": activity.block_type or "checkbox",
         "order_index": activity.order_index,
         "content": activity.content,
         "checked": activity.checked,
@@ -2648,12 +2667,13 @@ def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 def _sync_task_progress(db: Session, task_id: int):
-    """Recalculate task progress from activities."""
+    """Recalculate task progress from checkbox activities only."""
     activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
-    if not activities:
+    checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
+    if not checkboxes:
         return
-    total = len(activities)
-    checked = sum(1 for a in activities if a.checked)
+    total = len(checkboxes)
+    checked = sum(1 for a in checkboxes if a.checked)
     progress = round(checked / total * 100) if total > 0 else 0
     db.query(Task).filter(Task.id == task_id).update({"progress": progress})
     db.commit()
