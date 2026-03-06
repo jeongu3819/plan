@@ -742,6 +742,24 @@ def is_super_admin_user(db: Session, user_id: int) -> bool:
         return False
     return bool(u.is_active) and u.role == "super_admin" and is_super_owner_loginid(u.loginid)
 
+def check_task_edit_permission(db: Session, state: dict, project_id: int, user_id: int):
+    """owner/담당자만 task 수정 가능. viewer는 불가."""
+    if is_admin_like_role(get_user_role(db, user_id)):
+        return True
+
+    meta = get_project_meta(state, project_id)
+    if int(meta.get("owner_id") or 0) == int(user_id):
+        return True
+
+    pm = db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == int(project_id),
+        ProjectMemberModel.user_id == int(user_id),
+    ).first()
+    if pm and pm.role in ("owner", "manager", "member"):
+        return True
+
+    raise HTTPException(status_code=403, detail="Task 수정 권한이 없습니다. (viewer는 수정 불가)")
+
 def require_admin(db: Session, state: dict, user_id: int):
     """super_admin 또는 admin만 허용"""
     u = db.query(User).filter(User.id == user_id).first()
@@ -1303,7 +1321,7 @@ def delete_project(project_id: int, request: Request, db: Session = Depends(get_
 # Project Members / Join Requests (C-3: DB + sidecar fallback)
 # =========================
 @app.get("/api/projects/{project_id}/members")
-def get_project_members(project_id: int, db: Session = Depends(get_db)):
+def get_project_members(project_id: int, assignable_only: bool = False, db: Session = Depends(get_db)):
     state = load_state()
     members = get_members_for_project(state, project_id, db=db)
     users_map = {u.id: u for u in db.query(User).all()}
@@ -1312,6 +1330,9 @@ def get_project_members(project_id: int, db: Session = Depends(get_db)):
     for m in members:
         uid = int(m.get("user_id"))
         u = users_map.get(uid)
+        # assignable_only: viewer cannot be assigned to tasks
+        if assignable_only and m.get("role") == "viewer":
+            continue
         enriched.append({
             **m,
             "username": u.username if u else "Unknown",
@@ -1412,7 +1433,7 @@ def update_project_member_role(
         raise HTTPException(status_code=403, detail="프로젝트 역할 변경 권한이 없습니다.")
 
     new_role = body.get("role", "member")
-    if new_role not in ("member", "manager"):
+    if new_role not in ("member", "manager", "viewer"):
         raise HTTPException(status_code=400, detail="유효하지 않은 역할입니다.")
 
     pm = db.query(ProjectMemberModel).filter(
@@ -1560,12 +1581,17 @@ def get_tasks(
     return {"tasks": tasks}
 
 @app.post("/api/tasks")
-def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+def create_task(task: TaskCreate, request: Request = None, db: Session = Depends(get_db)):
     state = load_state()
 
     p = db.query(Project).filter(Project.id == task.project_id, Project.archived_at.is_(None)).first()
     if not p:
         raise HTTPException(status_code=400, detail="Project not found")
+
+    # viewer cannot create tasks
+    caller_id = resolve_user_id_from_token(request, db) if request else None
+    if caller_id:
+        check_task_edit_permission(db, state, task.project_id, caller_id)
 
     t = Task(
         project_id=task.project_id,
@@ -1592,11 +1618,16 @@ def create_task(task: TaskCreate, db: Session = Depends(get_db)):
     return task_dict(t, state)
 
 @app.patch("/api/tasks/{task_id}")
-def update_task(task_id: int, updates: TaskUpdate, db: Session = Depends(get_db)):
+def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: Session = Depends(get_db)):
     state = load_state()
     t = db.query(Task).filter(Task.id == task_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # viewer cannot update tasks
+    caller_id = resolve_user_id_from_token(request, db) if request else None
+    if caller_id:
+        check_task_edit_permission(db, state, t.project_id, caller_id)
 
     data = updates.model_dump(exclude_unset=True)
 
@@ -1622,10 +1653,15 @@ def update_task(task_id: int, updates: TaskUpdate, db: Session = Depends(get_db)
     return task_dict(t, state)
 
 @app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: int, db: Session = Depends(get_db)):
+def delete_task(task_id: int, request: Request = None, db: Session = Depends(get_db)):
     t = db.query(Task).filter(Task.id == task_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # viewer cannot delete tasks
+    caller_id = resolve_user_id_from_token(request, db) if request else None
+    if caller_id:
+        check_task_edit_permission(db, load_state(), t.project_id, caller_id)
 
     t.archived_at = datetime.now()
     db.commit()
@@ -1672,9 +1708,89 @@ def create_attachment(task_id: int, attachment: AttachmentCreate, db: Session = 
 @app.delete("/api/attachments/{attachment_id}")
 def delete_attachment(attachment_id: int):
     state = load_state()
+    # If it's a file attachment, delete the physical file too
+    att = next((a for a in state.get("attachments", []) if int(a.get("id")) == attachment_id), None)
+    if att and att.get("type") == "file" and att.get("stored_name"):
+        task_id = att.get("task_id")
+        if task_id:
+            file_path = os.path.join(UPLOAD_DIR, f"tasks/{task_id}", att["stored_name"])
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
     state["attachments"] = [a for a in state.get("attachments", []) if int(a.get("id")) != attachment_id]
     save_state(state)
     return {"message": "Attachment deleted"}
+
+
+@app.post("/api/tasks/{task_id}/files")
+async def upload_task_file(
+    task_id: int,
+    file: UploadFile = FastAPIFile(...),
+    user_id: int = Query(default=1),
+    request: Request = None,
+    db: Session = Depends(get_db),
+):
+    """Upload a file attachment to a task."""
+    state = load_state()
+    t = db.query(Task).filter(Task.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Permission check: viewer cannot upload
+    if user_id and user_id > 0:
+        check_task_edit_permission(db, state, t.project_id, user_id)
+
+    task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
+    os.makedirs(task_dir, exist_ok=True)
+
+    ext = os.path.splitext(file.filename or "")[1]
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    file_path = os.path.join(task_dir, stored_name)
+
+    contents = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(contents)
+
+    attachments = state.get("attachments", [])
+    new_att = {
+        "id": next_id(attachments),
+        "task_id": task_id,
+        "url": f"/api/tasks/{task_id}/files/{stored_name}/download",
+        "filename": file.filename or stored_name,
+        "stored_name": stored_name,
+        "type": "file",
+        "size": len(contents),
+        "created_at": datetime.now().isoformat(),
+    }
+    attachments.append(new_att)
+    state["attachments"] = attachments
+    save_state(state)
+    return new_att
+
+
+@app.get("/api/tasks/{task_id}/files/{stored_name}/download")
+def download_task_file(task_id: int, stored_name: str):
+    """Download a file attachment from a task."""
+    state = load_state()
+    att = next(
+        (a for a in state.get("attachments", [])
+         if int(a.get("task_id")) == task_id and a.get("stored_name") == stored_name),
+        None
+    )
+    if not att:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = os.path.join(UPLOAD_DIR, "tasks", str(task_id), stored_name)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    return FileResponse(
+        path=file_path,
+        filename=att.get("filename", stored_name),
+        media_type="application/octet-stream",
+    )
 
 # =========================
 # Project Files (실파일 업로드 / sidecar metadata)
@@ -3410,9 +3526,15 @@ def admin_get_unassigned_users(user_id: int = Query(...), db: Session = Depends(
 # - 레거시 /api/groups + 신규 /api/admin/groups 둘 다 지원
 # =========================
 def _group_to_out(g: dict, db: Session, state: dict) -> dict:
-    users = [user_dict(u, state) for u in db.query(User).all()]
-    matched = [u for u in users if u.get("group_name") == g.get("name")]
-    return {**g, "matched_count": len(matched)}
+    all_users = db.query(User).all()
+    group_name = g.get("name", "")
+    # Match by group_name (user_meta) OR deptname
+    matched_count = 0
+    for u in all_users:
+        umeta = get_user_meta(state, u.id)
+        if umeta.get("group_name") == group_name or (u.deptname and u.deptname.strip() == group_name):
+            matched_count += 1
+    return {**g, "matched_count": matched_count}
 
 @app.get("/api/groups")
 def get_groups(db: Session = Depends(get_db)):
@@ -3502,7 +3624,8 @@ def admin_apply_group(group_id: int, user_id: int = Query(...), db: Session = De
     users = db.query(User).all()
     for u in users:
         umeta = get_user_meta(state, u.id)
-        if umeta.get("group_name") == target_group_name:
+        # Match by group_name (user_meta) OR deptname
+        if umeta.get("group_name") == target_group_name or (u.deptname and u.deptname.strip() == target_group_name):
             if not bool(u.is_active):
                 u.is_active = True
                 activated += 1
@@ -3511,7 +3634,8 @@ def admin_apply_group(group_id: int, user_id: int = Query(...), db: Session = De
 
     total_matched = 0
     for u in users:
-        if get_user_meta(state, u.id).get("group_name") == target_group_name:
+        umeta = get_user_meta(state, u.id)
+        if umeta.get("group_name") == target_group_name or (u.deptname and u.deptname.strip() == target_group_name):
             total_matched += 1
 
     return {

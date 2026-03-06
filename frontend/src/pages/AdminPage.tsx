@@ -464,8 +464,7 @@ const AdminPage: React.FC = () => {
             <strong>역할 설명:</strong><br />
             <strong>Super Admin</strong> — 전체 시스템 관리 (사용자/그룹/설정 등 모든 권한)<br />
             <strong>Admin</strong> — 사이트 관리 (프로젝트/구성원 관리)<br />
-            <strong>중간관리자</strong> — 소속 프로젝트 관리 (담당 프로젝트 내 관리 권한)<br />
-            <strong>Member</strong> — 일반 사용자 (할당된 프로젝트 내 작업 수행)
+            <strong>Member</strong> — 일반 사용자 (프로젝트별 역할은 프로젝트 Settings에서 관리)
           </Alert>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
@@ -767,9 +766,10 @@ const AdminPage: React.FC = () => {
       {tabIndex === 1 && (
         <Box>
           <Alert severity="info" sx={{ borderRadius: 2, mb: 2, fontSize: '0.85rem' }}>
-            회사 내부 실제 조직/그룹명(예: ETCH기술팀)을 등록하면, 해당 그룹에 소속된 사용자에게
-            사이트 접근 권한이 자동 부여됩니다. 사용자의 소속 그룹은 사용자 데이터의{' '}
-            <strong>group_name</strong> 필드로 매칭됩니다.
+            <strong>부서 기반 자동 접근 허용:</strong> 부서명(예: ETCH기술팀)을 등록하면,
+            해당 부서 소속 사용자가 SSO 로그인 시 자동으로 계정이 생성되고 접근 권한이 부여됩니다.<br />
+            사용자의 SSO <strong>deptname</strong> 필드와 등록된 그룹명이 일치하면 자동 매칭됩니다.
+            개별 사용자는 &quot;구성원 관리&quot; 탭에서 별도로 등록할 수 있습니다.
           </Alert>
 
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -793,7 +793,8 @@ const AdminPage: React.FC = () => {
               Knox 사내 부서 검색
             </Typography>
             <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.8rem', mb: 1.5 }}>
-              사내 구성원을 검색하면 소속 부서를 확인하고 그룹으로 등록할 수 있습니다.
+              사내 구성원을 검색하여 부서명을 확인한 뒤, 해당 부서를 그룹으로 등록하세요.
+              등록된 부서 소속 사용자는 SSO 로그인 시 자동으로 접근이 허용됩니다.
             </Typography>
             <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
               <TextField

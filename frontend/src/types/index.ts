@@ -87,6 +87,8 @@ export interface Attachment {
   url: string;
   filename?: string;
   type?: string;
+  stored_name?: string;
+  size?: number;
   created_at?: string;
 }
 
@@ -118,6 +120,9 @@ export interface ProjectMember {
   role: string;
   username?: string;
   avatar_color?: string;
+  loginid?: string;
+  deptname?: string;
+  mail?: string;
 }
 
 export interface GraphNode {

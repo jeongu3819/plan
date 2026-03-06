@@ -203,8 +203,8 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   const currentUserObj = users.find(u => u.id === currentUserId);
   const isSuperAdmin = currentUserObj?.role === 'super_admin';
   const currentMember = members.find((m: any) => m.user_id === currentUserId);
-  const isProjectManager = currentMember?.role === 'manager';
-  const canManage = isOwner || isSuperAdmin || isProjectManager;
+  const isProjectManager = currentMember?.role === 'manager' || currentMember?.role === 'member';
+  const canManage = isOwner || isSuperAdmin;
 
   const updateMemberRoleMut = useMutation({
     mutationFn: ({ targetUserId, role }: { targetUserId: number; role: string }) =>
@@ -263,7 +263,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
           <Box
             sx={{
               display: 'grid',
-              gridTemplateColumns: canManage ? '1fr 100px 120px 100px 40px' : '1fr 100px 120px 100px',
+              gridTemplateColumns: canManage ? 'auto 100px 120px 100px 40px' : 'auto 100px 120px 100px',
               gap: 1,
               px: 2,
               py: 1,
@@ -286,7 +286,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                 key={m.user_id}
                 sx={{
                   display: 'grid',
-                  gridTemplateColumns: canManage ? '1fr 100px 120px 100px 40px' : '1fr 100px 120px 100px',
+                  gridTemplateColumns: canManage ? 'auto 100px 120px 100px 40px' : 'auto 100px 120px 100px',
                   gap: 1,
                   alignItems: 'center',
                   px: 2,
@@ -340,24 +340,24 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                     onChange={e => updateMemberRoleMut.mutate({ targetUserId: m.user_id, role: e.target.value as string })}
                     sx={{
                       height: 26, fontSize: '0.7rem', fontWeight: 600,
-                      bgcolor: m.role === 'manager' ? '#FEF3C7' : '#E5E7EB',
-                      color: m.role === 'manager' ? '#D97706' : '#6B7280',
+                      bgcolor: m.role === 'manager' ? '#DBEAFE' : m.role === 'viewer' ? '#F3F4F6' : '#DCFCE7',
+                      color: m.role === 'manager' ? '#2955FF' : m.role === 'viewer' ? '#6B7280' : '#22C55E',
                       '& .MuiNativeSelect-select': { py: 0.2, px: 1 },
                       '& .MuiOutlinedInput-notchedOutline': { borderColor: 'transparent' },
                       borderRadius: 2,
                     }}
                   >
-                    <option value="member" style={{ fontSize: '0.8rem' }}>멤버</option>
-                    <option value="manager" style={{ fontSize: '0.8rem' }}>중간관리자</option>
+                    <option value="member" style={{ fontSize: '0.8rem' }}>담당자</option>
+                    <option value="viewer" style={{ fontSize: '0.8rem' }}>Viewer</option>
                   </Select>
                 ) : (
                   <Chip
-                    label={m.role === 'manager' ? '중간관리자' : '멤버'}
+                    label={m.role === 'viewer' ? 'Viewer' : '담당자'}
                     size="small"
                     sx={{
                       height: 22, fontSize: '0.65rem', fontWeight: 700, width: 'fit-content',
-                      bgcolor: m.role === 'manager' ? '#FEF3C7' : '#E5E7EB',
-                      color: m.role === 'manager' ? '#D97706' : '#6B7280',
+                      bgcolor: m.role === 'viewer' ? '#F3F4F6' : '#DCFCE7',
+                      color: m.role === 'viewer' ? '#6B7280' : '#22C55E',
                     }}
                   />
                 )}
@@ -416,7 +416,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
           </Box>
           <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
             {[
-              { value: 'private', label: '비공개', desc: '나와 담당자만 볼 수 있습니다' },
+              { value: 'private', label: '비공개', desc: '소유자와 프로젝트 멤버만 볼 수 있습니다' },
               { value: 'public', label: '공개', desc: '모든 사용자가 볼 수 있습니다' },
             ].map(opt => (
               <Box

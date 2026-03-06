@@ -414,6 +414,16 @@ export const api = {
     await client.delete(`/attachments/${id}`);
   },
 
+  uploadTaskFile: async (taskId: number, file: File, userId: number): Promise<Attachment> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await client.post(`/tasks/${taskId}/files`, formData, {
+      params: { user_id: requireUserId(userId) },
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  },
+
   // =========================
   // Roadmap
   // =========================

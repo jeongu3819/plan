@@ -177,12 +177,43 @@ async def auth_callback(request: Request, db: Session = Depends(get_db)):
 
         row = db.query(User).filter(User.loginid == loginid).first()
 
-        # 🔴 DB에 없으면 접근 불가
+        # DB에 없으면: 허용 부서 체크 후 자동 등록 OR 접근 불가
         if not row:
-            raise HTTPException(
-                status_code=403,
-                detail="사이트 접근 권한이 없습니다. 관리자에게 문의하세요."
+            # 부서 기반 접근 허용 체크
+            sso_deptname = (user_info.get("deptname") or "").strip()
+            allowed = False
+            if sso_deptname:
+                from main import load_state as _load_state
+                try:
+                    _state = _load_state()
+                    allowed_groups = _state.get("groups", [])
+                    allowed = any(
+                        (g.get("name") or "").strip() == sso_deptname and g.get("is_active", True)
+                        for g in allowed_groups
+                    )
+                except Exception:
+                    allowed = False
+
+            if not allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail="사이트 접근 권한이 없습니다. 관리자에게 문의하세요."
+                )
+
+            # 허용 부서 사용자: 자동 등록
+            row = User(
+                loginid=loginid,
+                username=user_info.get("username") or loginid,
+                deptname=sso_deptname,
+                mail=user_info.get("mail") or None,
+                role="member",
+                is_active=True,
+                avatar_color="#2955FF",
+                group_name=sso_deptname,
             )
+            db.add(row)
+            db.commit()
+            db.refresh(row)
 
         # 🔐 super_admin 강제 유지
         if is_super_admin_loginid(loginid):
@@ -267,16 +298,15 @@ def create_user(data: dict, current_user_id: int, db: Session = Depends(get_db))
     if not loginid:
         raise HTTPException(status_code=400, detail="loginid required")
 
-    # 관리자 권한 체크 필요 (생략 시 보안 위험)
-    # super_admin인지 확인하는 로직 넣어야 함
-
     existing = db.query(User).filter(User.loginid == loginid).first()
     if existing:
         raise HTTPException(status_code=400, detail="이미 등록된 사용자입니다.")
 
     new_user = User(
         loginid=loginid,
-        username=loginid,
+        username=data.get("username") or loginid,
+        deptname=data.get("deptname") or None,
+        mail=data.get("mail") or None,
         role="member",
         is_active=False,
         avatar_color="#2955FF",

@@ -12,7 +12,6 @@ import TimelineIcon from '@mui/icons-material/Timeline';
 import StickyNote2Icon from '@mui/icons-material/StickyNote2';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import AttachFileIcon from '@mui/icons-material/AttachFile';
 import SettingsIcon from '@mui/icons-material/Settings';
 import AddIcon from '@mui/icons-material/Add';
 import { useQuery } from '@tanstack/react-query';
@@ -27,11 +26,10 @@ import NotesPanel from '../features/project/NotesPanel';
 import NodeGraphView from '../features/project/NodeGraphView';
 import { ReactFlowProvider } from 'react-flow-renderer';
 import ProjectReportView from '../features/project/ProjectReportView';
-import ProjectFilesView from '../features/project/ProjectFilesView';
 import ProjectSettingsView from '../features/project/ProjectSettingsView';
 
 const TAB_MAP: Record<string, number> = {
-    board: 0, list: 1, calendar: 2, roadmap: 3, notes: 4, graph: 5, report: 6, files: 7, settings: 8,
+    board: 0, list: 1, calendar: 2, roadmap: 3, notes: 4, graph: 5, report: 6, settings: 7,
 };
 
 const tabIcons = [
@@ -42,7 +40,6 @@ const tabIcons = [
     <StickyNote2Icon sx={{ fontSize: '1rem' }} />,
     <AccountTreeIcon sx={{ fontSize: '1rem' }} />,
     <AutoAwesomeIcon sx={{ fontSize: '1rem' }} />,
-    <AttachFileIcon sx={{ fontSize: '1rem' }} />,
     <SettingsIcon sx={{ fontSize: '1rem' }} />,
 ];
 
@@ -142,8 +139,7 @@ const ProjectPage: React.FC = () => {
                         <Tab icon={tabIcons[4]} iconPosition="start" label="Notes" />
                         <Tab icon={tabIcons[5]} iconPosition="start" label="Graph" />
                         <Tab icon={tabIcons[6]} iconPosition="start" label="AI Report" />
-                        <Tab icon={tabIcons[7]} iconPosition="start" label="Files" />
-                        <Tab icon={tabIcons[8]} iconPosition="start" label="Settings" />
+                        <Tab icon={tabIcons[7]} iconPosition="start" label="Settings" />
                     </Tabs>
 
                     {view < 3 && (
@@ -184,8 +180,7 @@ const ProjectPage: React.FC = () => {
                     {view === 4 && <NotesPanel projectId={projectId} />}
                     {view === 5 && <ReactFlowProvider><NodeGraphView projectId={projectId} /></ReactFlowProvider>}
                     {view === 6 && <ProjectReportView projectId={projectId} />}
-                    {view === 7 && <ProjectFilesView projectId={projectId} />}
-                    {view === 8 && <ProjectSettingsView projectId={projectId} />}
+                    {view === 7 && <ProjectSettingsView projectId={projectId} />}
                 </Box>
             )}
         </Box>

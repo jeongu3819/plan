@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
     Drawer, Box, Typography, TextField, Button, MenuItem,
     Stack, IconButton, Divider, Chip, Avatar, Autocomplete,
-    Checkbox, Slider, Link, CircularProgress,
+    Checkbox, Slider, Link, CircularProgress, LinearProgress,
+    Tooltip,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -12,22 +13,34 @@ import AttachFileIcon from '@mui/icons-material/AttachFile';
 import LinkIcon from '@mui/icons-material/Link';
 import AddIcon from '@mui/icons-material/Add';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import DownloadIcon from '@mui/icons-material/Download';
 import { useAppStore } from '../stores/useAppStore';
 import { Task, Attachment } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, User } from '../api/client';
+import { api, User, API_URL } from '../api/client';
 
 const icon = <CheckBoxOutlineBlankIcon fontSize="small" />;
 const checkedIcon = <CheckBoxIcon fontSize="small" />;
 
+const formatFileSize = (bytes?: number): string => {
+    if (!bytes || bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+};
+
 const TaskDrawer: React.FC = () => {
-    const { isDrawerOpen, closeDrawer, selectedTask, drawerProjectId } = useAppStore();
+    const { isDrawerOpen, closeDrawer, selectedTask, drawerProjectId, currentUserId } = useAppStore();
     const queryClient = useQueryClient();
     const [formData, setFormData] = useState<Partial<Task>>({});
     const [selectedAssignees, setSelectedAssignees] = useState<User[]>([]);
     const [newAttachmentUrl, setNewAttachmentUrl] = useState('');
     const [newAttachmentName, setNewAttachmentName] = useState('');
     const [showAttachmentForm, setShowAttachmentForm] = useState(false);
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Fetch users (all - for fallback/display)
     const { data: allUsers = [] } = useQuery<User[]>({
@@ -35,7 +48,7 @@ const TaskDrawer: React.FC = () => {
         queryFn: () => api.getUsers(),
     });
 
-    // Fetch project members - 담당자 선택은 프로젝트 멤버만
+    // Fetch project members - only assignable (not viewer)
     const activeProjectId = selectedTask?.project_id || drawerProjectId;
     const { data: projectMembers = [] } = useQuery<any[]>({
         queryKey: ['projectMembers', activeProjectId],
@@ -43,11 +56,19 @@ const TaskDrawer: React.FC = () => {
         enabled: !!activeProjectId,
     });
 
-    // 프로젝트 멤버 user_id로 필터링된 사용자 목록
-    const memberUserIds = new Set(projectMembers.map((m: any) => m.user_id));
+    // Filter: viewer cannot be assigned
+    const memberUserIds = new Set(
+        projectMembers
+            .filter((m: any) => m.role !== 'viewer')
+            .map((m: any) => m.user_id)
+    );
     const users = activeProjectId
         ? allUsers.filter(u => memberUserIds.has(u.id))
         : allUsers;
+
+    // Check if current user is viewer (read-only)
+    const currentMember = projectMembers.find((m: any) => m.user_id === currentUserId);
+    const isViewer = currentMember?.role === 'viewer';
 
     // Fetch attachments when editing existing task
     const { data: attachments = [], isLoading: attachmentsLoading } = useQuery<Attachment[]>({
@@ -55,6 +76,9 @@ const TaskDrawer: React.FC = () => {
         queryFn: () => api.getAttachments(selectedTask!.id),
         enabled: !!selectedTask?.id,
     });
+
+    const urlAttachments = attachments.filter(a => a.type !== 'file');
+    const fileAttachments = attachments.filter(a => a.type === 'file');
 
     useEffect(() => {
         if (selectedTask) {
@@ -135,6 +159,23 @@ const TaskDrawer: React.FC = () => {
         },
     });
 
+    const uploadFileMutation = useMutation({
+        mutationFn: (file: File) => api.uploadTaskFile(selectedTask!.id, file, currentUserId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['attachments', selectedTask?.id] });
+            setUploading(false);
+        },
+        onError: () => setUploading(false),
+    });
+
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const selectedFiles = e.target.files;
+        if (!selectedFiles) return;
+        setUploading(true);
+        Array.from(selectedFiles).forEach((file) => uploadFileMutation.mutate(file));
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
     const handleChange = (field: keyof Task, value: any) => {
         setFormData((prev) => ({ ...prev, [field]: value }));
     };
@@ -179,6 +220,8 @@ const TaskDrawer: React.FC = () => {
         { value: 'high', label: 'High', color: '#EF4444' },
     ];
 
+    const canEdit = !isViewer;
+
     return (
         <Drawer
             anchor="right"
@@ -191,11 +234,16 @@ const TaskDrawer: React.FC = () => {
                 p: 2.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 borderBottom: '1px solid #E5E7EB', bgcolor: '#FAFBFC',
             }}>
-                <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem' }}>
-                    {selectedTask ? 'Task Details' : 'New Task'}
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem' }}>
+                        {selectedTask ? 'Task Details' : 'New Task'}
+                    </Typography>
+                    {isViewer && (
+                        <Chip label="Viewer (읽기 전용)" size="small" sx={{ fontSize: '0.65rem', bgcolor: '#F3F4F6', color: '#6B7280' }} />
+                    )}
+                </Box>
                 <Box sx={{ display: 'flex', gap: 1 }}>
-                    {selectedTask && (
+                    {selectedTask && canEdit && (
                         <IconButton size="small" onClick={handleDelete} sx={{ color: '#EF4444' }}>
                             <DeleteOutlineIcon fontSize="small" />
                         </IconButton>
@@ -219,6 +267,7 @@ const TaskDrawer: React.FC = () => {
                         InputProps={{
                             disableUnderline: true,
                             sx: { fontSize: '1.3rem', fontWeight: 700 },
+                            readOnly: !canEdit,
                         }}
                         autoFocus={!selectedTask}
                     />
@@ -235,6 +284,7 @@ const TaskDrawer: React.FC = () => {
                                 select label="Status" fullWidth size="small"
                                 value={formData.status || 'todo'}
                                 onChange={(e) => handleChange('status', e.target.value)}
+                                disabled={!canEdit}
                             >
                                 {statusOptions.map(opt => (
                                     <MenuItem key={opt.value} value={opt.value}>
@@ -249,6 +299,7 @@ const TaskDrawer: React.FC = () => {
                                 select label="Priority" fullWidth size="small"
                                 value={formData.priority || 'medium'}
                                 onChange={(e) => handleChange('priority', e.target.value)}
+                                disabled={!canEdit}
                             >
                                 {priorityOptions.map(opt => (
                                     <MenuItem key={opt.value} value={opt.value}>
@@ -271,6 +322,7 @@ const TaskDrawer: React.FC = () => {
                             value={formData.progress || 0}
                             onChange={(_, v) => handleChange('progress', v as number)}
                             min={0} max={100} step={5}
+                            disabled={!canEdit}
                             sx={{
                                 color: '#2955FF',
                                 '& .MuiSlider-thumb': { width: 16, height: 16 },
@@ -294,6 +346,7 @@ const TaskDrawer: React.FC = () => {
                             onChange={(_, newValue) => setSelectedAssignees(newValue)}
                             getOptionLabel={(option) => option.username}
                             isOptionEqualToValue={(option, value) => option.id === value.id}
+                            disabled={!canEdit}
                             renderOption={(props, option, { selected }) => (
                                 <li {...props}>
                                     <Checkbox
@@ -347,6 +400,7 @@ const TaskDrawer: React.FC = () => {
                                 value={formData.start_date || ''}
                                 onChange={(e) => handleChange('start_date', e.target.value)}
                                 InputLabelProps={{ shrink: true }}
+                                disabled={!canEdit}
                             />
                             <TextField
                                 label="Due Date"
@@ -356,6 +410,7 @@ const TaskDrawer: React.FC = () => {
                                 value={formData.due_date || ''}
                                 onChange={(e) => handleChange('due_date', e.target.value)}
                                 InputLabelProps={{ shrink: true }}
+                                disabled={!canEdit}
                             />
                         </Box>
                     </Box>
@@ -374,6 +429,7 @@ const TaskDrawer: React.FC = () => {
                             value={formData.description || ''}
                             onChange={(e) => handleChange('description', e.target.value)}
                             placeholder="Add a detailed description..."
+                            disabled={!canEdit}
                             sx={{
                                 '& .MuiOutlinedInput-root': {
                                     fontSize: '0.9rem',
@@ -383,21 +439,23 @@ const TaskDrawer: React.FC = () => {
                         />
                     </Box>
 
-                    {/* Attachments (only for existing tasks) */}
+                    {/* URL Attachments (only for existing tasks) */}
                     {selectedTask?.id && (
                         <Box>
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                                 <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
-                                    <AttachFileIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom' }} />
-                                    Attachments ({attachments.length})
+                                    <LinkIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom' }} />
+                                    URL 첨부 ({urlAttachments.length})
                                 </Typography>
-                                <IconButton size="small" onClick={() => setShowAttachmentForm(!showAttachmentForm)} sx={{ color: '#2955FF' }}>
-                                    <AddIcon sx={{ fontSize: '1rem' }} />
-                                </IconButton>
+                                {canEdit && (
+                                    <IconButton size="small" onClick={() => setShowAttachmentForm(!showAttachmentForm)} sx={{ color: '#2955FF' }}>
+                                        <AddIcon sx={{ fontSize: '1rem' }} />
+                                    </IconButton>
+                                )}
                             </Box>
 
                             {/* Add Attachment Form */}
-                            {showAttachmentForm && (
+                            {showAttachmentForm && canEdit && (
                                 <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1.5, bgcolor: '#F8F9FF', borderRadius: 1.5, border: '1px solid #E8EDFF' }}>
                                     <TextField
                                         size="small" placeholder="URL..." fullWidth
@@ -421,12 +479,12 @@ const TaskDrawer: React.FC = () => {
                                 </Box>
                             )}
 
-                            {/* Attachment List */}
+                            {/* URL Attachment List */}
                             {attachmentsLoading ? (
                                 <CircularProgress size={16} />
-                            ) : attachments.length > 0 ? (
+                            ) : urlAttachments.length > 0 ? (
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                                    {attachments.map(att => (
+                                    {urlAttachments.map(att => (
                                         <Box key={att.id} sx={{
                                             display: 'flex', alignItems: 'center', gap: 1, p: 1,
                                             borderRadius: 1, border: '1px solid #E5E7EB',
@@ -446,14 +504,88 @@ const TaskDrawer: React.FC = () => {
                                             <IconButton size="small" href={att.url} target="_blank" sx={{ color: '#6B7280' }}>
                                                 <OpenInNewIcon sx={{ fontSize: '0.8rem' }} />
                                             </IconButton>
-                                            <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
-                                                <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
-                                            </IconButton>
+                                            {canEdit && (
+                                                <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
+                                                    <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                            )}
                                         </Box>
                                     ))}
                                 </Box>
                             ) : (
-                                <Typography variant="caption" sx={{ color: '#9CA3AF' }}>No attachments yet</Typography>
+                                <Typography variant="caption" sx={{ color: '#9CA3AF' }}>URL 첨부 없음</Typography>
+                            )}
+                        </Box>
+                    )}
+
+                    {/* File Attachments (only for existing tasks) */}
+                    {selectedTask?.id && (
+                        <Box>
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                                <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                    <CloudUploadIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom' }} />
+                                    Files 업로드 ({fileAttachments.length})
+                                </Typography>
+                                {canEdit && (
+                                    <Button
+                                        size="small"
+                                        startIcon={<CloudUploadIcon sx={{ fontSize: '0.8rem' }} />}
+                                        onClick={() => fileInputRef.current?.click()}
+                                        disabled={uploading}
+                                        sx={{ textTransform: 'none', fontSize: '0.7rem', color: '#2955FF' }}
+                                    >
+                                        {uploading ? '업로드 중...' : '파일 선택'}
+                                    </Button>
+                                )}
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    multiple
+                                    hidden
+                                    onChange={handleFileSelect}
+                                />
+                            </Box>
+
+                            {uploading && <LinearProgress sx={{ mb: 1, borderRadius: 1 }} />}
+
+                            {fileAttachments.length > 0 ? (
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                    {fileAttachments.map(att => (
+                                        <Box key={att.id} sx={{
+                                            display: 'flex', alignItems: 'center', gap: 1, p: 1,
+                                            borderRadius: 1, border: '1px solid #E5E7EB',
+                                            '&:hover': { bgcolor: '#FAFBFF' },
+                                        }}>
+                                            <InsertDriveFileIcon sx={{ fontSize: '0.9rem', color: '#8B5CF6' }} />
+                                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                                <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                                                    {att.filename || 'file'}
+                                                </Typography>
+                                                {att.size && (
+                                                    <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
+                                                        {formatFileSize(att.size)}
+                                                    </Typography>
+                                                )}
+                                            </Box>
+                                            <Tooltip title="다운로드">
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={() => window.open(`${API_URL}${att.url}`, '_blank')}
+                                                    sx={{ color: '#2955FF' }}
+                                                >
+                                                    <DownloadIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                            </Tooltip>
+                                            {canEdit && (
+                                                <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
+                                                    <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                            )}
+                                        </Box>
+                                    ))}
+                                </Box>
+                            ) : (
+                                <Typography variant="caption" sx={{ color: '#9CA3AF' }}>첨부 파일 없음</Typography>
                             )}
                         </Box>
                     )}
@@ -461,23 +593,35 @@ const TaskDrawer: React.FC = () => {
             </Box>
 
             {/* Footer */}
-            <Box sx={{
-                p: 2.5, display: 'flex', gap: 2,
-                borderTop: '1px solid #E5E7EB', bgcolor: '#FAFBFC',
-            }}>
-                <Button
-                    variant="contained"
-                    fullWidth
-                    onClick={handleSave}
-                    disabled={updateMutation.isPending || createMutation.isPending || !formData.title?.trim()}
-                    sx={{ py: 1.2, bgcolor: '#2955FF', '&:hover': { bgcolor: '#1E44CC' } }}
-                >
-                    {selectedTask ? 'Save Changes' : 'Create Task'}
-                </Button>
-                <Button variant="outlined" fullWidth onClick={closeDrawer} sx={{ py: 1.2 }}>
-                    Cancel
-                </Button>
-            </Box>
+            {canEdit && (
+                <Box sx={{
+                    p: 2.5, display: 'flex', gap: 2,
+                    borderTop: '1px solid #E5E7EB', bgcolor: '#FAFBFC',
+                }}>
+                    <Button
+                        variant="contained"
+                        fullWidth
+                        onClick={handleSave}
+                        disabled={updateMutation.isPending || createMutation.isPending || !formData.title?.trim()}
+                        sx={{ py: 1.2, bgcolor: '#2955FF', '&:hover': { bgcolor: '#1E44CC' } }}
+                    >
+                        {selectedTask ? 'Save Changes' : 'Create Task'}
+                    </Button>
+                    <Button variant="outlined" fullWidth onClick={closeDrawer} sx={{ py: 1.2 }}>
+                        Cancel
+                    </Button>
+                </Box>
+            )}
+            {!canEdit && (
+                <Box sx={{
+                    p: 2.5, display: 'flex', gap: 2,
+                    borderTop: '1px solid #E5E7EB', bgcolor: '#FAFBFC',
+                }}>
+                    <Button variant="outlined" fullWidth onClick={closeDrawer} sx={{ py: 1.2 }}>
+                        닫기
+                    </Button>
+                </Box>
+            )}
         </Drawer>
     );
 };
