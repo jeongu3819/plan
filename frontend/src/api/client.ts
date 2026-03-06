@@ -246,6 +246,13 @@ export const api = {
   deleteProject: async (id: number): Promise<void> => {
     await client.delete(`/projects/${id}`);
   },
+  restoreProject: async (id: number): Promise<void> => {
+    await client.post(`/projects/${id}/restore`);
+  },
+  getTrash: async (): Promise<{ projects: any[]; tasks: any[] }> => {
+    const res = await client.get('/trash');
+    return res.data;
+  },
 
   // =========================
   // Project Hiding (per-user)

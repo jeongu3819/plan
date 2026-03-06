@@ -146,6 +146,8 @@ def startup_ensure_super_admin():
         ensure_super_owner(db)
         # v1.2: backfill deptname -> TEAM node
         _backfill_team_nodes(db)
+        # 3일 지난 삭제 항목 영구 제거
+        _purge_expired_trash(db)
     finally:
         db.close()
 
@@ -1308,40 +1310,113 @@ def delete_project(project_id: int, request: Request, db: Session = Depends(get_
         if not t.archived_at:
             t.archived_at = now
 
-    # C-2: Delete subprojects from DB
-    db.query(SubProjectModel).filter(SubProjectModel.project_id == project_id).delete()
+    db.commit()
+    return {"message": "Project deleted"}
 
-    # C-5: Delete notes and mentions from DB
-    project_notes = db.query(NoteModel).filter(NoteModel.project_id == project_id).all()
-    for pn in project_notes:
-        db.query(NoteMention).filter(NoteMention.note_id == pn.id).delete()
-    db.query(NoteModel).filter(NoteModel.project_id == project_id).delete()
+@app.post("/api/projects/{project_id}/restore")
+def restore_project(project_id: int, db: Session = Depends(get_db)):
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p or not p.archived_at:
+        raise HTTPException(status_code=404, detail="Archived project not found")
+    p.archived_at = None
+    # 관련 task도 함께 복원
+    for t in db.query(Task).filter(Task.project_id == project_id).all():
+        if t.archived_at:
+            t.archived_at = None
+    db.commit()
+    return {"message": "Project restored"}
 
-    # C-3: Delete members from DB
-    db.query(ProjectMemberModel).filter(ProjectMemberModel.project_id == project_id).delete()
+@app.get("/api/trash")
+def get_trash(db: Session = Depends(get_db)):
+    state = load_state()
+    archived_projects = db.query(Project).filter(Project.archived_at.isnot(None)).all()
+    archived_tasks = db.query(Task).filter(Task.archived_at.isnot(None)).all()
 
-    # sidecar cleanup (legacy)
-    state["sub_projects"] = [s for s in state.get("sub_projects", []) if int(s.get("project_id")) != project_id]
-    state["notes"] = [n for n in state.get("notes", []) if int(n.get("project_id")) != project_id]
-    state["project_members"] = [m for m in state.get("project_members", []) if int(m.get("project_id")) != project_id]
-    state["join_requests"] = [jr for jr in state.get("join_requests", []) if int(jr.get("project_id")) != project_id]
+    projects_out = []
+    for p in archived_projects:
+        task_count = db.query(Task).filter(Task.project_id == p.id).count()
+        meta = get_project_meta(state, p.id)
+        projects_out.append({
+            "id": p.id,
+            "name": p.name,
+            "description": p.description,
+            "archived_at": iso(p.archived_at),
+            "task_count": task_count,
+            "owner_id": meta.get("owner_id"),
+        })
 
-    # project_files + disk cleanup (metadata only / disk best-effort)
-    for pf in [f for f in state.get("project_files", []) if int(f.get("project_id")) == project_id]:
-        file_path = os.path.join(UPLOAD_DIR, str(project_id), pf.get("stored_name", ""))
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-    state["project_files"] = [f for f in state.get("project_files", []) if int(f.get("project_id")) != project_id]
+    # 개별 삭제된 task (프로젝트 자체는 살아있는 경우)
+    active_project_ids = {p.id for p in db.query(Project).filter(Project.archived_at.is_(None)).all()}
+    tasks_out = []
+    for t in archived_tasks:
+        if t.project_id in active_project_ids:
+            tasks_out.append({
+                "id": t.id,
+                "title": t.title,
+                "project_id": t.project_id,
+                "archived_at": iso(t.archived_at),
+            })
 
-    # project_meta 제거
-    state.get("project_meta", {}).pop(str(project_id), None)
+    return {"projects": projects_out, "tasks": tasks_out}
+
+def _purge_expired_trash(db: Session):
+    """3일 지난 archived 항목 영구 삭제."""
+    cutoff = datetime.now() - timedelta(days=3)
+    state = load_state()
+    changed = False
+
+    # 프로젝트 영구 삭제
+    expired_projects = db.query(Project).filter(
+        Project.archived_at.isnot(None), Project.archived_at < cutoff
+    ).all()
+    for p in expired_projects:
+        pid = p.id
+        # 관련 task 영구 삭제
+        db.query(TaskActivityModel).filter(
+            TaskActivityModel.task_id.in_(
+                db.query(Task.id).filter(Task.project_id == pid)
+            )
+        ).delete(synchronize_session=False)
+        db.query(AttachmentModel).filter(
+            AttachmentModel.task_id.in_(
+                db.query(Task.id).filter(Task.project_id == pid)
+            )
+        ).delete(synchronize_session=False)
+        db.query(Task).filter(Task.project_id == pid).delete(synchronize_session=False)
+        db.query(SubProjectModel).filter(SubProjectModel.project_id == pid).delete()
+        project_notes = db.query(NoteModel).filter(NoteModel.project_id == pid).all()
+        for pn in project_notes:
+            db.query(NoteMention).filter(NoteMention.note_id == pn.id).delete()
+        db.query(NoteModel).filter(NoteModel.project_id == pid).delete()
+        db.query(ProjectMemberModel).filter(ProjectMemberModel.project_id == pid).delete()
+
+        # sidecar cleanup
+        for key in ["sub_projects", "notes", "project_members", "join_requests"]:
+            state[key] = [x for x in state.get(key, []) if int(x.get("project_id", 0)) != pid]
+        for pf in [f for f in state.get("project_files", []) if int(f.get("project_id", 0)) == pid]:
+            fp = os.path.join(UPLOAD_DIR, str(pid), pf.get("stored_name", ""))
+            if os.path.exists(fp):
+                try: os.remove(fp)
+                except Exception: pass
+        state["project_files"] = [f for f in state.get("project_files", []) if int(f.get("project_id", 0)) != pid]
+        state.get("project_meta", {}).pop(str(pid), None)
+
+        db.delete(p)
+        changed = True
+
+    # 개별 task 영구 삭제 (프로젝트는 살아있지만 task만 삭제된 경우)
+    expired_tasks = db.query(Task).filter(
+        Task.archived_at.isnot(None), Task.archived_at < cutoff
+    ).all()
+    for t in expired_tasks:
+        db.query(TaskActivityModel).filter(TaskActivityModel.task_id == t.id).delete()
+        db.query(AttachmentModel).filter(AttachmentModel.task_id == t.id).delete()
+        db.delete(t)
+        changed = True
 
     db.commit()
-    save_state(state)
-    return {"message": "Project deleted"}
+    if changed:
+        save_state(state)
 
 # =========================
 # Project Members / Join Requests (C-3: DB + sidecar fallback)
