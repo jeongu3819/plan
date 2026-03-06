@@ -1,5 +1,5 @@
 import React from 'react';
-import { Paper, Typography, Box, Chip, Avatar, Tooltip } from '@mui/material';
+import { Paper, Typography, Box, Chip, Avatar, AvatarGroup, Tooltip } from '@mui/material';
 import { Task } from '../../types';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import FlagIcon from '@mui/icons-material/Flag';
@@ -47,12 +47,6 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style, compact = fal
     const assignees = (task.assignee_ids || [])
         .map(id => users.find(u => u.id === id))
         .filter((u): u is User => !!u);
-
-    const displayAssignees = assignees.slice(0, MAX_DISPLAY);
-    const remaining = assignees.length - MAX_DISPLAY;
-
-    const assigneeLabel = displayAssignees.map(u => shortName(u.username)).join(' / ')
-        + (remaining > 0 ? ` +${remaining}명` : '');
 
     const fullTooltip = assignees.map(u => u.username).join(', ');
 
@@ -168,29 +162,21 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style, compact = fal
                     </Box>
                     {assignees.length > 0 && (
                         <Tooltip title={fullTooltip} arrow>
-                            <Box sx={{
-                                display: 'flex', alignItems: 'center', gap: 0.5,
-                                maxWidth: '55%',
-                            }}>
-                                <Avatar
-                                    sx={{
-                                        width: 20, height: 20, fontSize: '0.55rem',
-                                        bgcolor: assignees[0]?.avatar_color || '#2955FF',
-                                    }}
-                                >
-                                    {assignees[0]?.username?.charAt(0) || '?'}
-                                </Avatar>
-                                <Typography
-                                    variant="caption"
-                                    noWrap
-                                    sx={{
-                                        fontSize: '0.7rem', color: '#6B7280', fontWeight: 500,
-                                        maxWidth: '100%',
-                                    }}
-                                >
-                                    {assigneeLabel}
-                                </Typography>
-                            </Box>
+                            <AvatarGroup
+                                max={MAX_DISPLAY + 1}
+                                sx={{
+                                    '& .MuiAvatar-root': {
+                                        width: 22, height: 22, fontSize: '0.55rem', fontWeight: 600,
+                                        border: '1.5px solid #fff',
+                                    },
+                                }}
+                            >
+                                {assignees.map(u => (
+                                    <Avatar key={u.id} sx={{ bgcolor: u.avatar_color || '#2955FF' }}>
+                                        {shortName(u.username)}
+                                    </Avatar>
+                                ))}
+                            </AvatarGroup>
                         </Tooltip>
                     )}
                 </Box>
