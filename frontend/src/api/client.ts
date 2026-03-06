@@ -238,8 +238,9 @@ export const api = {
     const res = await client.post('/projects', project);
     return res.data;
   },
-  updateProject: async (id: number, updates: Partial<Project>): Promise<Project> => {
-    const res = await client.patch(`/projects/${id}`, updates);
+  updateProject: async (id: number, updates: Partial<Project>, callerUserId?: number): Promise<Project> => {
+    const params = callerUserId ? { caller_user_id: callerUserId } : {};
+    const res = await client.patch(`/projects/${id}`, updates, { params });
     return res.data;
   },
   deleteProject: async (id: number): Promise<void> => {

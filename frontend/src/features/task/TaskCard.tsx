@@ -1,9 +1,11 @@
 import React from 'react';
-import { Paper, Typography, Box, Chip, Avatar, AvatarGroup } from '@mui/material';
+import { Paper, Typography, Box, Chip, Avatar, Tooltip } from '@mui/material';
 import { Task } from '../../types';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import FlagIcon from '@mui/icons-material/Flag';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
+import { useQuery } from '@tanstack/react-query';
+import { api, User } from '../../api/client';
 
 interface TaskCardProps {
     task: Task;
@@ -25,8 +27,34 @@ const priorityConfig: Record<string, { color: string; label: string }> = {
     high: { color: '#EF4444', label: 'High' },
 };
 
+/** Remove first character (surname) and return the rest. If 1 char, return as-is. */
+const shortName = (name: string): string => {
+    if (!name) return '';
+    return name.length <= 1 ? name : name.slice(1);
+};
+
+const MAX_DISPLAY = 3;
+
 const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style, compact = false }) => {
     const priority = task.priority ? priorityConfig[task.priority] : null;
+
+    const { data: users = [] } = useQuery<User[]>({
+        queryKey: ['users'],
+        queryFn: () => api.getUsers(),
+    });
+
+    // Resolve assignee names
+    const assignees = (task.assignee_ids || [])
+        .map(id => users.find(u => u.id === id))
+        .filter((u): u is User => !!u);
+
+    const displayAssignees = assignees.slice(0, MAX_DISPLAY);
+    const remaining = assignees.length - MAX_DISPLAY;
+
+    const assigneeLabel = displayAssignees.map(u => shortName(u.username)).join(' / ')
+        + (remaining > 0 ? ` +${remaining}명` : '');
+
+    const fullTooltip = assignees.map(u => u.username).join(', ');
 
     return (
         <Paper
@@ -119,7 +147,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style, compact = fal
             )}
 
             {/* Footer: Due date + Attachment indicator + Assignees */}
-            {(task.due_date || (task.assignee_ids && task.assignee_ids.length > 0) || (task as any).attachment_count > 0) && (
+            {(task.due_date || assignees.length > 0 || (task as any).attachment_count > 0) && (
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         {task.due_date && (
@@ -138,12 +166,32 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style, compact = fal
                             </Box>
                         )}
                     </Box>
-                    {task.assignee_ids && task.assignee_ids.length > 0 && (
-                        <AvatarGroup max={3} sx={{ '& .MuiAvatar-root': { width: 22, height: 22, fontSize: '0.6rem' } }}>
-                            {task.assignee_ids.map(id => (
-                                <Avatar key={id} sx={{ bgcolor: '#2955FF' }}>U{id}</Avatar>
-                            ))}
-                        </AvatarGroup>
+                    {assignees.length > 0 && (
+                        <Tooltip title={fullTooltip} arrow>
+                            <Box sx={{
+                                display: 'flex', alignItems: 'center', gap: 0.5,
+                                maxWidth: '55%',
+                            }}>
+                                <Avatar
+                                    sx={{
+                                        width: 20, height: 20, fontSize: '0.55rem',
+                                        bgcolor: assignees[0]?.avatar_color || '#2955FF',
+                                    }}
+                                >
+                                    {assignees[0]?.username?.charAt(0) || '?'}
+                                </Avatar>
+                                <Typography
+                                    variant="caption"
+                                    noWrap
+                                    sx={{
+                                        fontSize: '0.7rem', color: '#6B7280', fontWeight: 500,
+                                        maxWidth: '100%',
+                                    }}
+                                >
+                                    {assigneeLabel}
+                                </Typography>
+                            </Box>
+                        </Tooltip>
                     )}
                 </Box>
             )}

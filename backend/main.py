@@ -1241,7 +1241,12 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     return project_dict(p, state)
 
 @app.patch("/api/projects/{project_id}")
-def update_project(project_id: int, updates: ProjectUpdate, db: Session = Depends(get_db)):
+def update_project(
+    project_id: int,
+    updates: ProjectUpdate,
+    caller_user_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
     state = load_state()
     p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
     if not p:
@@ -1249,8 +1254,13 @@ def update_project(project_id: int, updates: ProjectUpdate, db: Session = Depend
 
     data = updates.model_dump(exclude_unset=True)
 
-    # DB fields
+    # Owner-only check for name changes
     if "name" in data:
+        meta = get_project_meta(state, project_id)
+        caller = db.query(User).filter(User.id == caller_user_id).first() if caller_user_id else None
+        is_super_admin = caller and caller.role == "super_admin"
+        if not is_super_admin and meta.get("owner_id") != caller_user_id:
+            raise HTTPException(status_code=403, detail="프로젝트 이름은 소유자만 변경할 수 있습니다.")
         p.name = data["name"]
     if "description" in data:
         p.description = data["description"]

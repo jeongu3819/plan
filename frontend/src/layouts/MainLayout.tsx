@@ -201,6 +201,16 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     },
   });
 
+  const renameProjectMut = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      api.updateProject(id, { name }, effectiveUserId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      setRenamingProjectId(null);
+    },
+    onError: () => setRenamingProjectId(null),
+  });
+
   // non-super_admin에게 super_admin 계정 노출 최소화 (프론트 1차)
   const safeUsers = isSuperAdmin ? users : users.filter(u => u.role !== 'super_admin');
 
@@ -231,6 +241,10 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
 
   const [projectMenuAnchor, setProjectMenuAnchor] = useState<null | HTMLElement>(null);
   const [projectMenuId, setProjectMenuId] = useState<number | null>(null);
+
+  // Sidebar inline rename
+  const [renamingProjectId, setRenamingProjectId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   // ✅ Add Member(사용자 추가) 기능 추가
   const [userDialogOpen, setUserDialogOpen] = useState(false);
@@ -502,7 +516,16 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                   >
                     <Tooltip title={project.name} placement="right" arrow>
                       <ListItemButton
-                        onClick={() => navigate(`/project/${project.id}`)}
+                        onClick={() => {
+                          if (renamingProjectId !== project.id) navigate(`/project/${project.id}`);
+                        }}
+                        onDoubleClick={() => {
+                          const isProjectOwner = project.owner_id === effectiveUserId;
+                          if (isProjectOwner || isSuperAdmin) {
+                            setRenamingProjectId(project.id);
+                            setRenameValue(project.name);
+                          }
+                        }}
                         sx={{
                           borderRadius: 1.5,
                           py: 0.8,
@@ -522,21 +545,56 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                             }}
                           />
                         </ListItemIcon>
-                        <ListItemText
-                          primary={project.name}
-                          primaryTypographyProps={{
-                            fontSize: '0.85rem',
-                            fontWeight: isActive ? 600 : 400,
-                            sx: {
-                              display: '-webkit-box',
-                              WebkitLineClamp: 2,
-                              WebkitBoxOrient: 'vertical',
-                              overflow: 'hidden',
-                              wordBreak: 'break-word',
-                              lineHeight: 1.4,
-                            },
-                          }}
-                        />
+                        {renamingProjectId === project.id ? (
+                          <TextField
+                            autoFocus
+                            size="small"
+                            variant="standard"
+                            value={renameValue}
+                            onChange={e => setRenameValue(e.target.value)}
+                            onClick={e => e.stopPropagation()}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && renameValue.trim()) {
+                                renameProjectMut.mutate({ id: project.id, name: renameValue.trim() });
+                              }
+                              if (e.key === 'Escape') {
+                                setRenamingProjectId(null);
+                              }
+                            }}
+                            onBlur={() => {
+                              if (renameValue.trim() && renameValue.trim() !== project.name) {
+                                renameProjectMut.mutate({ id: project.id, name: renameValue.trim() });
+                              } else {
+                                setRenamingProjectId(null);
+                              }
+                            }}
+                            InputProps={{
+                              disableUnderline: false,
+                              sx: {
+                                fontSize: '0.85rem',
+                                fontWeight: 600,
+                                color: theme.sidebarText,
+                              },
+                            }}
+                            sx={{ flex: 1 }}
+                          />
+                        ) : (
+                          <ListItemText
+                            primary={project.name}
+                            primaryTypographyProps={{
+                              fontSize: '0.85rem',
+                              fontWeight: isActive ? 600 : 400,
+                              sx: {
+                                display: '-webkit-box',
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden',
+                                wordBreak: 'break-word',
+                                lineHeight: 1.4,
+                              },
+                            }}
+                          />
+                        )}
                       </ListItemButton>
                     </Tooltip>
                   </ListItem>

@@ -24,6 +24,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SecurityIcon from '@mui/icons-material/Security';
+import EditIcon from '@mui/icons-material/Edit';
 import GroupIcon from '@mui/icons-material/Group';
 import SearchIcon from '@mui/icons-material/Search';
 import PublicIcon from '@mui/icons-material/Public';
@@ -72,6 +73,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   const project = projects.find((p: any) => p.id === projectId);
 
   // State
+  const [editingName, setEditingName] = useState('');
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const [memberSearch, setMemberSearch] = useState('');
@@ -94,6 +96,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   // Sync state when project data loads
   React.useEffect(() => {
     if (project) {
+      setEditingName(project.name || '');
       setVisibility(project.visibility || 'private');
       setRequireApproval(project.require_approval ?? false);
       setPermissions(
@@ -123,7 +126,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   });
 
   const updateProjectMutation = useMutation({
-    mutationFn: (updates: Record<string, any>) => api.updateProject(projectId, updates),
+    mutationFn: (updates: Record<string, any>) => api.updateProject(projectId, updates, currentUserId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
@@ -214,6 +217,45 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
 
   return (
     <Box sx={{ maxWidth: 800, mx: 'auto', py: 2 }}>
+      {/* ─── Project Name Section (Owner only) ─── */}
+      {(isOwner || isSuperAdmin) && (
+        <Paper
+          sx={{
+            p: 3, mb: 3, borderRadius: 3,
+            border: '1px solid rgba(0,0,0,0.08)',
+            bgcolor: 'rgba(255,255,255,0.7)',
+            backdropFilter: 'blur(8px)',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <EditIcon sx={{ color: '#2955FF', fontSize: '1.3rem' }} />
+            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', color: '#1A1D29' }}>
+              프로젝트 이름
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+            <TextField
+              fullWidth
+              size="small"
+              value={editingName}
+              onChange={e => setEditingName(e.target.value)}
+              placeholder="프로젝트 이름..."
+              sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.9rem' } }}
+            />
+            <Button
+              variant="contained"
+              size="small"
+              disabled={!editingName.trim() || editingName === project?.name || updateProjectMutation.isPending}
+              onClick={() => updateProjectMutation.mutate({ name: editingName.trim() })}
+              sx={{ bgcolor: '#2955FF', '&:hover': { bgcolor: '#1E44CC' }, px: 3, whiteSpace: 'nowrap' }}
+            >
+              변경
+            </Button>
+          </Box>
+        </Paper>
+      )}
+
       {/* ─── Members Section ─── */}
       <Paper
         sx={{
