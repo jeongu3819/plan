@@ -210,6 +210,138 @@ const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
+/* ─── Key Schedule Block: Task명/진행률/일정/상태 카드형 렌더링 ─── */
+const KeyScheduleBlock: React.FC<{ text: string }> = ({ text }) => {
+  const tasks = useMemo(() => {
+    const result: { fields: { label: string; value: string }[]; subItems: string[] }[] = [];
+    let current: { fields: { label: string; value: string }[]; subItems: string[] } | null = null;
+
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line) {
+        current = null;
+        continue;
+      }
+      // "Task명: ...", "진행률: ...", "일정: ...", "상태: ..." 패턴
+      const fieldMatch = line.match(/^(Task명|진행률|일정|상태)\s*[:：]\s*(.+)$/);
+      // 번호 매긴 항목 "1. ..."
+      const numMatch = line.match(/^\d+\.\s+(.+)$/);
+
+      if (fieldMatch) {
+        if (!current || (fieldMatch[1] === 'Task명' && current.fields.length > 0)) {
+          current = { fields: [], subItems: [] };
+          result.push(current);
+        }
+        current.fields.push({ label: fieldMatch[1], value: fieldMatch[2] });
+      } else if (numMatch && current) {
+        current.subItems.push(numMatch[1]);
+      } else if (line === '없음') {
+        return [];
+      } else {
+        // fallback line
+        if (!current) {
+          current = { fields: [], subItems: [] };
+          result.push(current);
+        }
+        current.fields.push({ label: '', value: line });
+      }
+    }
+    return result;
+  }, [text]);
+
+  if (tasks.length === 0) {
+    return (
+      <Typography variant="body2" sx={{ color: '#6B7280' }}>
+        관련 일정이 없습니다.
+      </Typography>
+    );
+  }
+
+  const fieldColor: Record<string, string> = {
+    'Task명': '#1A1D29', '진행률': '#2955FF', '일정': '#0D9488', '상태': '#8B5CF6',
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {tasks.map((t, ti) => (
+        <Box
+          key={ti}
+          sx={{
+            p: 2, borderRadius: 2, bgcolor: '#F9FAFB',
+            border: '1px solid #E5E7EB',
+          }}
+        >
+          {t.fields.map((f, fi) => (
+            <Box key={fi} sx={{ display: 'flex', gap: 1, mb: 0.3, alignItems: 'baseline' }}>
+              {f.label && (
+                <Typography
+                  sx={{
+                    fontSize: '0.78rem', fontWeight: 700, color: '#6B7280',
+                    minWidth: 52, flexShrink: 0,
+                  }}
+                >
+                  {f.label}
+                </Typography>
+              )}
+              <Typography
+                sx={{
+                  fontSize: f.label === 'Task명' ? '0.88rem' : '0.83rem',
+                  fontWeight: f.label === 'Task명' ? 800 : 500,
+                  color: fieldColor[f.label] || '#374151',
+                }}
+              >
+                {f.value}
+              </Typography>
+            </Box>
+          ))}
+          {t.subItems.length > 0 && (
+            <Box sx={{ mt: 0.5, pl: 1 }}>
+              {t.subItems.map((item, si) => (
+                <Typography key={si} sx={{ fontSize: '0.8rem', color: '#4B5563', lineHeight: 1.6 }}>
+                  {si + 1}. {item}
+                </Typography>
+              ))}
+            </Box>
+          )}
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
+/* ─── Numbered List Block: 번호 매긴 항목 렌더링 ─── */
+const NumberedListBlock: React.FC<{ text: string }> = ({ text }) => {
+  const lines = useMemo(() => {
+    return text
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean)
+      .map(l => l.replace(/^\d+\.\s*/, ''));
+  }, [text]);
+
+  if (lines.length === 0) return null;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+      {lines.map((line, i) => (
+        <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+          <Typography
+            sx={{
+              fontSize: '0.85rem', fontWeight: 700, color: '#2955FF',
+              minWidth: 20, textAlign: 'right', flexShrink: 0,
+            }}
+          >
+            {i + 1}.
+          </Typography>
+          <Typography sx={{ fontSize: '0.85rem', lineHeight: 1.6, color: '#374151' }}>
+            {cleanText(line)}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
 type ExecutiveSummaryBlockProps = {
   projectName: string;
   text: string;
@@ -1792,7 +1924,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     핵심 일정
                   </Typography>
                 </Box>
-                {parseMarkdownToParagraphs(queryData.parsed_response.key_schedule)}
+                <KeyScheduleBlock text={queryData.parsed_response.key_schedule} />
               </Paper>
 
               {/* 다음 액션 */}
@@ -1806,7 +1938,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     다음 액션
                   </Typography>
                 </Box>
-                {parseMarkdownToParagraphs(queryData.parsed_response.next_actions)}
+                <NumberedListBlock text={queryData.parsed_response.next_actions} />
               </Paper>
             </Box>
           )}
