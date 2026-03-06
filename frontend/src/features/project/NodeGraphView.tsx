@@ -428,7 +428,8 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         if (attType === 'file' && url) {
           window.open(`${API_URL}${url}`, '_blank');
         } else if (url) {
-          window.open(url, '_blank');
+          const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+          window.open(href, '_blank');
         }
         return;
       }
