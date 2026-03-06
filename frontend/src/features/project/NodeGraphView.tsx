@@ -426,7 +426,9 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         const url = (gNode as any).url || '';
         const attType = (gNode as any).attachment_type || 'url';
         if (attType === 'file' && url) {
-          window.open(`${API_URL}${url}`, '_blank');
+          const baseUrl = API_URL.replace(/\/api\/?$/, '');
+          const fileUrl = url.startsWith('/') ? `${baseUrl}${url}` : `${baseUrl}/${url}`;
+          window.open(fileUrl, '_blank');
         } else if (url) {
           const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
           window.open(href, '_blank');

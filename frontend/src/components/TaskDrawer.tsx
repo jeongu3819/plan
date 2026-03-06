@@ -633,7 +633,11 @@ const TaskDrawer: React.FC = () => {
                                             <Tooltip title="다운로드">
                                                 <IconButton
                                                     size="small"
-                                                    onClick={() => window.open(`${API_URL}${att.url}`, '_blank')}
+                                                    onClick={() => {
+                                                        const baseUrl = API_URL.replace(/\/api\/?$/, '');
+                                                        const fileUrl = att.url.startsWith('/') ? `${baseUrl}${att.url}` : `${baseUrl}/${att.url}`;
+                                                        window.open(fileUrl, '_blank');
+                                                    }}
                                                     sx={{ color: '#2955FF' }}
                                                 >
                                                     <DownloadIcon sx={{ fontSize: '0.8rem' }} />
