@@ -2993,13 +2993,16 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
             "activity_summary": activity_summary,
         })
 
-    # ✅ 멤버명
+    # ✅ 멤버명 (viewer 제외, 담당자만)
     member_names = []
     for m in members:
+        role = m.get("role", "member")
+        if role == "viewer":
+            continue
         uid = int(m.get("user_id"))
         u = users_map.get(uid)
         if u:
-            member_names.append(f'{u["username"]} ({m.get("role", "member")})')
+            member_names.append(f'{u["username"]} ({role})')
 
     status_breakdown = {
         "total": len(tasks),
@@ -3302,10 +3305,13 @@ def generate_project_ai_query(
 
     member_names = []
     for m in members:
+        role = m.get("role", "member")
+        if role == "viewer":
+            continue
         uid = int(m.get("user_id"))
         u = users_map.get(uid)
         if u:
-            member_names.append(f'{u["username"]} ({m.get("role", "member")})')
+            member_names.append(f'{u["username"]} ({role})')
 
     # ✅ 기간 파싱 → Task 필터
     today = _today_kst()
@@ -3375,6 +3381,8 @@ Task 요약(최대 40개):
 
 [섹션2: 상세설명]
 근거/상황/주의사항을 6~12줄로 설명.
+Task의 세부 작업(체크리스트)을 언급할 때는 반드시 번호를 매겨서 표시하세요. (예: 1. 항목명, 2. 항목명)
+"첫 번째", "두 번째" 같은 서수 표현 대신 숫자 번호를 사용하세요.
 컨텍스트 밖은 추측하지 말고 "알 수 없음"이라고 명시.
 
 [섹션3: 핵심 일정]
@@ -3440,12 +3448,18 @@ Task 간에는 빈 줄로 구분하세요.
             parsed["one_liner"] = (content[:200].strip() + ("…" if len(content) > 200 else "")) if content else ""
             parsed["details"] = content
 
-        ids = _extract_task_ids_from_related_text(parsed.get("key_schedule", ""))
+        # Task 이름 기반 매칭 (ID 제거 후)
+        schedule_text = parsed.get("key_schedule", "") or ""
+        matched_tasks = []
+        if schedule_text:
+            for t in task_details:
+                if t["title"] and t["title"] in schedule_text:
+                    matched_tasks.append(t)
 
         if window:
             context_tasks = filtered_by_time
-        elif ids:
-            context_tasks = [t for t in task_details if int(t["id"]) in ids]
+        elif matched_tasks:
+            context_tasks = matched_tasks
         else:
             context_tasks = prompt_tasks[:15]
 
@@ -3489,10 +3503,9 @@ Task 간에는 빈 줄로 구분하세요.
             "members": member_names,
             "tasks": context_tasks,
             "filter": {
-                "mode": "time_window" if window else ("ids" if ids else "fallback"),
+                "mode": "time_window" if window else ("name_match" if matched_tasks else "fallback"),
                 "window_start": ws.isoformat() if window else None,
                 "window_end": we.isoformat() if window else None,
-                "task_ids": sorted(list(ids)) if ids else [],
             },
         }
 
