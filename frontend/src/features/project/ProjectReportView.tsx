@@ -137,6 +137,79 @@ const tokenizeHighlights = (sentence: string) => {
     .filter(p => p.trim().length > 0);
 };
 
+/* ─── Task Analysis Block: [Task: ...] 헤더 기반 그룹 렌더링 ─── */
+const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
+  const groups = useMemo(() => {
+    const result: { title: string; lines: string[] }[] = [];
+    let current: { title: string; lines: string[] } | null = null;
+
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      const m = line.match(/^\[Task:\s*(.+?)\]$/);
+      if (m) {
+        current = { title: m[1], lines: [] };
+        result.push(current);
+      } else if (line) {
+        if (current) {
+          current.lines.push(cleanText(line));
+        } else {
+          // [Task:] 이전 내용 → 일반 그룹
+          current = { title: '', lines: [cleanText(line)] };
+          result.push(current);
+        }
+      }
+    }
+    return result;
+  }, [text]);
+
+  if (groups.length === 0) return null;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {groups.map((g, gi) => (
+        <Box
+          key={gi}
+          sx={{
+            p: 2,
+            borderRadius: 2,
+            bgcolor: '#F9FAFB',
+            border: '1px solid #E5E7EB',
+          }}
+        >
+          {g.title && (
+            <Typography
+              sx={{
+                fontWeight: 800,
+                fontSize: '0.9rem',
+                color: '#1A1D29',
+                mb: 1,
+                pb: 0.5,
+                borderBottom: '2px solid #2955FF',
+                display: 'inline-block',
+              }}
+            >
+              {g.title}
+            </Typography>
+          )}
+          {g.lines.map((line, li) => (
+            <Box key={li} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 0.3 }}>
+              <Box
+                sx={{
+                  width: 5, height: 5, borderRadius: '50%',
+                  bgcolor: '#CBD5E1', mt: 0.8, flexShrink: 0,
+                }}
+              />
+              <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.6, color: '#374151' }}>
+                {line}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
 type ExecutiveSummaryBlockProps = {
   projectName: string;
   text: string;
@@ -882,12 +955,15 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     </TableHead>
 
                     <TableBody>
-                      {s.tasks.map(task => (
+                      {[...s.tasks].sort((a, b) => {
+                        const order: Record<string, number> = { in_progress: 0, todo: 1, hold: 2, done: 3 };
+                        return (order[a.status] ?? 1) - (order[b.status] ?? 1);
+                      }).map(task => (
                         <TableRow
                           key={task.id}
                           sx={{
                             '&:hover': { bgcolor: '#FAFBFF' },
-                            bgcolor: task.status === 'hold' ? '#FFFBEB' : 'transparent',
+                            bgcolor: task.status === 'hold' ? '#FFFBEB' : task.status === 'done' ? '#F9FAFB' : 'transparent',
                           }}
                         >
                           <TableCell sx={{ py: 1.2 }}>
@@ -1055,13 +1131,10 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                   </Table>
                 </TableContainer>
 
-                {/* ✅ AI narrative – task analysis (Executive Summary 블록) */}
+                {/* ✅ AI narrative – task analysis (Task 그룹별 렌더링) */}
                 {sections?.task_analysis && (
                   <Box sx={{ mt: 2 }}>
-                    <ExecutiveSummaryBlock
-                      projectName={s.project.name}
-                      text={sections.task_analysis}
-                    />
+                    <TaskAnalysisBlock text={sections.task_analysis} />
                   </Box>
                 )}
               </Paper>
@@ -1226,7 +1299,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                       variant="h6"
                       sx={{ fontWeight: 700, color: '#1A1D29', fontSize: '1rem' }}
                     >
-                      다음 단계 제언
+                      다음 단계 추천
                     </Typography>
                   </Box>
 

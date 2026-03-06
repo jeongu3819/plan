@@ -3074,12 +3074,18 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
 [섹션2: Task별 분석]
 각 Task에 대해 현재 상태, 진행률, 그리고 현재까지 어떤 단계까지 진행되었는지를 설명하세요.
 첨부 자료가 있는 경우, 해당 자료가 Task 진행에서 어떤 역할을 하는지도 설명하세요.
+반드시 아래 형식으로 작성하세요:
+[Task: Task제목]
+해당 Task에 대한 분석 내용을 여러 줄로 작성.
+
+순서는 반드시 진행 중(in_progress) -> 대기(todo) -> 보류(hold) -> 완료(done) 순으로 작성하세요.
+완료된 Task는 맨 마지막에 간략하게만 작성하세요.
 
 [섹션3: 종합 현황 분석]
 현재 프로젝트가 어떤 단계에 있는지, 핵심 진행 작업, 완료 작업, 지연/보류 작업을 정리하세요.
 프로젝트에 첨부파일이 있으면, 어떤 파일이 포함되어 있는지 간략히 안내하세요.
 
-[섹션4: 다음 단계 제언]
+[섹션4: 다음 단계 추천]
 다음으로 가장 중요한 작업이 무엇인지, 어떤 순서로 진행하면 좋을지 제안하세요.
 
 각 섹션은 [섹션1], [섹션2] 등의 태그로 시작해주세요. 반드시 한국어로 작성하세요."""
@@ -3315,14 +3321,16 @@ def generate_project_ai_query(
 
     tasks_summary_lines = []
     for t in prompt_tasks[:40]:
-        line = f'{t["id"]} / {t["title"]} / {t["status"]} / {t["progress"]}% / {t["due_date"] or "미정"}'
+        line = f'{t["title"]} / {t["status"]} / {t["progress"]}% / {t["due_date"] or "미정"}'
         # 작업노트 상세 정보 추가
         if t.get("activity_total", 0) > 0:
             line += f' / 작업노트: {t["activity_total"]}개 항목 중 {t["activity_checked"]}개 완료'
+            cb_idx = 0
             for item in t.get("activity_items", []):
                 if item["type"] == "checkbox":
-                    mark = "[O]" if item["checked"] else "[ ]"
-                    line += f'\n    {mark} {item["content"]}'
+                    cb_idx += 1
+                    mark = "완료" if item["checked"] else "미완료"
+                    line += f'\n    {cb_idx}. {item["content"]} ({mark})'
                 else:
                     if item["content"]:
                         line += f'\n    (메모) {item["content"]}'
@@ -3371,7 +3379,8 @@ Task 요약(최대 40개):
 
 [섹션3: 관련 Task]
 질문과 관련된 Task만 최대 8개.
-각 줄 형식: ID / 제목 / 상태 / 진행률 / 마감일
+각 줄 형식: 제목 / 상태 / 진행률 / 마감일 (Task ID는 출력하지 마세요)
+세부 작업(체크리스트)이 있으면 번호를 매겨서 표시. 예) 1. 항목명 (완료) 2. 항목명 (미완료)
 없으면 "없음" 한 줄.
 
 [섹션4: 다음 액션]
