@@ -87,10 +87,11 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     };
 
     const handleKeyDown = (e: React.KeyboardEvent, block: TaskActivity, index: number) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             createMut.mutate({ content: '', block_type: block.block_type });
         }
+        // Shift+Enter = 줄바꿈 (기본 동작, 별도 처리 불필요)
         if (e.key === 'Backspace') {
             const input = e.target as HTMLInputElement;
             if (input.value === '' && blocks.length > 1) {
