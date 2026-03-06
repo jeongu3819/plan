@@ -541,7 +541,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                               width: 8,
                               height: 8,
                               borderRadius: '50%',
-                              bgcolor: isActive ? '#2955FF' : dotColor,
+                              bgcolor: isActive ? '#2955FF' : '#22C55E',
                             }}
                           />
                         </ListItemIcon>
