@@ -358,6 +358,31 @@ class AiSetting(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class ProjectAiReport(Base):
+    __tablename__ = "project_ai_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+
+    overview = Column(Text, nullable=True)
+    task_analysis = Column(Text, nullable=True)
+    status_analysis = Column(Text, nullable=True)
+    next_steps = Column(Text, nullable=True)
+
+    raw_response = Column(Text, nullable=True)
+    structured_snapshot = Column(JSON, nullable=True)
+
+    model = Column(String(255), nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_project_ai_reports_project_created", "project_id", "created_at"),
+    )
+
+
 class ProjectAiQuery(Base):
     __tablename__ = "project_ai_queries"
 

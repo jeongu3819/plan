@@ -23,7 +23,6 @@ import {
 
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
-import DescriptionIcon from '@mui/icons-material/Description';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
@@ -33,6 +32,8 @@ import InsightsIcon from '@mui/icons-material/Insights';
 import SendIcon from '@mui/icons-material/Send';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CheckIcon from '@mui/icons-material/Check';
 
 import { api } from '../../api/client';
 import { ProjectAiQueryResponse } from '../../types';
@@ -380,7 +381,16 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
   const [aiModel, setAiModel] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+
+  const handleCopyAll = (sections: Record<string, string>, key: string) => {
+    const allText = Object.values(sections).map(s => cleanText(s)).filter(Boolean).join('\n\n');
+    navigator.clipboard.writeText(allText).then(() => {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    });
+  };
 
   // Legacy compat: build a combined "data" object for PDF/Word export
   const data = structuredData
@@ -408,6 +418,10 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
       .then((result: any) => {
         if (!cancelled) {
           setStructuredData(result.structured);
+          if (result.sections) {
+            setAiSections(result.sections);
+            setAiModel(result.model || '');
+          }
           setStructuredLoading(false);
         }
       })
@@ -471,31 +485,6 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
     }
   };
 
-  const handleDownloadWord = () => {
-    if (!reportRef.current) return;
-    const htmlContent = `
-      <html xmlns:o="urn:schemas-microsoft-com:office:office"
-            xmlns:w="urn:schemas-microsoft-com:office:word"
-            xmlns="http://www.w3.org/TR/REC-html40">
-      <head><meta charset="utf-8">
-      <style>
-      body{font-family:'Malgun Gothic',Arial,sans-serif;line-height:1.6;max-width:800px;margin:0 auto;padding:20px;}
-      table{border-collapse:collapse;width:100%;margin:12px 0;}
-      th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:13px;}
-      th{background-color:#2955FF;color:#fff;font-weight:700;}
-      tr:nth-child(even){background-color:#f9f9f9;}
-      h2{color:#2955FF;border-bottom:2px solid #EEF2FF;padding-bottom:4px;}
-      </style></head>
-      <body>${reportRef.current.innerHTML}</body></html>`;
-    const blob = new Blob(['\ufeff', htmlContent], { type: 'application/msword' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `project_report_${projectId}.doc`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   const s = data?.structured;
   const sb = s?.status_breakdown;
   const sections = data?.sections;
@@ -533,26 +522,15 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
 
             <Box sx={{ display: 'flex', gap: 1 }}>
               {structuredData && (
-                <>
-                  <Button
-                    variant="outlined"
-                    startIcon={<PictureAsPdfIcon />}
-                    onClick={() => handleDownloadPdf(reportRef, 'project_report')}
-                    size="small"
-                    sx={{ borderColor: '#E5E7EB', color: '#374151' }}
-                  >
-                    PDF
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    startIcon={<DescriptionIcon />}
-                    onClick={handleDownloadWord}
-                    size="small"
-                    sx={{ borderColor: '#E5E7EB', color: '#374151' }}
-                  >
-                    Word
-                  </Button>
-                </>
+                <Button
+                  variant="outlined"
+                  startIcon={<PictureAsPdfIcon />}
+                  onClick={() => handleDownloadPdf(reportRef, 'project_report')}
+                  size="small"
+                  sx={{ borderColor: '#E5E7EB', color: '#374151' }}
+                >
+                  PDF
+                </Button>
               )}
               <Button
                 variant="contained"
@@ -572,6 +550,28 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
               >
                 {loading ? 'AI 분석 중...' : aiSections ? 'AI 재분석' : 'AI 분석 생성'}
               </Button>
+              {aiSections && (
+                <Tooltip title={copiedKey === 'report-all' ? '복사됨!' : '전체 결과 복사'} arrow>
+                  <Button
+                    size="small"
+                    startIcon={copiedKey === 'report-all' ? <CheckIcon /> : <ContentCopyIcon />}
+                    onClick={() => handleCopyAll({
+                      overview: aiSections.overview || '',
+                      task_analysis: aiSections.task_analysis || '',
+                      status_analysis: aiSections.status_analysis || '',
+                      next_steps: aiSections.next_steps || '',
+                    }, 'report-all')}
+                    sx={{
+                      color: copiedKey === 'report-all' ? '#22C55E' : '#6B7280',
+                      borderRadius: 2, px: 1.5,
+                      border: '1px solid #E5E7EB',
+                      textTransform: 'none', fontSize: '0.75rem',
+                    }}
+                  >
+                    {copiedKey === 'report-all' ? '복사됨' : '전체 복사'}
+                  </Button>
+                </Tooltip>
+              )}
             </Box>
           </Box>
 
@@ -1327,10 +1327,30 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
 
           {queryData && !queryLoading && (
             <Box ref={queryReportRef} sx={{ bgcolor: '#FFFFFF', p: { xs: 0, sm: 2 } }}>
-              <Box sx={{ mb: 3 }}>
+              <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Typography variant="caption" sx={{ color: '#6B7280', fontWeight: 600 }}>
                   Q. {queryData.query}
                 </Typography>
+                <Tooltip title={copiedKey === 'query-all' ? '복사됨!' : '전체 결과 복사'} arrow>
+                  <Button
+                    size="small"
+                    startIcon={copiedKey === 'query-all' ? <CheckIcon /> : <ContentCopyIcon />}
+                    onClick={() => handleCopyAll({
+                      one_liner: queryData.parsed_response.one_liner || '',
+                      details: queryData.parsed_response.details || '',
+                      key_schedule: queryData.parsed_response.key_schedule || '',
+                      next_actions: queryData.parsed_response.next_actions || '',
+                    }, 'query-all')}
+                    sx={{
+                      color: copiedKey === 'query-all' ? '#22C55E' : '#6B7280',
+                      borderRadius: 2, px: 1.5,
+                      border: '1px solid #E5E7EB',
+                      textTransform: 'none', fontSize: '0.75rem',
+                    }}
+                  >
+                    {copiedKey === 'query-all' ? '복사됨' : '전체 복사'}
+                  </Button>
+                </Tooltip>
               </Box>
 
               {/* AI 요약 */}

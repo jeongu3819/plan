@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 from app.db_connections.sqlalchemy import SessionLocal, engine, Base
 from app.models import (
     Project, User, Task, UserPreference, VisitLog, GroupMembership, Group,
-    ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
+    ProjectAiReport, ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
     NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
     MemberGroup, MemberGroupUser,
     TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
@@ -2950,7 +2950,7 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
     else:
         overall_progress = 0.0
 
-    # ✅ task details (기존 그대로)
+    # ✅ task details (작업노트 포함)
     task_details = []
     for t in tasks:
         assignees = [users_map.get(a, {}).get("username", f"User {a}") for a in (t.get("assignee_ids") or [])]
@@ -2960,6 +2960,14 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
             sp_name = sp["name"] if sp else ""
 
         task_attachments = [a for a in all_attachments if int(a.get("task_id")) == t["id"]]
+
+        # 작업노트(activity) 요약 정보
+        activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == t["id"]).order_by(TaskActivityModel.order_index).all()
+        checkbox_activities = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
+        checked_count = sum(1 for a in checkbox_activities if a.checked)
+        total_checkboxes = len(checkbox_activities)
+        activity_progress = round(checked_count / total_checkboxes * 100) if total_checkboxes > 0 else 0
+        activity_summary = f"{total_checkboxes}개 항목 중 {checked_count}개 완료 ({activity_progress}%)" if total_checkboxes > 0 else ""
 
         task_details.append({
             "id": t["id"],
@@ -2982,6 +2990,7 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
                 }
                 for a in task_attachments
             ],
+            "activity_summary": activity_summary,
         })
 
     # ✅ 멤버명
@@ -3025,11 +3034,12 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
         if t["attachments"]:
             att_names = ", ".join([a["filename"] or a["url"] for a in t["attachments"]])
             att_info = f" | 첨부파일: {att_names}"
+        note_info = f' | 작업노트: {t["activity_summary"]}' if t.get("activity_summary") else ""
         task_lines.append(
             f'- {t["title"]} | 상태: {t["status"]} | 우선순위: {t["priority"]} '
             f'| 진행률: {t["progress"]}% | 마감일: {t["due_date"] or "미정"} '
             f'| 담당자: {", ".join(t["assignees"]) if t["assignees"] else "미배정"}'
-            f'| 설명: {t["description"] or "없음"}{att_info}'
+            f'| 설명: {t["description"] or "없음"}{att_info}{note_info}'
         )
 
     prompt = f"""당신은 전문 프로젝트 매니저 보조 AI입니다. 아래 프로젝트 데이터를 분석하여 스토리형 종합 보고서를 작성해주세요.
@@ -3111,21 +3121,30 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
         if not any(sections.values()):
             sections["overview"] = content
 
-        report_payload = {
+        # ✅ DB에 저장
+        db_report = ProjectAiReport(
+            project_id=body.project_id,
+            overview=sections.get("overview", ""),
+            task_analysis=sections.get("task_analysis", ""),
+            status_analysis=sections.get("status_analysis", ""),
+            next_steps=sections.get("next_steps", ""),
+            raw_response=content,
+            structured_snapshot=structured,
+            model=model_name,
+            created_at=datetime.utcnow(),
+        )
+        db.add(db_report)
+        db.commit()
+        db.refresh(db_report)
+
+        return {
             "project_id": body.project_id,
             "report": content,
             "sections": sections,
             "structured": structured,
             "model": model_name,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": db_report.created_at.isoformat() if db_report.created_at else None,
         }
-
-        # ✅ sidecar(state)에 저장해서 페이지 이동 후에도 재조회 가능하게
-        state.setdefault("reports", {})
-        state["reports"][str(body.project_id)] = report_payload
-        save_state(state)
-
-        return report_payload
 
     except requests.exceptions.ConnectionError:
         raise HTTPException(status_code=502, detail=f"Cannot connect to DSLLM at {api_url}. Please check the API URL.")
@@ -3147,13 +3166,29 @@ def get_report_data(
     state = load_state()
     check_project_access(db, state, project_id, user_id)
 
-    reports = state.get("reports", {}) or {}
-    data = reports.get(str(project_id))
+    # DB에서 최신 보고서 조회
+    row = (
+        db.query(ProjectAiReport)
+        .filter(ProjectAiReport.project_id == project_id)
+        .order_by(ProjectAiReport.created_at.desc())
+        .first()
+    )
 
-    if not data:
+    if not row:
         raise HTTPException(status_code=404, detail="Report not found. Please generate report first.")
 
-    return data
+    return {
+        "project_id": row.project_id,
+        "sections": {
+            "overview": row.overview or "",
+            "task_analysis": row.task_analysis or "",
+            "status_analysis": row.status_analysis or "",
+            "next_steps": row.next_steps or "",
+        },
+        "structured": row.structured_snapshot,
+        "model": row.model or "",
+        "updated_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 @app.delete("/api/report/data/{project_id}")
@@ -3165,11 +3200,8 @@ def delete_report_data(
     state = load_state()
     check_project_access(db, state, project_id, user_id)
 
-    reports = state.get("reports", {}) or {}
-    if str(project_id) in reports:
-        del reports[str(project_id)]
-        state["reports"] = reports
-        save_state(state)
+    db.query(ProjectAiReport).filter(ProjectAiReport.project_id == project_id).delete()
+    db.commit()
 
     return {"message": "Report deleted"}
 
@@ -3223,6 +3255,19 @@ def generate_project_ai_query(
 
         task_attachments = [a for a in all_attachments if int(a.get("task_id")) == int(t["id"])]
 
+        # 작업노트(activity) 상세 정보 (AI 자유질문용)
+        activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == int(t["id"])).order_by(TaskActivityModel.order_index).all()
+        activity_items = []
+        for act in activities:
+            block_type = act.block_type or "checkbox"
+            if block_type == "checkbox":
+                activity_items.append({"type": "checkbox", "content": act.content or "", "checked": bool(act.checked)})
+            else:
+                activity_items.append({"type": "text", "content": act.content or ""})
+        checkbox_acts = [a for a in activity_items if a["type"] == "checkbox"]
+        checked_count = sum(1 for a in checkbox_acts if a["checked"])
+        total_checkboxes = len(checkbox_acts)
+
         task_details.append({
             "id": int(t["id"]),
             "title": t.get("title", "") or "",
@@ -3244,6 +3289,9 @@ def generate_project_ai_query(
                 }
                 for a in task_attachments
             ],
+            "activity_items": activity_items,
+            "activity_checked": checked_count,
+            "activity_total": total_checkboxes,
         })
 
     member_names = []
@@ -3267,9 +3315,18 @@ def generate_project_ai_query(
 
     tasks_summary_lines = []
     for t in prompt_tasks[:40]:
-        tasks_summary_lines.append(
-            f'{t["id"]} / {t["title"]} / {t["status"]} / {t["progress"]}% / {t["due_date"] or "미정"}'
-        )
+        line = f'{t["id"]} / {t["title"]} / {t["status"]} / {t["progress"]}% / {t["due_date"] or "미정"}'
+        # 작업노트 상세 정보 추가
+        if t.get("activity_total", 0) > 0:
+            line += f' / 작업노트: {t["activity_total"]}개 항목 중 {t["activity_checked"]}개 완료'
+            for item in t.get("activity_items", []):
+                if item["type"] == "checkbox":
+                    mark = "[O]" if item["checked"] else "[ ]"
+                    line += f'\n    {mark} {item["content"]}'
+                else:
+                    if item["content"]:
+                        line += f'\n    (메모) {item["content"]}'
+        tasks_summary_lines.append(line)
 
     context_str = f"""프로젝트명: {p.name}
 설명: {p.description or "없음"}
