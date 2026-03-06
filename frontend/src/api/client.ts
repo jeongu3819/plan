@@ -4,6 +4,7 @@ import {
   Note,
   MentionNote,
   Attachment,
+  TaskActivity,
   SubProject,
   RoadmapItem,
   ProjectMember,
@@ -422,6 +423,25 @@ export const api = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     return res.data;
+  },
+
+  // =========================
+  // Task Activities (Checklist)
+  // =========================
+  getTaskActivities: async (taskId: number): Promise<TaskActivity[]> => {
+    const res = await client.get(`/tasks/${taskId}/activities`);
+    return res.data.activities || [];
+  },
+  createTaskActivity: async (taskId: number, data: { content: string; checked?: boolean; style?: any }): Promise<TaskActivity> => {
+    const res = await client.post(`/tasks/${taskId}/activities`, data);
+    return res.data;
+  },
+  updateTaskActivity: async (activityId: number, data: Partial<TaskActivity>): Promise<TaskActivity> => {
+    const res = await client.patch(`/activities/${activityId}`, data);
+    return res.data;
+  },
+  deleteTaskActivity: async (activityId: number): Promise<void> => {
+    await client.delete(`/activities/${activityId}`);
   },
 
   // =========================

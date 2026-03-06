@@ -21,6 +21,14 @@ import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
+import LinkIcon from '@mui/icons-material/Link';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import DescriptionIcon from '@mui/icons-material/Description';
+import ImageIcon from '@mui/icons-material/Image';
+import FolderZipIcon from '@mui/icons-material/FolderZip';
+import TableChartIcon from '@mui/icons-material/TableChart';
+import SlideshowIcon from '@mui/icons-material/Slideshow';
 import ReactFlow, {
   Background,
   Controls,
@@ -37,6 +45,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
 import { GraphNode, GraphEdge } from '../../types';
+import { API_URL } from '../../api/client';
 import { useGraphAutoZoom } from './useGraphAutoZoom';
 import { useGraphDragPreview } from './useGraphDragPreview';
 import GraphDragOverlay from './GraphDragOverlay';
@@ -58,6 +67,21 @@ const statusColors: Record<string, string> = {
   in_progress: '#2955FF',
   done: '#22C55E',
   hold: '#F59E0B',
+};
+
+// Attachment icon by file extension
+const getAttachmentIcon = (label: string, attType?: string) => {
+  if (attType === 'url' || (!attType && (label.startsWith('http://') || label.startsWith('https://')))) {
+    return <LinkIcon sx={{ fontSize: 14, color: '#2955FF' }} />;
+  }
+  const ext = (label.split('.').pop() || '').toLowerCase();
+  if (ext === 'pdf') return <PictureAsPdfIcon sx={{ fontSize: 14, color: '#EF4444' }} />;
+  if (['doc', 'docx', 'txt', 'md'].includes(ext)) return <DescriptionIcon sx={{ fontSize: 14, color: '#3B82F6' }} />;
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return <TableChartIcon sx={{ fontSize: 14, color: '#22C55E' }} />;
+  if (['ppt', 'pptx'].includes(ext)) return <SlideshowIcon sx={{ fontSize: 14, color: '#F59E0B' }} />;
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) return <ImageIcon sx={{ fontSize: 14, color: '#8B5CF6' }} />;
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return <FolderZipIcon sx={{ fontSize: 14, color: '#6B7280' }} />;
+  return <InsertDriveFileIcon sx={{ fontSize: 14, color: '#8B5CF6' }} />;
 };
 
 // Dagre layout
@@ -274,56 +298,65 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
       const isConnected = connectedIds.has(n.id);
       const isDimmed = hasSelection && !isConnected;
 
+      const isAttachment = n.type === 'attachment';
+
       return {
         id: n.id,
         data: {
           label: (
-            <Box sx={{ textAlign: 'center' }}>
-              <Typography
-                variant="caption"
-                sx={{
-                  fontWeight: 700,
-                  fontSize: '0.65rem',
-                  textTransform: 'uppercase',
-                  color: colors.text,
-                  opacity: isDimmed ? 0.3 : 0.7,
-                  display: 'block',
-                  mb: 0.3,
-                }}
-              >
-                {n.type}
-              </Typography>
-              <Typography
-                variant="body2"
-                sx={{
-                  fontWeight: 600,
-                  fontSize: '0.85rem',
-                  color: colors.text,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  maxWidth: 200,
-                  opacity: isDimmed ? 0.3 : 1,
-                }}
-              >
-                {n.label}
-              </Typography>
-              {n.status && (
-                <Chip
-                  label={n.status}
-                  size="small"
-                  sx={{
-                    height: 18,
-                    fontSize: '0.65rem',
-                    fontWeight: 600,
-                    mt: 0.4,
-                    bgcolor: `${statusColors[n.status] || '#6B7280'}20`,
-                    color: statusColors[n.status] || '#6B7280',
-                    opacity: isDimmed ? 0.3 : 1,
-                  }}
-                />
-              )}
-            </Box>
+            <Tooltip title={n.label} placement="top" arrow>
+              <Box sx={{ textAlign: 'center' }}>
+                {!isAttachment && (
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      fontWeight: 700,
+                      fontSize: '0.65rem',
+                      textTransform: 'uppercase',
+                      color: colors.text,
+                      opacity: isDimmed ? 0.3 : 0.7,
+                      display: 'block',
+                      mb: 0.3,
+                    }}
+                  >
+                    {n.type}
+                  </Typography>
+                )}
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+                  {isAttachment && getAttachmentIcon(n.label, (n as any).attachment_type)}
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 600,
+                      fontSize: isAttachment ? '0.75rem' : '0.85rem',
+                      color: colors.text,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      maxWidth: isAttachment ? 160 : 200,
+                      opacity: isDimmed ? 0.3 : 1,
+                    }}
+                  >
+                    {n.label}
+                  </Typography>
+                </Box>
+                {n.status && (
+                  <Chip
+                    label={n.status}
+                    size="small"
+                    sx={{
+                      height: 18,
+                      fontSize: '0.65rem',
+                      fontWeight: 600,
+                      mt: 0.4,
+                      bgcolor: `${statusColors[n.status] || '#6B7280'}20`,
+                      color: statusColors[n.status] || '#6B7280',
+                      opacity: isDimmed ? 0.3 : 1,
+                    }}
+                  />
+                )}
+              </Box>
+            </Tooltip>
           ),
         },
         position: { x: 0, y: 0 },
@@ -386,8 +419,22 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
   }, [nodes, edges, setFlowNodes, setFlowEdges]);
 
   const onNodeClick = useCallback((_: any, node: Node) => {
+    // Attachment nodes: open URL/file directly
+    if (node.id.startsWith('attachment-') && graphData) {
+      const gNode = graphData.nodes.find(n => n.id === node.id);
+      if (gNode) {
+        const url = (gNode as any).url || '';
+        const attType = (gNode as any).attachment_type || 'url';
+        if (attType === 'file' && url) {
+          window.open(`${API_URL}${url}`, '_blank');
+        } else if (url) {
+          window.open(url, '_blank');
+        }
+        return;
+      }
+    }
     setSelectedNodeId(prev => (prev === node.id ? null : node.id));
-  }, []);
+  }, [graphData]);
 
   const onPaneClick = useCallback(() => {
     setSelectedNodeId(null);

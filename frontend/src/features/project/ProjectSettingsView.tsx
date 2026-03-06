@@ -263,7 +263,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
           <Box
             sx={{
               display: 'grid',
-              gridTemplateColumns: canManage ? 'auto 100px 120px 100px 40px' : 'auto 100px 120px 100px',
+              gridTemplateColumns: canManage ? 'minmax(80px, 180px) 1fr 1fr 100px 40px' : 'minmax(80px, 180px) 1fr 1fr 100px',
               gap: 1,
               px: 2,
               py: 1,
@@ -286,7 +286,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                 key={m.user_id}
                 sx={{
                   display: 'grid',
-                  gridTemplateColumns: canManage ? 'auto 100px 120px 100px 40px' : 'auto 100px 120px 100px',
+                  gridTemplateColumns: canManage ? 'minmax(80px, 180px) 1fr 1fr 100px 40px' : 'minmax(80px, 180px) 1fr 1fr 100px',
                   gap: 1,
                   alignItems: 'center',
                   px: 2,

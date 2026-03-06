@@ -9,15 +9,16 @@ import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import CheckBoxOutlineBlankIcon from '@mui/icons-material/CheckBoxOutlineBlank';
 import CheckBoxIcon from '@mui/icons-material/CheckBox';
-import AttachFileIcon from '@mui/icons-material/AttachFile';
 import LinkIcon from '@mui/icons-material/Link';
 import AddIcon from '@mui/icons-material/Add';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import DownloadIcon from '@mui/icons-material/Download';
 import { useAppStore } from '../stores/useAppStore';
-import { Task, Attachment } from '../types';
+import { Task, Attachment, TaskActivity } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, User, API_URL } from '../api/client';
 
@@ -168,6 +169,44 @@ const TaskDrawer: React.FC = () => {
         onError: () => setUploading(false),
     });
 
+    // Activities (checklist)
+    const { data: activities = [] } = useQuery<TaskActivity[]>({
+        queryKey: ['activities', selectedTask?.id],
+        queryFn: () => api.getTaskActivities(selectedTask!.id),
+        enabled: !!selectedTask?.id,
+    });
+
+    const createActivityMut = useMutation({
+        mutationFn: (data: { content: string }) => api.createTaskActivity(selectedTask!.id, data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['activities', selectedTask?.id] });
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        },
+    });
+
+    const updateActivityMut = useMutation({
+        mutationFn: ({ id, ...data }: { id: number } & Partial<TaskActivity>) => api.updateTaskActivity(id, data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['activities', selectedTask?.id] });
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        },
+    });
+
+    const deleteActivityMut = useMutation({
+        mutationFn: (id: number) => api.deleteTaskActivity(id),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['activities', selectedTask?.id] });
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        },
+    });
+
+    const [newActivityText, setNewActivityText] = useState('');
+
+    const activityProgress = activities.length > 0
+        ? Math.round(activities.filter(a => a.checked).length / activities.length * 100)
+        : null;
+    const displayProgress = activityProgress !== null ? activityProgress : (formData.progress || 0);
+
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const selectedFiles = e.target.files;
         if (!selectedFiles) return;
@@ -316,20 +355,35 @@ const TaskDrawer: React.FC = () => {
                     {/* Progress */}
                     <Box>
                         <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
-                            Progress: {formData.progress || 0}%
+                            Progress: {displayProgress}%
+                            {activityProgress !== null && (
+                                <Chip label="자동 계산" size="small" sx={{ ml: 1, height: 16, fontSize: '0.55rem', bgcolor: '#EEF2FF', color: '#2955FF' }} />
+                            )}
                         </Typography>
-                        <Slider
-                            value={formData.progress || 0}
-                            onChange={(_, v) => handleChange('progress', v as number)}
-                            min={0} max={100} step={5}
-                            disabled={!canEdit}
-                            sx={{
-                                color: '#2955FF',
-                                '& .MuiSlider-thumb': { width: 16, height: 16 },
-                                '& .MuiSlider-track': { height: 6 },
-                                '& .MuiSlider-rail': { height: 6 },
-                            }}
-                        />
+                        {activityProgress !== null ? (
+                            <LinearProgress
+                                variant="determinate"
+                                value={displayProgress}
+                                sx={{
+                                    height: 8, borderRadius: 4,
+                                    bgcolor: '#E5E7EB',
+                                    '& .MuiLinearProgress-bar': { bgcolor: displayProgress >= 100 ? '#22C55E' : '#2955FF', borderRadius: 4 },
+                                }}
+                            />
+                        ) : (
+                            <Slider
+                                value={formData.progress || 0}
+                                onChange={(_, v) => handleChange('progress', v as number)}
+                                min={0} max={100} step={5}
+                                disabled={!canEdit}
+                                sx={{
+                                    color: '#2955FF',
+                                    '& .MuiSlider-thumb': { width: 16, height: 16 },
+                                    '& .MuiSlider-track': { height: 6 },
+                                    '& .MuiSlider-rail': { height: 6 },
+                                }}
+                            />
+                        )}
                     </Box>
 
                     {/* Assignees */}
@@ -438,6 +492,87 @@ const TaskDrawer: React.FC = () => {
                             }}
                         />
                     </Box>
+
+                    {/* Activities (Checklist) - only for existing tasks */}
+                    {selectedTask?.id && (
+                        <Box>
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                                <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                                    Activity ({activities.filter(a => a.checked).length}/{activities.length})
+                                </Typography>
+                            </Box>
+
+                            {activities.map(act => (
+                                <Box key={act.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, '&:hover .delete-btn': { opacity: 1 } }}>
+                                    <IconButton
+                                        size="small"
+                                        onClick={() => canEdit && updateActivityMut.mutate({ id: act.id, checked: !act.checked })}
+                                        disabled={!canEdit}
+                                        sx={{ p: 0.3 }}
+                                    >
+                                        {act.checked
+                                            ? <CheckCircleOutlineIcon sx={{ fontSize: '1.1rem', color: '#22C55E' }} />
+                                            : <RadioButtonUncheckedIcon sx={{ fontSize: '1.1rem', color: '#D1D5DB' }} />}
+                                    </IconButton>
+                                    <TextField
+                                        variant="standard"
+                                        fullWidth
+                                        defaultValue={act.content}
+                                        key={`${act.id}-${act.content}`}
+                                        onBlur={e => {
+                                            if (e.target.value !== act.content) {
+                                                updateActivityMut.mutate({ id: act.id, content: e.target.value });
+                                            }
+                                        }}
+                                        disabled={!canEdit}
+                                        InputProps={{
+                                            disableUnderline: true,
+                                            sx: {
+                                                fontSize: '0.85rem',
+                                                textDecoration: act.checked ? 'line-through' : 'none',
+                                                color: act.checked ? '#9CA3AF' : '#374151',
+                                                fontWeight: act.style?.bold ? 700 : 400,
+                                                ...(act.style?.color ? { color: act.style.color } : {}),
+                                            },
+                                        }}
+                                    />
+                                    {canEdit && (
+                                        <IconButton
+                                            className="delete-btn"
+                                            size="small"
+                                            onClick={() => deleteActivityMut.mutate(act.id)}
+                                            sx={{ opacity: 0, transition: 'opacity 0.15s', color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}
+                                        >
+                                            <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                        </IconButton>
+                                    )}
+                                </Box>
+                            ))}
+
+                            {canEdit && (
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                                    <AddIcon sx={{ fontSize: '1rem', color: '#9CA3AF' }} />
+                                    <TextField
+                                        variant="standard"
+                                        fullWidth
+                                        placeholder="Add activity..."
+                                        value={newActivityText}
+                                        onChange={e => setNewActivityText(e.target.value)}
+                                        onKeyDown={e => {
+                                            if (e.key === 'Enter' && newActivityText.trim()) {
+                                                createActivityMut.mutate({ content: newActivityText.trim() });
+                                                setNewActivityText('');
+                                            }
+                                        }}
+                                        InputProps={{
+                                            disableUnderline: true,
+                                            sx: { fontSize: '0.85rem' },
+                                        }}
+                                    />
+                                </Box>
+                            )}
+                        </Box>
+                    )}
 
                     {/* URL Attachments (only for existing tasks) */}
                     {selectedTask?.id && (

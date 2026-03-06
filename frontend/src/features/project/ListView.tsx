@@ -36,6 +36,7 @@ import FolderSpecialIcon from '@mui/icons-material/FolderSpecial';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 
 // dnd-kit imports
 import {
@@ -141,6 +142,9 @@ const SortableTaskRow: React.FC<{
           <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.85rem' }}>
             {task.title}
           </Typography>
+          {(task as any).attachment_count > 0 && (
+            <AttachFileIcon sx={{ fontSize: '0.8rem', color: '#9CA3AF', ml: 0.5, flexShrink: 0 }} />
+          )}
         </Box>
       </TableCell>
       <TableCell>
@@ -515,6 +519,9 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
             <Typography variant="body2" sx={{ fontWeight: 500, fontSize: '0.85rem' }}>
               {task.title}
             </Typography>
+            {(task as any).attachment_count > 0 && (
+              <AttachFileIcon sx={{ fontSize: '0.8rem', color: '#9CA3AF', ml: 0.5, flexShrink: 0 }} />
+            )}
           </Box>
         </TableCell>
         <TableCell>

@@ -97,6 +97,19 @@ class Task(Base):
     archived_at = Column(DateTime, nullable=True)
 
 
+class TaskActivity(Base):
+    __tablename__ = "task_activities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    order_index = Column(Integer, nullable=False, default=0)
+    content = Column(Text, nullable=False, default="")
+    checked = Column(Boolean, nullable=False, default=False)
+    style = Column(JSON, nullable=True)  # {"bold": true, "color": "#EF4444"}
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class UserPreference(Base):
     __tablename__ = "user_preferences"
 

@@ -3,6 +3,7 @@ import { Paper, Typography, Box, Chip, Avatar, AvatarGroup } from '@mui/material
 import { Task } from '../../types';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import FlagIcon from '@mui/icons-material/Flag';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 
 interface TaskCardProps {
     task: Task;
@@ -117,18 +118,26 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, style, compact = fal
                 </Typography>
             )}
 
-            {/* Footer: Due date + Assignees */}
-            {(task.due_date || (task.assignee_ids && task.assignee_ids.length > 0)) && (
+            {/* Footer: Due date + Attachment indicator + Assignees */}
+            {(task.due_date || (task.assignee_ids && task.assignee_ids.length > 0) || (task as any).attachment_count > 0) && (
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.5 }}>
-                    {task.due_date && (
-                        <Box sx={{
-                            display: 'flex', alignItems: 'center', gap: 0.5,
-                            color: '#9CA3AF', fontSize: '0.7rem',
-                        }}>
-                            <AccessTimeIcon sx={{ fontSize: '0.8rem' }} />
-                            <span>{task.due_date}</span>
-                        </Box>
-                    )}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {task.due_date && (
+                            <Box sx={{
+                                display: 'flex', alignItems: 'center', gap: 0.5,
+                                color: '#9CA3AF', fontSize: '0.7rem',
+                            }}>
+                                <AccessTimeIcon sx={{ fontSize: '0.8rem' }} />
+                                <span>{task.due_date}</span>
+                            </Box>
+                        )}
+                        {(task as any).attachment_count > 0 && (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, color: '#9CA3AF', fontSize: '0.7rem' }}>
+                                <AttachFileIcon sx={{ fontSize: '0.8rem' }} />
+                                <span>{(task as any).attachment_count}</span>
+                            </Box>
+                        )}
+                    </Box>
                     {task.assignee_ids && task.assignee_ids.length > 0 && (
                         <AvatarGroup max={3} sx={{ '& .MuiAvatar-root': { width: 22, height: 22, fontSize: '0.6rem' } }}>
                             {task.assignee_ids.map(id => (

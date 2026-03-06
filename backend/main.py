@@ -4,12 +4,14 @@ from fastapi import (
     Depends,
     Request,
     Query,
+    Body,
     UploadFile,
     File as FastAPIFile,
 )
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date, timedelta
@@ -30,6 +32,7 @@ from app.models import (
     ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
     NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
     MemberGroup, MemberGroupUser,
+    TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
 )
 from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS
 from app.llm.dsllm_adapter import chat as dsllm_chat
@@ -1578,6 +1581,21 @@ def get_tasks(
             if t.get("project_id") in user_project_ids
         ]
 
+    # Add attachment_count from DB
+    task_ids = [t["id"] for t in tasks]
+    if task_ids:
+        att_counts = dict(
+            db.query(AttachmentModel.task_id, func.count(AttachmentModel.id))
+            .filter(AttachmentModel.task_id.in_(task_ids))
+            .group_by(AttachmentModel.task_id)
+            .all()
+        )
+        for t in tasks:
+            t["attachment_count"] = att_counts.get(t["id"], 0)
+    else:
+        for t in tasks:
+            t["attachment_count"] = 0
+
     return {"tasks": tasks}
 
 @app.post("/api/tasks")
@@ -2544,6 +2562,107 @@ def get_stats(user_id: Optional[int] = None, db: Session = Depends(get_db)):
     }
 
 # =========================
+# Task Activities (Checklist)
+# =========================
+@app.get("/api/tasks/{task_id}/activities")
+def get_task_activities(task_id: int, db: Session = Depends(get_db)):
+    activities = db.query(TaskActivityModel).filter(
+        TaskActivityModel.task_id == task_id
+    ).order_by(TaskActivityModel.order_index.asc(), TaskActivityModel.id.asc()).all()
+    return {"activities": [
+        {
+            "id": a.id,
+            "task_id": a.task_id,
+            "order_index": a.order_index,
+            "content": a.content,
+            "checked": a.checked,
+            "style": a.style,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in activities
+    ]}
+
+@app.post("/api/tasks/{task_id}/activities")
+def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Depends(get_db)):
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    max_order = db.query(func.max(TaskActivityModel.order_index)).filter(
+        TaskActivityModel.task_id == task_id
+    ).scalar() or 0
+    activity = TaskActivityModel(
+        task_id=task_id,
+        order_index=max_order + 1,
+        content=body.get("content", ""),
+        checked=body.get("checked", False),
+        style=body.get("style"),
+    )
+    db.add(activity)
+    db.commit()
+    db.refresh(activity)
+    _sync_task_progress(db, task_id)
+    return {
+        "id": activity.id,
+        "task_id": activity.task_id,
+        "order_index": activity.order_index,
+        "content": activity.content,
+        "checked": activity.checked,
+        "style": activity.style,
+        "created_at": activity.created_at.isoformat() if activity.created_at else None,
+    }
+
+@app.patch("/api/activities/{activity_id}")
+def update_task_activity(activity_id: int, body: dict = Body(...), db: Session = Depends(get_db)):
+    activity = db.query(TaskActivityModel).filter(TaskActivityModel.id == activity_id).first()
+    if not activity:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    if "content" in body:
+        activity.content = body["content"]
+    if "checked" in body:
+        activity.checked = body["checked"]
+    if "style" in body:
+        activity.style = body["style"]
+    if "order_index" in body:
+        activity.order_index = body["order_index"]
+    db.commit()
+    db.refresh(activity)
+    _sync_task_progress(db, activity.task_id)
+    return {
+        "id": activity.id,
+        "task_id": activity.task_id,
+        "order_index": activity.order_index,
+        "content": activity.content,
+        "checked": activity.checked,
+        "style": activity.style,
+    }
+
+@app.delete("/api/activities/{activity_id}")
+def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
+    activity = db.query(TaskActivityModel).filter(TaskActivityModel.id == activity_id).first()
+    if not activity:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    task_id = activity.task_id
+    db.delete(activity)
+    db.commit()
+    _sync_task_progress(db, task_id)
+    return {"ok": True}
+
+def _sync_task_progress(db: Session, task_id: int):
+    """Recalculate task progress from activities."""
+    activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
+    if not activities:
+        return
+    total = len(activities)
+    checked = sum(1 for a in activities if a.checked)
+    progress = round(checked / total * 100) if total > 0 else 0
+    db.query(Task).filter(Task.id == task_id).update({"progress": progress})
+    db.commit()
+    # Also sync to sidecar task_meta
+    state = load_state()
+    set_task_meta(state, task_id, {"progress": progress})
+    save_state(state)
+
+# =========================
 # Graph
 # =========================
 @app.get("/api/projects/{project_id}/graph")
@@ -2577,10 +2696,31 @@ def get_project_graph(project_id: int, db: Session = Depends(get_db)):
         else:
             edges.append({"source": f"project-{project_id}", "target": t_id})
 
+        # Attachments from DB
+        db_attachments = db.query(AttachmentModel).filter(AttachmentModel.task_id == t["id"]).all()
+        for a in db_attachments:
+            a_id = f"attachment-{a.id}"
+            nodes.append({
+                "id": a_id,
+                "type": "attachment",
+                "label": a.filename or a.url or "",
+                "attachment_type": a.type or "url",
+                "url": a.url or "",
+            })
+            edges.append({"source": t_id, "target": a_id})
+
+        # Fallback: sidecar attachments
+        seen_att_ids = {a.id for a in db_attachments}
         for a in state.get("attachments", []):
-            if int(a.get("task_id")) == t["id"]:
+            if int(a.get("task_id")) == t["id"] and a.get("id") not in seen_att_ids:
                 a_id = f"attachment-{a['id']}"
-                nodes.append({"id": a_id, "type": "attachment", "label": a.get("filename") or a.get("url", "")})
+                nodes.append({
+                    "id": a_id,
+                    "type": "attachment",
+                    "label": a.get("filename") or a.get("url", ""),
+                    "attachment_type": a.get("type", "url"),
+                    "url": a.get("url", ""),
+                })
                 edges.append({"source": t_id, "target": a_id})
 
     # C-5: Notes from DB

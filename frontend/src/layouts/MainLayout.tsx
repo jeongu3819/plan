@@ -347,7 +347,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             {
               text: 'Kanban Board',
               icon: <ViewKanbanIcon />,
-              path: projects.length > 0 ? `/project/${projects[0].id}` : '/',
+              path: '/project/kanbanboard',
             },
             { text: '전체 로드맵', icon: <TimelineIcon />, path: '/roadmap' },
             // ✅ 추가된 메뉴

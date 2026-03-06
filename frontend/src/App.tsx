@@ -7,6 +7,7 @@ import { SnackbarProvider } from 'notistack';
 
 import HomePage from './pages/HomePage';
 import ProjectPage from './pages/ProjectPage';
+import KanbanBoardPage from './pages/KanbanBoardPage';
 import TrashPage from './pages/TrashPage';
 import AiSettingsPage from './pages/AiSettingsPage';
 import GlobalRoadmapPage from './pages/GlobalRoadmapPage';
@@ -130,6 +131,7 @@ const App: React.FC = () => {
 
               {/* ✅ 메인 레이아웃 적용 페이지들 */}
               <Route path="/" element={withMainLayout(<HomePage />)} />
+              <Route path="/project/kanbanboard" element={withMainLayout(<KanbanBoardPage />)} />
               <Route path="/project/:id" element={withMainLayout(<ProjectPage />)} />
               <Route path="/trash" element={withMainLayout(<TrashPage />)} />
               <Route path="/ai-settings" element={withMainLayout(<AiSettingsPage />)} />

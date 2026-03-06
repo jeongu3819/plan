@@ -60,6 +60,7 @@ export interface Task {
   tags?: string[];
   sub_project_id?: number | null;
   progress?: number;
+  attachment_count?: number;
   archived_at?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -89,6 +90,16 @@ export interface Attachment {
   type?: string;
   stored_name?: string;
   size?: number;
+  created_at?: string;
+}
+
+export interface TaskActivity {
+  id: number;
+  task_id: number;
+  order_index: number;
+  content: string;
+  checked: boolean;
+  style?: { bold?: boolean; color?: string };
   created_at?: string;
 }
 
@@ -130,6 +141,8 @@ export interface GraphNode {
   type: string;
   label: string;
   status?: string;
+  attachment_type?: string;
+  url?: string;
 }
 
 export interface GraphEdge {
