@@ -72,19 +72,6 @@ const cleanText = (text?: string | null) => {
 
 // ✅ 문장 단위 분리(마침표/물음표/느낌표 기준) + 너무 긴 문장 가독성 분해
 
-const parseMarkdownToParagraphs = (text: string) => {
-  if (!text) return null;
-  return text.split('\n').map((line, idx) => (
-    <Typography
-      key={idx}
-      variant="body2"
-      sx={{ color: '#374151', lineHeight: 1.6, mb: line.trim() === '' ? 1 : 0.5 }}
-    >
-      {line}
-    </Typography>
-  ));
-};
-
 const splitSentences = (text: string) => {
   const cleaned = cleanText(text).replace(/\n+/g, ' ').trim();
 
@@ -309,35 +296,50 @@ const KeyScheduleBlock: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
-/* ─── Numbered List Block: 번호 매긴 항목 렌더링 ─── */
+/* ─── Numbered List Block: 번호 항목 + 일반 텍스트 혼합 렌더링 ─── */
 const NumberedListBlock: React.FC<{ text: string }> = ({ text }) => {
-  const lines = useMemo(() => {
+  const items = useMemo(() => {
     return text
       .split('\n')
       .map(l => l.trim())
       .filter(Boolean)
-      .map(l => l.replace(/^\d+\.\s*/, ''));
+      .map(l => {
+        const m = l.match(/^(\d+)\.\s+(.+)$/);
+        return m
+          ? { type: 'numbered' as const, num: m[1], content: cleanText(m[2]) }
+          : { type: 'plain' as const, num: '', content: cleanText(l) };
+      });
   }, [text]);
 
-  if (lines.length === 0) return null;
+  if (items.length === 0) return null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      {lines.map((line, i) => (
-        <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+      {items.map((item, i) =>
+        item.type === 'numbered' ? (
+          <Box key={i} sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+            <Typography
+              sx={{
+                fontSize: '0.85rem', fontWeight: 700, color: '#2955FF',
+                minWidth: 20, textAlign: 'right', flexShrink: 0,
+              }}
+            >
+              {item.num}.
+            </Typography>
+            <Typography sx={{ fontSize: '0.85rem', lineHeight: 1.6, color: '#374151' }}>
+              {item.content}
+            </Typography>
+          </Box>
+        ) : (
           <Typography
-            sx={{
-              fontSize: '0.85rem', fontWeight: 700, color: '#2955FF',
-              minWidth: 20, textAlign: 'right', flexShrink: 0,
-            }}
+            key={i}
+            variant="body2"
+            sx={{ color: '#374151', lineHeight: 1.6, fontSize: '0.85rem', mb: 0.3 }}
           >
-            {i + 1}.
+            {item.content}
           </Typography>
-          <Typography sx={{ fontSize: '0.85rem', lineHeight: 1.6, color: '#374151' }}>
-            {cleanText(line)}
-          </Typography>
-        </Box>
-      ))}
+        )
+      )}
     </Box>
   );
 };
@@ -1910,7 +1912,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     상세 내용
                   </Typography>
                 </Box>
-                {parseMarkdownToParagraphs(queryData.parsed_response.details)}
+                <NumberedListBlock text={queryData.parsed_response.details} />
               </Paper>
 
               {/* 핵심 일정 */}
