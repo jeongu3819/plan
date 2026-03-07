@@ -332,7 +332,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           <Avatar
             sx={{ bgcolor: '#2955FF', width: 36, height: 36, fontSize: '0.9rem', fontWeight: 700 }}
           >
-            AG
+            P
           </Avatar>
           <Box>
             <Typography
@@ -344,7 +344,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 lineHeight: 1.2,
               }}
             >
-              Antigravity
+              PLAN
             </Typography>
             <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontSize: '0.7rem' }}>
               Schedule Platform

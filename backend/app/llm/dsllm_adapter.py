@@ -102,6 +102,13 @@ def _headers(base_url: str, *, ticket_env: str | None, send_headers: bool) -> di
     """
     headers = {"Content-Type": "application/json"}
 
+    # ⭐ z.ai / OpenAI API key
+    api_key = os.getenv("ZAI_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+
+
     if not send_headers:
         # ✅ DSLLM.py에서 SAM/GPT/Qwen3는 custom_headers={}
         return headers
