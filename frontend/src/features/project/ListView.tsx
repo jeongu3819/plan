@@ -266,6 +266,7 @@ const SortableSubProjectRow: React.FC<{
 const ListView: React.FC<ListViewProps> = ({ projectId }) => {
   const openDrawer = useAppStore(state => state.openDrawer);
   const currentUserId = useAppStore(state => state.currentUserId);
+  const filterSearch = useAppStore(state => state.filterSearch);
   const queryClient = useQueryClient();
   const [sortField, setSortField] = useState<SortField>('default');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -415,7 +416,8 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
 
   // Group tasks by subproject (with saved order)
   const groupedTasks = useMemo(() => {
-    const allTasks = tasks || [];
+    const q = filterSearch.trim().toLowerCase();
+    const allTasks = (tasks || []).filter(t => !q || t.title.toLowerCase().includes(q));
     const rootTasks = allTasks.filter(t => !t.sub_project_id);
 
     // Apply saved subproject order
@@ -436,7 +438,7 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
       tasks: allTasks.filter(t => t.sub_project_id === sp.id),
     }));
     return { rootTasks, subGroups };
-  }, [tasks, subProjects, allOrders]);
+  }, [tasks, subProjects, allOrders, filterSearch]);
 
   const hasSubProjects = subProjects.length > 0;
 

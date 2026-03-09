@@ -452,6 +452,9 @@ export const api = {
   deleteTaskActivity: async (activityId: number): Promise<void> => {
     await client.delete(`/activities/${activityId}`);
   },
+  reorderTaskActivities: async (taskId: number, order: number[]): Promise<void> => {
+    await client.put(`/tasks/${taskId}/activities/reorder`, { order });
+  },
 
   // =========================
   // Roadmap

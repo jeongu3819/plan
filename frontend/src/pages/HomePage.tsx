@@ -327,6 +327,7 @@ const HomePage: React.FC = () => {
       );
     }
     return (
+      <>
       <Box sx={{ maxHeight: upcomingExpanded ? 320 : 'none', overflowY: upcomingExpanded ? 'auto' : 'visible', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
         {(upcomingExpanded ? tasks : tasks.slice(0, 5)).map(task => (
           <Box

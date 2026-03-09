@@ -107,11 +107,18 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
   const queryClient = useQueryClient();
   const openDrawer = useAppStore(state => state.openDrawer);
   const currentUserId = useAppStore(state => state.currentUserId);
+  const filterSearch = useAppStore(state => state.filterSearch);
 
-  const { data: tasks, isLoading } = useQuery({
+  const { data: rawTasks, isLoading } = useQuery({
     queryKey: ['tasks', projectId, currentUserId],
     queryFn: () => api.getTasks(projectId, currentUserId),
   });
+  const tasks = React.useMemo(() => {
+    if (!rawTasks) return rawTasks;
+    if (!filterSearch.trim()) return rawTasks;
+    const q = filterSearch.trim().toLowerCase();
+    return rawTasks.filter(t => t.title.toLowerCase().includes(q));
+  }, [rawTasks, filterSearch]);
   const [activeTask, setActiveTask] = React.useState<Task | null>(null);
   const [sortField, setSortField] = React.useState<SortField>('default');
   const [sortDirection, setSortDirection] = React.useState<SortDirection>('asc');

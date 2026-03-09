@@ -2707,10 +2707,18 @@ def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Dep
     max_order = db.query(func.max(TaskActivityModel.order_index)).filter(
         TaskActivityModel.task_id == task_id
     ).scalar() or 0
+    insert_order = body.get("order_index")
+    if insert_order is not None:
+        # Shift existing items down to make room
+        db.query(TaskActivityModel).filter(
+            TaskActivityModel.task_id == task_id,
+            TaskActivityModel.order_index >= insert_order,
+        ).update({TaskActivityModel.order_index: TaskActivityModel.order_index + 1})
+        db.flush()
     activity = TaskActivityModel(
         task_id=task_id,
         block_type=body.get("block_type", "checkbox"),
-        order_index=max_order + 1,
+        order_index=insert_order if insert_order is not None else max_order + 1,
         content=body.get("content", ""),
         checked=body.get("checked", False),
         style=body.get("style"),
@@ -2757,6 +2765,17 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
         "checked": activity.checked,
         "style": activity.style,
     }
+
+@app.put("/api/tasks/{task_id}/activities/reorder")
+def reorder_task_activities(task_id: int, body: dict = Body(...), db: Session = Depends(get_db)):
+    order = body.get("order", [])  # list of activity IDs in new order
+    for idx, activity_id in enumerate(order):
+        db.query(TaskActivityModel).filter(
+            TaskActivityModel.id == activity_id,
+            TaskActivityModel.task_id == task_id,
+        ).update({"order_index": idx})
+    db.commit()
+    return {"ok": True}
 
 @app.delete("/api/activities/{activity_id}")
 def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):

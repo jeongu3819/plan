@@ -114,11 +114,19 @@ const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const openDrawer = useAppStore(state => state.openDrawer);
   const currentUserId = useAppStore(state => state.currentUserId);
+  const filterSearch = useAppStore(state => state.filterSearch);
 
-  const { data: tasks, isLoading } = useQuery({
+  const { data: rawTasks, isLoading } = useQuery({
     queryKey: ['tasks', projectId, currentUserId],
     queryFn: () => api.getTasks(projectId, currentUserId),
   });
+
+  const tasks = useMemo(() => {
+    if (!rawTasks) return rawTasks;
+    const q = filterSearch.trim().toLowerCase();
+    if (!q) return rawTasks;
+    return rawTasks.filter(t => t.title.toLowerCase().includes(q));
+  }, [rawTasks, filterSearch]);
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
