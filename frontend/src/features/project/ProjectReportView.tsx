@@ -132,15 +132,24 @@ const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
 
     for (const raw of text.split('\n')) {
       const line = raw.trim();
-      const m = line.match(/^\[Task:\s*(.+?)\]$/);
+      if (!line) continue;
+      // 다양한 Task 제목 패턴 매칭
+      const m =
+        line.match(/^\[Task:\s*(.+?)\]$/) ||                  // [Task: 제목]
+        line.match(/^\*\*(.+?)\*\*\s*$/) ||                   // **제목**
+        line.match(/^[-•]\s*\*\*(.+?)\*\*/) ||                // - **제목** or • **제목**
+        line.match(/^Task\s*[:：]\s*(.+)$/i) ||                // Task: 제목
+        line.match(/^[-•]\s*Task\s*[:：]\s*(.+)$/i) ||        // - Task: 제목
+        line.match(/^\d+\.\s*\*\*(.+?)\*\*/) ||               // 1. **제목**
+        line.match(/^\d+\)\s*\*\*(.+?)\*\*/) ||               // 1) **제목**
+        line.match(/^#{1,3}\s+(.+)$/);                         // ## 제목
       if (m) {
-        current = { title: m[1], lines: [] };
+        current = { title: cleanText(m[1]), lines: [] };
         result.push(current);
-      } else if (line) {
+      } else {
         if (current) {
           current.lines.push(cleanText(line));
         } else {
-          // [Task:] 이전 내용 → 일반 그룹
           current = { title: '', lines: [cleanText(line)] };
           result.push(current);
         }
