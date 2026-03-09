@@ -519,19 +519,29 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                 {(() => {
                   const todayOffset = differenceInDays(today, rangeStart);
                   if (todayOffset >= 0 && todayOffset < totalDays) {
+                    const leftPct = `${(todayOffset / totalDays) * 100}%`;
                     return (
                       <Box
                         sx={{
                           position: 'absolute',
                           top: 0,
                           bottom: 0,
-                          left: `${(todayOffset / totalDays) * 100}%`,
-                          width: 2,
-                          bgcolor: '#EF4444',
+                          left: leftPct,
                           zIndex: 2,
-                          opacity: 0.6,
                         }}
-                      />
+                      >
+                        <Box sx={{
+                          position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)',
+                          fontSize: '0.55rem', fontWeight: 700, color: '#EF4444',
+                          whiteSpace: 'nowrap', lineHeight: 1, letterSpacing: '-0.02em',
+                        }}>
+                          {`${today.getMonth() + 1}/${today.getDate()}`}
+                        </Box>
+                        <Box sx={{
+                          position: 'absolute', top: 8, bottom: 0, left: 0,
+                          width: 2, bgcolor: '#EF4444', opacity: 0.6,
+                        }} />
+                      </Box>
                     );
                   }
                   return null;

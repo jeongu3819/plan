@@ -669,19 +669,33 @@ const GlobalRoadmapPage: React.FC = () => {
                 {(() => {
                   const todayOffset = differenceInDays(today, rangeStart);
                   if (todayOffset >= 0 && todayOffset < totalDays) {
+                    const leftPct = `${(todayOffset / totalDays) * 100}%`;
+                    const isProject = item.type === 'project';
                     return (
                       <Box
                         sx={{
                           position: 'absolute',
                           top: 0,
                           bottom: 0,
-                          left: `${(todayOffset / totalDays) * 100}%`,
-                          width: item.type === 'project' ? 2 : 1.5,
-                          bgcolor: '#EF4444',
+                          left: leftPct,
                           zIndex: 2,
-                          opacity: item.type === 'project' ? 0.6 : 0.4,
                         }}
-                      />
+                      >
+                        {isProject && (
+                          <Box sx={{
+                            position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)',
+                            fontSize: '0.55rem', fontWeight: 700, color: '#EF4444',
+                            whiteSpace: 'nowrap', lineHeight: 1, letterSpacing: '-0.02em',
+                          }}>
+                            {`${today.getMonth() + 1}/${today.getDate()}`}
+                          </Box>
+                        )}
+                        <Box sx={{
+                          position: 'absolute', top: isProject ? 8 : 0, bottom: 0, left: 0,
+                          width: isProject ? 2 : 1.5, bgcolor: '#EF4444',
+                          opacity: isProject ? 0.6 : 0.4,
+                        }} />
+                      </Box>
                     );
                   }
                   return null;
