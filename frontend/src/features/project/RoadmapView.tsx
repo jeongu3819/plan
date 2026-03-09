@@ -365,6 +365,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
     return ids;
   }, [localItems, expandedIds]);
 
+  let todayLabelShown = false;
   const renderRow = (item: RoadmapItem, depth: number = 0): React.ReactNode => {
     const hasChildren = item.children && item.children.length > 0;
     const isExpanded = expandedIds.has(item.id);
@@ -520,6 +521,8 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                   const todayOffset = differenceInDays(today, rangeStart);
                   if (todayOffset >= 0 && todayOffset < totalDays) {
                     const leftPct = `${(todayOffset / totalDays) * 100}%`;
+                    const showLabel = !todayLabelShown;
+                    if (showLabel) todayLabelShown = true;
                     return (
                       <Box
                         sx={{
@@ -530,15 +533,17 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                           zIndex: 2,
                         }}
                       >
+                        {showLabel && (
+                          <Box sx={{
+                            position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)',
+                            fontSize: '0.55rem', fontWeight: 700, color: '#EF4444',
+                            whiteSpace: 'nowrap', lineHeight: 1, letterSpacing: '-0.02em',
+                          }}>
+                            {`${today.getMonth() + 1}/${today.getDate()}`}
+                          </Box>
+                        )}
                         <Box sx={{
-                          position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)',
-                          fontSize: '0.55rem', fontWeight: 700, color: '#EF4444',
-                          whiteSpace: 'nowrap', lineHeight: 1, letterSpacing: '-0.02em',
-                        }}>
-                          {`${today.getMonth() + 1}/${today.getDate()}`}
-                        </Box>
-                        <Box sx={{
-                          position: 'absolute', top: 8, bottom: 0, left: 0,
+                          position: 'absolute', top: showLabel ? 8 : 0, bottom: 0, left: 0,
                           width: 2, bgcolor: '#EF4444', opacity: 0.6,
                         }} />
                       </Box>

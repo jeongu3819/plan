@@ -514,6 +514,7 @@ const GlobalRoadmapPage: React.FC = () => {
     : undefined;
 
   // ── Render a row (project, subproject, or task) ──
+  let todayLabelShown = false;
   const renderRow = (item: RoadmapItem, depth: number, projectColor: string): React.ReactNode => {
     const hasChildren = item.children && item.children.length > 0;
     const isExpanded = expandedProjects.has(item.id);
@@ -671,6 +672,8 @@ const GlobalRoadmapPage: React.FC = () => {
                   if (todayOffset >= 0 && todayOffset < totalDays) {
                     const leftPct = `${(todayOffset / totalDays) * 100}%`;
                     const isProject = item.type === 'project';
+                    const showLabel = !todayLabelShown && isProject;
+                    if (showLabel) todayLabelShown = true;
                     return (
                       <Box
                         sx={{
@@ -681,7 +684,7 @@ const GlobalRoadmapPage: React.FC = () => {
                           zIndex: 2,
                         }}
                       >
-                        {isProject && (
+                        {showLabel && (
                           <Box sx={{
                             position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)',
                             fontSize: '0.55rem', fontWeight: 700, color: '#EF4444',
@@ -691,7 +694,7 @@ const GlobalRoadmapPage: React.FC = () => {
                           </Box>
                         )}
                         <Box sx={{
-                          position: 'absolute', top: isProject ? 8 : 0, bottom: 0, left: 0,
+                          position: 'absolute', top: showLabel ? 8 : 0, bottom: 0, left: 0,
                           width: isProject ? 2 : 1.5, bgcolor: '#EF4444',
                           opacity: isProject ? 0.6 : 0.4,
                         }} />
