@@ -1029,16 +1029,102 @@ const HomePage: React.FC = () => {
     <Box>
       {/* ── Page Header with Shortcuts ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-        <Box sx={{ flex: '0 0 auto' }}>
-          <Typography
-            variant="h4"
-            sx={{ fontWeight: 800, color: '#1A1D29', letterSpacing: '-0.03em' }}
+        <Box sx={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 2 }}>
+          {/* Panda Hero Animation */}
+          <Box
+            sx={{
+              position: 'relative',
+              width: 56,
+              height: 56,
+              flexShrink: 0,
+              '@media (prefers-reduced-motion: reduce)': {
+                '& *': { animation: 'none !important' },
+              },
+            }}
           >
-            Dashboard
-          </Typography>
-          <Typography variant="body2" sx={{ color: '#6B7280', mt: 0.5 }}>
-            {format(new Date(), 'EEEE, MMMM dd, yyyy')}
-          </Typography>
+            {/* Panda image with subtle float */}
+            <Box
+              component="img"
+              src="/panda.png"
+              alt="PLAN-A"
+              sx={{
+                width: 48,
+                height: 48,
+                borderRadius: '12px',
+                objectFit: 'cover',
+                position: 'relative',
+                zIndex: 2,
+                animation: 'pandaFloat 3s ease-in-out infinite',
+                '@keyframes pandaFloat': {
+                  '0%, 100%': { transform: 'translateY(0px)' },
+                  '50%': { transform: 'translateY(-3px)' },
+                },
+              }}
+            />
+            {/* Notebook icon - subtle writing motion */}
+            <Box
+              sx={{
+                position: 'absolute',
+                bottom: -2,
+                right: -4,
+                width: 22,
+                height: 22,
+                borderRadius: '6px',
+                bgcolor: '#EEF2FF',
+                border: '2px solid #fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 3,
+                fontSize: '11px',
+                animation: 'noteWrite 2.5s ease-in-out infinite',
+                '@keyframes noteWrite': {
+                  '0%, 100%': { transform: 'rotate(0deg) scale(1)' },
+                  '30%': { transform: 'rotate(-5deg) scale(1.05)' },
+                  '60%': { transform: 'rotate(3deg) scale(1)' },
+                },
+              }}
+            >
+              📋
+            </Box>
+            {/* Sparkle accent */}
+            <Box
+              sx={{
+                position: 'absolute',
+                top: -2,
+                right: 2,
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                bgcolor: '#FBBF24',
+                zIndex: 3,
+                animation: 'sparkle 2s ease-in-out infinite',
+                '@keyframes sparkle': {
+                  '0%, 100%': { opacity: 0.3, transform: 'scale(0.8)' },
+                  '50%': { opacity: 1, transform: 'scale(1.2)' },
+                },
+              }}
+            />
+          </Box>
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.8 }}>
+              <Typography
+                variant="h4"
+                sx={{ fontWeight: 900, color: '#1A1D29', letterSpacing: '-0.03em' }}
+              >
+                PLAN-A
+              </Typography>
+              <Typography
+                variant="caption"
+                sx={{ color: '#9CA3AF', fontWeight: 500, fontSize: '0.7rem', letterSpacing: '0.02em' }}
+              >
+                Dashboard
+              </Typography>
+            </Box>
+            <Typography variant="body2" sx={{ color: '#6B7280', mt: 0.2, fontSize: '0.8rem' }}>
+              {format(new Date(), 'EEEE, MMMM dd, yyyy')}
+            </Typography>
+          </Box>
         </Box>
         <Box sx={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', px: 2 }}>
           <ShortcutSection currentUserId={currentUserId} navigate={navigate} />

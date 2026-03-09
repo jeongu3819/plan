@@ -3313,7 +3313,7 @@ def generate_project_ai_query(
         if u:
             member_names.append(f'{u["username"]} ({role})')
 
-    # ✅ 기간 파싱 → Task 필터
+    # ✅ 질문 범위 분석: 기간 / Task 이름 / 전체 현황
     today = _today_kst()
     window = _parse_time_window_from_query(req.query, today)
     filtered_by_time = None
@@ -3323,7 +3323,38 @@ def generate_project_ai_query(
     else:
         ws = we = None
 
-    prompt_tasks = filtered_by_time if (filtered_by_time is not None) else task_details
+    # ✅ 질문에서 Task 이름 매칭 (질문 텍스트 기준)
+    query_lower = req.query.lower().strip()
+    query_matched_tasks = []
+    for t in task_details:
+        title = (t.get("title") or "").strip()
+        if title and (title.lower() in query_lower or title in req.query):
+            query_matched_tasks.append(t)
+
+    # ✅ 질문 유형 판별
+    is_full_overview = any(kw in query_lower for kw in [
+        "전체 현황", "프로젝트 현황", "전체 요약", "전체 상태", "전체 진행",
+        "프로젝트 상태", "프로젝트 진행", "프로젝트 요약", "전반적",
+    ])
+
+    # ✅ 프롬프트에 넣을 task 선별
+    if query_matched_tasks:
+        # 특정 task를 물어본 경우 → 해당 task만
+        prompt_tasks = query_matched_tasks
+        scope_hint = f"\n[범위 제약]\n사용자가 특정 Task({', '.join(t['title'] for t in query_matched_tasks)})에 대해 질문했습니다.\n해당 Task 중심으로만 답변하고, 다른 Task는 언급하지 마세요.\n"
+    elif filtered_by_time is not None:
+        prompt_tasks = filtered_by_time
+        scope_hint = (
+            f"\n[기간 제약]\n"
+            f"사용자 질문이 요청한 기간은 {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()} 입니다.\n"
+            f"이 기간에 해당하는 Task만 관련 Task로 다루고, 기간 밖 Task는 절대 언급하지 마세요.\n"
+        )
+    elif is_full_overview:
+        prompt_tasks = task_details
+        scope_hint = "\n[범위]\n사용자가 전체 현황을 요청했습니다. 요약 중심으로 답변하되, 전체 Task를 나열하지 말고 핵심 항목(진행 중, 임박, 지연)을 중심으로 정리하세요.\n"
+    else:
+        prompt_tasks = task_details
+        scope_hint = "\n[범위]\n질문과 관련된 Task만 선별해서 답변하세요. 전체 Task를 나열하지 마세요.\n"
 
     tasks_summary_lines = []
     for t in prompt_tasks[:40]:
@@ -3345,23 +3376,19 @@ def generate_project_ai_query(
     context_str = f"""프로젝트명: {p.name}
 설명: {p.description or "없음"}
 
-Task 요약(최대 40개):
+Task 목록:
 {chr(10).join(tasks_summary_lines) if tasks_summary_lines else "Task 없음"}
 """
 
-    period_hint = ""
-    if window:
-        period_hint = (
-            f"\n[기간 제약]\n"
-            f"사용자 질문이 요청한 기간은 {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()} 입니다.\n"
-            f"이 기간에 해당하는 Task만 관련 Task로 다루고, 기간 밖 Task는 절대 언급하지 마세요.\n"
-        )
-
-    # ✅✅ user prompt 강화: 섹션 태그 단독 줄 + 줄바꿈 강제
+    # ✅✅ user prompt 강화: 질문 범위 기반 응답
     prompt = f"""당신은 전문 프로젝트 매니저 보조 AI입니다.
 아래 컨텍스트를 바탕으로 사용자의 질문에 답변해주세요.
-질문에 특정 기간/조건이 있으면, 그 조건에 해당하는 Task만 선택해서 답변하세요.
-무관한 Task는 절대 언급하지 마세요.{period_hint}
+{scope_hint}
+[핵심 원칙]
+- 질문 범위를 먼저 파악하고, 그 범위 안에서만 답변하세요.
+- 전체 Task 나열은 금지입니다. 질문과 관련된 Task만 선별하세요.
+- 전체 현황 질문이라도 요약 중심으로 구성하세요 (핵심 진행 항목, 임박 일정, 지연/리스크 항목).
+- 특정 Task 질문이면 해당 Task의 상태/일정/담당자/작업노트만 중심으로 답변하세요.
 
 [컨텍스트]
 {context_str}
@@ -3375,18 +3402,19 @@ Task 요약(최대 40개):
 - 섹션 내용은 줄바꿈으로 구분 (가급적 '한 줄 = 한 문장')
 - 문장은 중간에 끊지 말고 반드시 마침표(또는 '다.')로 끝내기
 - 마크다운 금지: #, **, ```, 표(|---|) 금지
+- 작업이나 항목을 나열할 때는 반드시 숫자 번호(1. 2. 3.)를 사용하세요.
+- 절대 "첫 번째", "두 번째" 같은 서수 표현을 사용하지 마세요.
 
 [섹션1: 한줄요약]
 결론을 한 문장으로만 작성.
 
 [섹션2: 상세설명]
 근거/상황/주의사항을 설명.
-작업이나 항목을 나열할 때는 반드시 숫자 번호를 매겨서 작성하세요. (예: 1. 내용, 2. 내용, 3. 내용)
-절대 "첫 번째", "두 번째", "세 번째" 같은 서수 표현을 사용하지 마세요. 반드시 "1.", "2.", "3." 숫자를 사용하세요.
+질문 범위에 해당하는 내용만 작성하세요.
 컨텍스트 밖은 추측하지 말고 "알 수 없음"이라고 명시.
 
 [섹션3: 핵심 일정]
-질문과 관련된 Task만 최대 8개.
+질문과 직접 관련된 Task만 최대 8개.
 각 Task를 아래 형식으로 작성 (슬래시(/) 구분자를 쓰지 마세요):
 Task명: OOO
 진행률: OO%
@@ -3403,7 +3431,7 @@ Task 간에는 빈 줄로 구분하세요.
 각 액션은 번호를 매겨서 한 줄씩 작성. 예) 1. 액션 내용
 """
 
-    # ✅✅ system prompt 강화: 형식/줄바꿈 강제
+    # ✅✅ system prompt 강화: 범위 제한 + 형식/줄바꿈 강제
     system_prompt = """
 당신은 전문 프로젝트 매니저 보조 AI입니다.
 반드시 한국어로 답변하세요.
@@ -3411,7 +3439,14 @@ Task 간에는 빈 줄로 구분하세요.
 각 섹션 태그([섹션1], [섹션2], [섹션3], [섹션4])는 반드시 단독 줄로 출력하세요.
 섹션 내용은 줄바꿈으로 구분하며, 가급적 한 줄 = 한 문장으로 작성하세요.
 문장 중간에 끊지 말고 반드시 마침표(또는 '다.')로 끝내세요.
-질문 조건(기간/상태/담당자 등)에 맞는 Task만 언급하세요. 조건 밖 Task는 절대 언급하지 마세요.
+
+[가장 중요한 규칙]
+- 사용자의 질문 범위를 먼저 파악하세요.
+- 질문 범위 밖의 Task는 절대 언급하지 마세요.
+- 전체 Task를 나열하지 마세요. 질문과 관련된 것만 선별하세요.
+- 프로젝트 현황 질문이라도 요약 중심으로 답하세요 (핵심 진행 항목, 임박 일정, 지연 항목).
+- 특정 Task 질문에는 해당 Task만 답하세요.
+- 팀원 정보는 담당자만 표시하고 Viewer는 제외하세요.
 """.strip()
 
     try:
@@ -3448,20 +3483,28 @@ Task 간에는 빈 줄로 구분하세요.
             parsed["one_liner"] = (content[:200].strip() + ("…" if len(content) > 200 else "")) if content else ""
             parsed["details"] = content
 
-        # Task 이름 기반 매칭 (ID 제거 후)
+        # ✅ context_tasks: 질문 범위에 맞는 Task만 선별
+        # 1순위: 질문에서 직접 언급한 task
+        # 2순위: 기간 필터 결과
+        # 3순위: AI 응답에서 언급한 task
+        # fallback: prompt_tasks (이미 범위 필터링됨)
         schedule_text = parsed.get("key_schedule", "") or ""
-        matched_tasks = []
+        response_matched = []
         if schedule_text:
             for t in task_details:
                 if t["title"] and t["title"] in schedule_text:
-                    matched_tasks.append(t)
+                    response_matched.append(t)
 
-        if window:
+        if query_matched_tasks:
+            context_tasks = query_matched_tasks
+        elif window:
             context_tasks = filtered_by_time
-        elif matched_tasks:
-            context_tasks = matched_tasks
-        else:
+        elif response_matched:
+            context_tasks = response_matched
+        elif is_full_overview:
             context_tasks = prompt_tasks[:15]
+        else:
+            context_tasks = response_matched if response_matched else prompt_tasks[:8]
 
         active_tasks = [t for t in context_tasks if t.get("status") != "hold"]
         hold_tasks = [t for t in context_tasks if t.get("status") == "hold"]

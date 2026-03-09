@@ -328,26 +328,44 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         }}
       >
         {/* Logo */}
-        <Box sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Avatar
-            sx={{ bgcolor: '#2955FF', width: 36, height: 36, fontSize: '0.9rem', fontWeight: 700 }}
-          >
-            AG
-          </Avatar>
-          <Box>
+        <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box
+            component="img"
+            src="/panda.png"
+            alt="PLAN-A"
+            sx={{
+              width: 38,
+              height: 38,
+              borderRadius: '10px',
+              objectFit: 'cover',
+              flexShrink: 0,
+            }}
+          />
+          <Box sx={{ minWidth: 0 }}>
             <Typography
               variant="subtitle1"
               sx={{
                 color: theme.sidebarText,
-                fontWeight: 700,
-                fontSize: '0.95rem',
+                fontWeight: 800,
+                fontSize: '1rem',
                 lineHeight: 1.2,
+                letterSpacing: '-0.02em',
               }}
             >
-              Antigravity
+              PLAN-A
             </Typography>
-            <Typography variant="caption" sx={{ color: theme.sidebarMuted, fontSize: '0.7rem' }}>
-              Schedule Platform
+            <Typography
+              variant="caption"
+              sx={{
+                color: theme.sidebarMuted,
+                fontSize: '0.62rem',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                display: 'block',
+              }}
+            >
+              Schedule Platform from A-FAB
             </Typography>
           </Box>
         </Box>
