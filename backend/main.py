@@ -3360,12 +3360,26 @@ def generate_project_ai_query(
     else:
         ws = we = None
 
-    # ✅ 질문에서 Task 이름 매칭 (질문 텍스트 기준)
+    # ✅ 질문에서 Task 이름 매칭 (부분 일치 지원)
     query_lower = req.query.lower().strip()
+    # 질문에서 불용어 제거 후 키워드 추출
+    _stopwords = {'의', '에', '는', '은', '을', '를', '이', '가', '과', '와', '도', '로', '으로',
+                  '에서', '까지', '부터', '대해', '관해', '관련', '어떻게', '얼마나', '언제',
+                  '현황', '상태', '진행', '알려줘', '보여줘', '뭐야', '뭔가요', '있어', '없어',
+                  '해줘', '할', '한', '하는', '된', '되는', '좀', '다', '그', '저', '이', '것'}
     query_matched_tasks = []
     for t in task_details:
         title = (t.get("title") or "").strip()
-        if title and (title.lower() in query_lower or title in req.query):
+        if not title:
+            continue
+        title_lower = title.lower()
+        # 1) 제목 전체가 질문에 포함
+        if title_lower in query_lower or title in req.query:
+            query_matched_tasks.append(t)
+            continue
+        # 2) 질문 키워드가 제목에 포함 (부분 일치)
+        query_words = [w for w in query_lower.split() if len(w) >= 2 and w not in _stopwords]
+        if query_words and any(w in title_lower for w in query_words):
             query_matched_tasks.append(t)
 
     # ✅ 질문 유형 판별
@@ -3583,7 +3597,7 @@ Task 간에는 빈 줄로 구분하세요.
             "members": member_names,
             "tasks": context_tasks,
             "filter": {
-                "mode": "time_window" if window else ("name_match" if matched_tasks else "fallback"),
+                "mode": "time_window" if window else ("name_match" if query_matched_tasks else "fallback"),
                 "window_start": ws.isoformat() if window else None,
                 "window_end": we.isoformat() if window else None,
             },
