@@ -1,4 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import Lottie from 'lottie-react';
+import pandaAnimation from '../assets/lottie/panda-waving.json';
 import {
   Box,
   List,
@@ -330,17 +332,22 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         {/* Logo */}
         <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box
-            component="img"
-            src="/panda.png"
-            alt="PLAN-A"
             sx={{
               width: 38,
               height: 38,
               borderRadius: '10px',
-              objectFit: 'cover',
+              overflow: 'hidden',
               flexShrink: 0,
+              bgcolor: 'transparent',
             }}
-          />
+          >
+            <Lottie
+              animationData={pandaAnimation}
+              loop
+              autoplay
+              style={{ width: '100%', height: '100%' }}
+            />
+          </Box>
           <Box sx={{ minWidth: 0 }}>
             <Typography
               variant="subtitle1"
