@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import Lottie from 'lottie-react';
-import pandaAnimation from '../assets/lottie/panda-select.json';
+import pandaAnimation from '../assets/lottie/calendar-animation.json';
 import {
   Box,
   Typography,
