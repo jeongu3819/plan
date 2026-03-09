@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Lottie from 'lottie-react';
 import pandaAnimation from '../assets/lottie/calendar-animation.json';
 import {
@@ -1027,13 +1027,110 @@ const HomePage: React.FC = () => {
     if (!displayOrder.includes(id)) displayOrder.push(id);
   });
 
+  /* ── Intro Animation State ── */
+  const [introPhase, setIntroPhase] = useState<'splash' | 'shrinking' | 'done'>(() =>
+    sessionStorage.getItem('plan-a-intro-done') ? 'done' : 'splash'
+  );
+  const headerLottieRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (introPhase === 'splash') {
+      const t1 = setTimeout(() => setIntroPhase('shrinking'), 1800);
+      return () => clearTimeout(t1);
+    }
+    if (introPhase === 'shrinking') {
+      const t2 = setTimeout(() => {
+        setIntroPhase('done');
+        sessionStorage.setItem('plan-a-intro-done', '1');
+      }, 900);
+      return () => clearTimeout(t2);
+    }
+  }, [introPhase]);
+
   return (
     <Box>
-      {/* ── Page Header with Shortcuts ── */}
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-        <Box sx={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 2 }}>
-          {/* Panda Lottie Animation */}
+      {/* ── Intro Splash Overlay ── */}
+      {introPhase !== 'done' && (
+        <Box
+          sx={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: '#FAFBFF',
+            transition: 'opacity 0.7s ease, visibility 0.7s ease',
+            opacity: introPhase === 'shrinking' ? 0 : 1,
+            visibility: introPhase === 'shrinking' ? 'hidden' : 'visible',
+          }}
+        >
+          {/* Big Calendar Lottie */}
           <Box
+            sx={{
+              width: { xs: 200, sm: 260 },
+              height: { xs: 200, sm: 260 },
+              transition: 'all 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
+              transform: introPhase === 'shrinking' ? 'scale(0.2) translateY(-40vh)' : 'scale(1)',
+              opacity: introPhase === 'shrinking' ? 0 : 1,
+            }}
+          >
+            <Lottie
+              animationData={pandaAnimation}
+              loop
+              autoplay
+              style={{ width: '100%', height: '100%' }}
+            />
+          </Box>
+          {/* Branding text */}
+          <Typography
+            variant="h3"
+            sx={{
+              mt: 3,
+              fontWeight: 900,
+              color: '#1A1D29',
+              letterSpacing: '-0.03em',
+              transition: 'all 0.6s ease',
+              opacity: introPhase === 'shrinking' ? 0 : 1,
+              transform: introPhase === 'shrinking' ? 'translateY(-20px)' : 'translateY(0)',
+            }}
+          >
+            PLAN-A
+          </Typography>
+          <Typography
+            variant="body1"
+            sx={{
+              mt: 1,
+              color: '#6B7280',
+              fontWeight: 500,
+              letterSpacing: '0.04em',
+              transition: 'all 0.5s ease 0.1s',
+              opacity: introPhase === 'shrinking' ? 0 : 1,
+              transform: introPhase === 'shrinking' ? 'translateY(-10px)' : 'translateY(0)',
+            }}
+          >
+            Organize your schedule, effortlessly.
+          </Typography>
+        </Box>
+      )}
+
+      {/* ── Page Header with Shortcuts ── */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          mb: 3,
+          opacity: introPhase === 'done' ? 1 : 0,
+          transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(12px)',
+          transition: 'opacity 0.5s ease 0.1s, transform 0.5s ease 0.1s',
+        }}
+      >
+        <Box sx={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 2 }}>
+          {/* Calendar Lottie Animation */}
+          <Box
+            ref={headerLottieRef}
             sx={{
               width: { xs: 52, sm: 60 },
               height: { xs: 52, sm: 60 },
@@ -1093,6 +1190,9 @@ const HomePage: React.FC = () => {
               display: 'grid',
               gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' },
               gap: 2,
+              opacity: introPhase === 'done' ? 1 : 0,
+              transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
+              transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
             }}
           >
             {displayOrder.map(wId => (
