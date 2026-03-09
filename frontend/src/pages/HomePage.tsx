@@ -38,6 +38,9 @@ import FolderIcon from '@mui/icons-material/Folder';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import CheckIcon from '@mui/icons-material/Check';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DashboardStats, ProjectStats, Shortcut, UserShortcut } from '../api/client';
 import { Task } from '../types';
@@ -228,6 +231,7 @@ const HomePage: React.FC = () => {
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [upcomingExpanded, setUpcomingExpanded] = useState(false);
+  const [hideDoneTasks, setHideDoneTasks] = useState(false);
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['stats', currentUserId],
@@ -340,15 +344,32 @@ const HomePage: React.FC = () => {
               transition: 'all 0.15s',
             }}
           >
-            <Box
-              sx={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                bgcolor: statusColors[task.status] || '#6B7280',
-                flexShrink: 0,
-              }}
-            />
+            {task.status === 'done' ? (
+              <Box
+                sx={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: '50%',
+                  bgcolor: '#22C55E',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <CheckIcon sx={{ fontSize: 11, color: '#fff' }} />
+              </Box>
+            ) : (
+              <Box
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  bgcolor: statusColors[task.status] || '#6B7280',
+                  flexShrink: 0,
+                }}
+              />
+            )}
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Typography
                 variant="body2"
@@ -654,13 +675,45 @@ const HomePage: React.FC = () => {
             {renderTaskList(stats?.upcoming, 'No upcoming tasks')}
           </>
         );
-      case 'mytasks':
+      case 'mytasks': {
+        const statusOrder: Record<string, number> = { in_progress: 0, todo: 1, done: 2, hold: 3 };
+        const sortedMyTasks = [...(stats?.my_tasks || [])]
+          .filter(t => !(hideDoneTasks && t.status === 'done'))
+          .sort((a, b) => {
+            const sa = statusOrder[a.status] ?? 2;
+            const sb = statusOrder[b.status] ?? 2;
+            if (sa !== sb) return sa - sb;
+            if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+            if (a.due_date) return -1;
+            if (b.due_date) return 1;
+            return 0;
+          });
+        const doneCount = (stats?.my_tasks || []).filter(t => t.status === 'done').length;
         return (
           <>
-            <WidgetHeader def={def} />
-            {renderTaskList(stats?.my_tasks, 'No tasks assigned to you')}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, px: 0.5 }}>
+              <Box sx={{ color: '#2955FF', display: 'flex' }}>
+                {React.cloneElement(def.icon as React.ReactElement, { sx: { fontSize: '1.1rem' } })}
+              </Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.85rem', flexGrow: 1 }}>
+                {def.title}
+              </Typography>
+              {doneCount > 0 && (
+                <Tooltip title={hideDoneTasks ? `완료된 태스크 보기 (${doneCount})` : '완료된 태스크 숨기기'}>
+                  <IconButton
+                    size="small"
+                    onClick={() => setHideDoneTasks(!hideDoneTasks)}
+                    sx={{ color: hideDoneTasks ? '#9CA3AF' : '#22C55E', p: 0.5 }}
+                  >
+                    {hideDoneTasks ? <VisibilityOffIcon sx={{ fontSize: '0.95rem' }} /> : <VisibilityIcon sx={{ fontSize: '0.95rem' }} />}
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
+            {renderTaskList(sortedMyTasks, 'No tasks assigned to you')}
           </>
         );
+      }
       case 'projects':
         return (
           <>
