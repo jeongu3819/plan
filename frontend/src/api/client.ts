@@ -104,6 +104,7 @@ export interface DashboardStats {
   todo: number;
   hold: number;
   project_stats: ProjectStats[];
+  all_tasks: Task[];
   overdue: Task[];
   upcoming: Task[];
   my_tasks: Task[];

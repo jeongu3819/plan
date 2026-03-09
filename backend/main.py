@@ -2606,14 +2606,31 @@ def get_stats(user_id: Optional[int] = None, db: Session = Depends(get_db)):
     project_rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
     projects = [project_dict(p, state) for p in project_rows]
 
-    # 권한 필터
+    # 권한 필터: 프로젝트 멤버(viewer 제외)인 경우만 표시
     if user_id:
-        authorized_pids = get_user_project_ids(db, state, user_id)
-        if not is_admin_like_role(get_user_role(db, user_id)):
-            public_pids = {p["id"] for p in projects if p.get("visibility") == "public"}
-            authorized_pids |= public_pids
-            tasks = [t for t in tasks if t.get("project_id") in authorized_pids]
-            projects = [p for p in projects if p["id"] in authorized_pids]
+        if is_admin_like_role(get_user_role(db, user_id)):
+            # admin은 전체 접근
+            pass
+        else:
+            # viewer가 아닌 멤버 역할의 프로젝트만 필터
+            member_pids = set()
+            db_memberships = db.query(ProjectMemberModel).filter(
+                ProjectMemberModel.user_id == int(user_id),
+                ProjectMemberModel.role != 'viewer'
+            ).all()
+            for m in db_memberships:
+                member_pids.add(m.project_id)
+            # sidecar fallback
+            for m in state.get("project_members", []):
+                if int(m.get("user_id")) == int(user_id) and m.get("role") != "viewer":
+                    member_pids.add(int(m.get("project_id")))
+            # owner
+            for p in projects:
+                meta = get_project_meta(state, p["id"])
+                if int(meta.get("owner_id") or 0) == int(user_id):
+                    member_pids.add(p["id"])
+            tasks = [t for t in tasks if t.get("project_id") in member_pids]
+            projects = [p for p in projects if p["id"] in member_pids]
 
     total = len(tasks)
     in_progress = len([t for t in tasks if t.get("status") == "in_progress"])
@@ -2654,6 +2671,7 @@ def get_stats(user_id: Optional[int] = None, db: Session = Depends(get_db)):
         "todo": todo,
         "hold": hold,
         "project_stats": project_stats,
+        "all_tasks": tasks,
         "overdue": overdue[:10],
         "upcoming": upcoming[:10],
         "my_tasks": my_tasks,

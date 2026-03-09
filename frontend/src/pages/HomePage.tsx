@@ -327,7 +327,7 @@ const HomePage: React.FC = () => {
       );
     }
     return (
-      <>
+      <Box sx={{ maxHeight: upcomingExpanded ? 320 : 'none', overflowY: upcomingExpanded ? 'auto' : 'visible', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
         {(upcomingExpanded ? tasks : tasks.slice(0, 5)).map(task => (
           <Box
             key={task.id}
@@ -419,6 +419,7 @@ const HomePage: React.FC = () => {
             />
           </Box>
         ))}
+      </Box>
         {tasks.length > 5 && (
           <Typography
             onClick={(e: React.MouseEvent) => {
@@ -467,18 +468,11 @@ const HomePage: React.FC = () => {
           Done: 'done',
           'To Do': 'todo',
         };
-        const allOverviewTasks: Task[] = [
-          ...(stats?.overdue || []),
-          ...(stats?.upcoming || []),
-          ...(stats?.my_tasks || []),
-        ];
-        const uniqueOverviewTasks = allOverviewTasks.filter(
-          (t, i, arr) => arr.findIndex(x => x.id === t.id) === i
-        );
+        const allOverviewTasks: Task[] = stats?.all_tasks || [];
         const filteredOverviewTasks =
           overviewFilter && overviewFilter !== 'all'
-            ? uniqueOverviewTasks.filter(t => t.status === overviewFilter)
-            : uniqueOverviewTasks;
+            ? allOverviewTasks.filter(t => t.status === overviewFilter)
+            : allOverviewTasks;
 
         return (
           <>
@@ -561,7 +555,8 @@ const HomePage: React.FC = () => {
                         No tasks
                       </Typography>
                     ) : (
-                      filteredOverviewTasks.slice(0, calExpanded ? undefined : 5).map(task => (
+                      <Box sx={{ maxHeight: calExpanded ? 280 : 'none', overflowY: calExpanded ? 'auto' : 'visible', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+                      {filteredOverviewTasks.slice(0, calExpanded ? undefined : 5).map(task => (
                         <Box
                           key={task.id}
                           onClick={() => openDrawer(task)}
@@ -607,6 +602,8 @@ const HomePage: React.FC = () => {
                           )}
                         </Box>
                       ))
+                      }
+                      </Box>
                     )}
                     {filteredOverviewTasks.length > 5 && (
                       <Typography
