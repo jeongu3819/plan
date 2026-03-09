@@ -31,6 +31,7 @@
     "dagre": "^0.8.5",
     "date-fns": "^3.3.1",
     "html2pdf.js": "^0.14.0",
+    "lottie-react": "^2.4.1",
     "lucide-react": "^0.323.0",
     "notistack": "^3.0.2",
     "react": "^18.3.1",

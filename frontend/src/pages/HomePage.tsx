@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import Lottie from 'lottie-react';
+import pandaAnimation from '../assets/lottie/panda-waving.json';
 import {
   Box,
   Typography,
@@ -1030,80 +1032,22 @@ const HomePage: React.FC = () => {
       {/* ── Page Header with Shortcuts ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
         <Box sx={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 2 }}>
-          {/* Panda Hero Animation */}
+          {/* Panda Lottie Animation */}
           <Box
             sx={{
-              position: 'relative',
-              width: 56,
-              height: 56,
+              width: { xs: 52, sm: 60 },
+              height: { xs: 52, sm: 60 },
               flexShrink: 0,
-              '@media (prefers-reduced-motion: reduce)': {
-                '& *': { animation: 'none !important' },
-              },
+              borderRadius: '14px',
+              overflow: 'hidden',
+              bgcolor: 'transparent',
             }}
           >
-            {/* Panda image with subtle float */}
-            <Box
-              component="img"
-              src="/panda.png"
-              alt="PLAN-A"
-              sx={{
-                width: 48,
-                height: 48,
-                borderRadius: '12px',
-                objectFit: 'cover',
-                position: 'relative',
-                zIndex: 2,
-                animation: 'pandaFloat 3s ease-in-out infinite',
-                '@keyframes pandaFloat': {
-                  '0%, 100%': { transform: 'translateY(0px)' },
-                  '50%': { transform: 'translateY(-3px)' },
-                },
-              }}
-            />
-            {/* Notebook icon - subtle writing motion */}
-            <Box
-              sx={{
-                position: 'absolute',
-                bottom: -2,
-                right: -4,
-                width: 22,
-                height: 22,
-                borderRadius: '6px',
-                bgcolor: '#EEF2FF',
-                border: '2px solid #fff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 3,
-                fontSize: '11px',
-                animation: 'noteWrite 2.5s ease-in-out infinite',
-                '@keyframes noteWrite': {
-                  '0%, 100%': { transform: 'rotate(0deg) scale(1)' },
-                  '30%': { transform: 'rotate(-5deg) scale(1.05)' },
-                  '60%': { transform: 'rotate(3deg) scale(1)' },
-                },
-              }}
-            >
-              📋
-            </Box>
-            {/* Sparkle accent */}
-            <Box
-              sx={{
-                position: 'absolute',
-                top: -2,
-                right: 2,
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                bgcolor: '#FBBF24',
-                zIndex: 3,
-                animation: 'sparkle 2s ease-in-out infinite',
-                '@keyframes sparkle': {
-                  '0%, 100%': { opacity: 0.3, transform: 'scale(0.8)' },
-                  '50%': { opacity: 1, transform: 'scale(1.2)' },
-                },
-              }}
+            <Lottie
+              animationData={pandaAnimation}
+              loop
+              autoplay
+              style={{ width: '100%', height: '100%' }}
             />
           </Box>
           <Box>
