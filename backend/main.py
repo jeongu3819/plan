@@ -2965,7 +2965,12 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
 
     sub_projects = get_subprojects_from_db(db, body.project_id)
     all_attachments = state.get("attachments", [])
-    members = [m for m in state.get("project_members", []) if int(m.get("project_id")) == body.project_id]
+    # DB 기준 멤버 (viewer 제외)
+    db_members = db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == body.project_id,
+        ProjectMemberModel.role != 'viewer'
+    ).all()
+    members = [{"user_id": m.user_id, "role": m.role, "project_id": m.project_id} for m in db_members]
     notes = [n for n in state.get("notes", []) if int(n.get("project_id")) == body.project_id]
     project_files = [f for f in state.get("project_files", []) if int(f.get("project_id")) == body.project_id]
 
@@ -3284,7 +3289,12 @@ def generate_project_ai_query(
     task_rows = db.query(Task).filter(Task.project_id == project_id, Task.archived_at.is_(None)).all()
     tasks = [task_dict(t, state) for t in task_rows]
 
-    members = [m for m in state.get("project_members", []) if int(m.get("project_id")) == project_id]
+    # DB 기준 멤버 (viewer 제외)
+    db_members = db.query(ProjectMemberModel).filter(
+        ProjectMemberModel.project_id == project_id,
+        ProjectMemberModel.role != 'viewer'
+    ).all()
+    members = [{"user_id": m.user_id, "role": m.role, "project_id": m.project_id} for m in db_members]
     sub_projects = get_subprojects_from_db(db, project_id)
     all_attachments = state.get("attachments", [])
 
