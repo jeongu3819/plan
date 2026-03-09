@@ -308,16 +308,25 @@ const KeyScheduleBlock: React.FC<{ text: string }> = ({ text }) => {
 /* ─── Numbered List Block: 번호 항목 + 일반 텍스트 혼합 렌더링 ─── */
 const NumberedListBlock: React.FC<{ text: string }> = ({ text }) => {
   const items = useMemo(() => {
-    return text
-      .split('\n')
-      .map(l => l.trim())
-      .filter(Boolean)
-      .map(l => {
-        const m = l.match(/^(\d+)\.\s+(.+)$/);
-        return m
-          ? { type: 'numbered' as const, num: m[1], content: cleanText(m[2]) }
-          : { type: 'plain' as const, num: '', content: cleanText(l) };
-      });
+    // 줄바꿈 분리 후, 긴 plain 텍스트는 문장 단위로 추가 분리
+    const rawLines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const result: { type: 'numbered' | 'plain'; num: string; content: string }[] = [];
+    for (const l of rawLines) {
+      const m = l.match(/^(\d+)\.\s+(.+)$/);
+      if (m) {
+        result.push({ type: 'numbered', num: m[1], content: cleanText(m[2]) });
+      } else {
+        // 문장 단위로 분리 (마침표/물음표/느낌표 + 공백 기준)
+        const sentences = cleanText(l)
+          .split(/(?<=[.다요임음됨함!?])\s+/)
+          .map(s => s.trim())
+          .filter(Boolean);
+        for (const s of sentences) {
+          result.push({ type: 'plain', num: '', content: s });
+        }
+      }
+    }
+    return result;
   }, [text]);
 
   if (items.length === 0) return null;

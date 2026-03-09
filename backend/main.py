@@ -3595,6 +3595,20 @@ Task 간에는 빈 줄로 구분하세요.
         db.commit()
         db.refresh(db_record)
 
+        # 특정 Task 질문 시 해당 Task 담당자만 표시
+        if query_matched_tasks:
+            task_assignee_ids = set()
+            for t in query_matched_tasks:
+                for aid in (t.get("assignee_ids") or []):
+                    task_assignee_ids.add(int(aid))
+            context_members = [
+                f'{users_map[uid]["username"]} ({users_map[uid].get("role", "member")})'
+                for uid in task_assignee_ids
+                if uid in users_map
+            ] if task_assignee_ids else member_names
+        else:
+            context_members = member_names
+
         context = {
             "status_breakdown": {
                 "total": len(context_tasks),
@@ -3605,7 +3619,7 @@ Task 간에는 빈 줄로 구분하세요.
                 "hold": len(hold_tasks),
                 "overall_progress": overall_progress,
             },
-            "members": member_names,
+            "members": context_members,
             "tasks": context_tasks,
             "filter": {
                 "mode": "time_window" if window else ("name_match" if query_matched_tasks else "fallback"),
