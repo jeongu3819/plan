@@ -303,6 +303,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 size="small"
                                 onMouseDown={(e) => {
                                     e.preventDefault();
+                                    e.stopPropagation();
                                     onShowColorPicker(showColorPicker === block.id ? null : block.id);
                                 }}
                                 sx={{ color: '#9CA3AF', p: 0.4, '&:hover': { color: '#2955FF' } }}
@@ -323,6 +324,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                         key={c}
                                         onMouseDown={(e) => {
                                             e.preventDefault();
+                                            e.stopPropagation();
                                             restoreSelection(savedSelection.current);
                                             setTimeout(() => {
                                                 document.execCommand('foreColor', false, c);
@@ -540,10 +542,11 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     useEffect(() => {
         if (showColorPicker === null) return;
         const handler = () => setShowColorPicker(null);
-        const timer = setTimeout(() => document.addEventListener('click', handler), 0);
+        // Use mousedown so it doesn't conflict with onMouseDown handlers that stopPropagation
+        const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0);
         return () => {
             clearTimeout(timer);
-            document.removeEventListener('click', handler);
+            document.removeEventListener('mousedown', handler);
         };
     }, [showColorPicker]);
 
