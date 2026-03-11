@@ -227,10 +227,8 @@ const HomePage: React.FC = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   const [calMonth, setCalMonth] = useState(new Date());
-  const [calExpanded, setCalExpanded] = useState(false);
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [upcomingExpanded, setUpcomingExpanded] = useState(false);
   const [hideDoneTasks, setHideDoneTasks] = useState(false);
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
@@ -327,9 +325,8 @@ const HomePage: React.FC = () => {
       );
     }
     return (
-      <>
-      <Box sx={{ maxHeight: upcomingExpanded ? 320 : 'none', overflowY: upcomingExpanded ? 'auto' : 'visible', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
-        {(upcomingExpanded ? tasks : tasks.slice(0, 5)).map(task => (
+      <Box sx={{ maxHeight: 400, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+        {tasks.map(task => (
           <Box
             key={task.id}
             onClick={() => openDrawer(task)}
@@ -421,27 +418,6 @@ const HomePage: React.FC = () => {
           </Box>
         ))}
       </Box>
-        {tasks.length > 5 && (
-          <Typography
-            onClick={(e: React.MouseEvent) => {
-              e.stopPropagation();
-              setUpcomingExpanded(!upcomingExpanded);
-            }}
-            sx={{
-              fontSize: '0.7rem',
-              color: '#2955FF',
-              fontWeight: 600,
-              cursor: 'pointer',
-              textAlign: 'center',
-              py: 0.5,
-              mt: 0.5,
-              '&:hover': { textDecoration: 'underline' },
-            }}
-          >
-            {upcomingExpanded ? '접기' : `더보기 (+${tasks.length - 5})`}
-          </Typography>
-        )}
-      </>
     );
   };
 
@@ -556,8 +532,8 @@ const HomePage: React.FC = () => {
                         No tasks
                       </Typography>
                     ) : (
-                      <Box sx={{ maxHeight: calExpanded ? 280 : 'none', overflowY: calExpanded ? 'auto' : 'visible', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
-                      {filteredOverviewTasks.slice(0, calExpanded ? undefined : 5).map(task => (
+                      <Box sx={{ maxHeight: 320, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+                      {filteredOverviewTasks.map(task => (
                         <Box
                           key={task.id}
                           onClick={() => openDrawer(task)}
@@ -605,26 +581,6 @@ const HomePage: React.FC = () => {
                       ))
                       }
                       </Box>
-                    )}
-                    {filteredOverviewTasks.length > 5 && (
-                      <Typography
-                        onClick={e => {
-                          e.stopPropagation();
-                          setCalExpanded(!calExpanded);
-                        }}
-                        sx={{
-                          fontSize: '0.7rem',
-                          color: '#2955FF',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          textAlign: 'center',
-                          py: 0.5,
-                          mt: 0.5,
-                          '&:hover': { textDecoration: 'underline' },
-                        }}
-                      >
-                        {calExpanded ? '접기' : `더보기 (+${filteredOverviewTasks.length - 5})`}
-                      </Typography>
                     )}
                   </Box>
                 )}
@@ -786,8 +742,6 @@ const HomePage: React.FC = () => {
         const displayEvents = selectedDate
           ? taskEvents.filter(ev => isSameDay(ev.date, selectedDate))
           : taskEvents;
-        const showLimit = 4;
-        const hasMore = displayEvents.length > showLimit;
 
         return (
           <>
@@ -882,7 +836,6 @@ const HomePage: React.FC = () => {
                       onClick={() => {
                         if (dayTasks.length > 0) {
                           setSelectedDate(prev => (prev && isSameDay(prev, day) ? null : day));
-                          setCalExpanded(false);
                         }
                       }}
                       sx={{
@@ -997,8 +950,8 @@ const HomePage: React.FC = () => {
                     </Typography>
                   </Box>
                 )}
-                <Box>
-                  {(calExpanded ? displayEvents : displayEvents.slice(0, showLimit)).map(
+                <Box sx={{ maxHeight: 320, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+                  {displayEvents.map(
                     (ev, idx) => (
                       <Box
                         key={idx}
@@ -1042,23 +995,6 @@ const HomePage: React.FC = () => {
                         </Typography>
                       </Box>
                     )
-                  )}
-                  {hasMore && (
-                    <Typography
-                      onClick={() => setCalExpanded(!calExpanded)}
-                      sx={{
-                        fontSize: '0.7rem',
-                        color: '#2955FF',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        textAlign: 'center',
-                        py: 0.5,
-                        mt: 0.5,
-                        '&:hover': { textDecoration: 'underline' },
-                      }}
-                    >
-                      {calExpanded ? '접기' : `더보기 (+${displayEvents.length - showLimit})`}
-                    </Typography>
                   )}
                 </Box>
               </>

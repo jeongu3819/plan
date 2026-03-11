@@ -284,8 +284,8 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
   const dateRange = useMemo(() => {
     let start: Date, end: Date;
     if (viewMode === 'month') {
-      start = startOfYear(today);
-      end = endOfYear(today);
+      start = startOfMonth(subMonths(today, 3));
+      end = endOfMonth(addMonths(today, 3));
     } else if (viewMode === 'week') {
       // Past 2 months + future 3 months for scrollable week view
       start = startOfWeek(startOfMonth(subMonths(today, 2)), { weekStartsOn: 1 });
@@ -521,6 +521,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                   const todayOffset = differenceInDays(today, rangeStart);
                   if (todayOffset >= 0 && todayOffset < totalDays) {
                     const leftPct = `${(todayOffset / totalDays) * 100}%`;
+                    const isProject = item.type === 'project';
                     const showLabel = !todayLabelShown;
                     if (showLabel) todayLabelShown = true;
                     return (
@@ -535,16 +536,19 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                       >
                         {showLabel && (
                           <Box sx={{
-                            position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)',
-                            fontSize: '0.55rem', fontWeight: 700, color: '#EF4444',
+                            position: 'absolute', top: '50%', transform: 'translateY(-50%) translateX(-50%)',
+                            left: '50%',
+                            fontSize: '0.55rem', fontWeight: 700, color: 'rgba(239, 68, 68, 0.7)',
                             whiteSpace: 'nowrap', lineHeight: 1, letterSpacing: '-0.02em',
+                            bgcolor: 'rgba(239, 68, 68, 0.08)', px: 0.5, py: 0.2, borderRadius: 0.5,
                           }}>
                             {`${today.getMonth() + 1}/${today.getDate()}`}
                           </Box>
                         )}
                         <Box sx={{
-                          position: 'absolute', top: showLabel ? 8 : 0, bottom: 0, left: 0,
-                          width: 2, bgcolor: '#EF4444', opacity: 0.6,
+                          position: 'absolute', top: 0, bottom: 0, left: 0,
+                          width: isProject ? 2 : 1.5, bgcolor: '#EF4444',
+                          opacity: isProject ? 0.35 : 0.2,
                         }} />
                       </Box>
                     );
@@ -929,7 +933,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         </Box>
 
         {/* Body rows */}
-        <Box sx={{ maxHeight: 'calc(100vh - 320px)', overflowY: 'auto' }}>
+        <Box sx={{ overflowY: 'auto' }}>
           {displayItems.length === 0 ? (
             <Box sx={{ p: 6, textAlign: 'center' }}>
               <Typography variant="body2" color="textSecondary">

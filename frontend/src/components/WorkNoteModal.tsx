@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-    Dialog, Box, Typography, IconButton, LinearProgress, TextField,
+    Dialog, Box, Typography, IconButton, LinearProgress,
     Tooltip, ToggleButton,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -9,6 +9,7 @@ import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import CheckBoxOutlinedIcon from '@mui/icons-material/CheckBoxOutlined';
 import SubjectIcon from '@mui/icons-material/Subject';
 import FormatBoldIcon from '@mui/icons-material/FormatBold';
+import FormatColorTextIcon from '@mui/icons-material/FormatColorText';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import AddIcon from '@mui/icons-material/Add';
@@ -41,25 +42,36 @@ interface SortableBlockProps {
     canEdit: boolean;
     focusedBlockId: number | null;
     onCheck: (block: TaskActivity) => void;
-    onBlur: (block: TaskActivity, value: string) => void;
+    onContentChange: (block: TaskActivity, html: string) => void;
     onFocus: (id: number) => void;
     onKeyDown: (e: React.KeyboardEvent, block: TaskActivity, index: number) => void;
     onToggleType: (block: TaskActivity) => void;
-    onToggleBold: (block: TaskActivity) => void;
-    onSetColor: (block: TaskActivity, color: string) => void;
     onDelete: (id: number) => void;
     onInsertAfter: (index: number, type: 'checkbox' | 'text') => void;
-    blockRefs: React.MutableRefObject<Map<number, HTMLInputElement>>;
+    blockRefs: React.MutableRefObject<Map<number, HTMLDivElement>>;
+    showColorPicker: number | null;
+    onShowColorPicker: (id: number | null) => void;
 }
+
+/** Apply execCommand-based formatting to the current selection */
+const applyBold = () => {
+    document.execCommand('bold', false);
+};
+
+const applyColor = (color: string) => {
+    document.execCommand('foreColor', false, color);
+};
 
 const SortableBlock: React.FC<SortableBlockProps> = ({
     block, index, canEdit, focusedBlockId,
-    onCheck, onBlur, onFocus, onKeyDown, onToggleType, onToggleBold, onSetColor, onDelete, onInsertAfter,
-    blockRefs,
+    onCheck, onContentChange, onFocus, onKeyDown, onToggleType, onDelete, onInsertAfter,
+    blockRefs, showColorPicker, onShowColorPicker,
 }) => {
     const {
         attributes, listeners, setNodeRef, transform, transition, isDragging,
     } = useSortable({ id: block.id, disabled: !canEdit });
+    const contentRef = useRef<HTMLDivElement>(null);
+    const lastSavedContent = useRef(block.content);
 
     const style = {
         transform: CSS.Transform.toString(transform),
@@ -67,6 +79,51 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         opacity: isDragging ? 0.4 : 1,
         zIndex: isDragging ? 10 : 'auto' as any,
     };
+
+    // Sync content from server only when block.content actually changes externally
+    useEffect(() => {
+        if (contentRef.current && block.content !== lastSavedContent.current) {
+            contentRef.current.innerHTML = block.content || '';
+            lastSavedContent.current = block.content;
+        }
+    }, [block.content]);
+
+    // Initialize content on mount
+    useEffect(() => {
+        if (contentRef.current && !contentRef.current.innerHTML && block.content) {
+            contentRef.current.innerHTML = block.content;
+        }
+    }, []);
+
+    const handleBlur = () => {
+        if (!contentRef.current) return;
+        const html = contentRef.current.innerHTML;
+        // Normalize: treat <br> only or empty as ''
+        const normalized = html.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/gi, '').trim();
+        const content = normalized === '' ? '' : html;
+        if (content !== lastSavedContent.current) {
+            lastSavedContent.current = content;
+            onContentChange(block, content);
+        }
+    };
+
+    const handleKeyDownInternal = (e: React.KeyboardEvent) => {
+        // Ctrl+B for bold on selected text
+        if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+            e.preventDefault();
+            applyBold();
+            return;
+        }
+        onKeyDown(e, block, index);
+    };
+
+    // Register ref for focus management
+    useEffect(() => {
+        if (contentRef.current) {
+            blockRefs.current.set(block.id, contentRef.current);
+        }
+        return () => { blockRefs.current.delete(block.id); };
+    }, [block.id]);
 
     return (
         <Box ref={setNodeRef} style={style}>
@@ -119,35 +176,39 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     )}
                 </Box>
 
-                {/* Content */}
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <TextField
-                        inputRef={(el: HTMLInputElement | null) => {
-                            if (el) blockRefs.current.set(block.id, el);
-                            else blockRefs.current.delete(block.id);
-                        }}
-                        variant="standard"
-                        fullWidth
-                        multiline
-                        defaultValue={block.content}
-                        key={`${block.id}-${block.content}`}
-                        placeholder={block.block_type === 'checkbox' ? '체크리스트 항목...' : '메모를 작성하세요...'}
-                        onBlur={e => onBlur(block, e.target.value)}
+                {/* Content - Rich text editable */}
+                <Box sx={{ flex: 1, minWidth: 0, position: 'relative' }}>
+                    <Box
+                        ref={contentRef}
+                        contentEditable={canEdit}
+                        suppressContentEditableWarning
+                        onBlur={handleBlur}
                         onFocus={() => onFocus(block.id)}
-                        onKeyDown={e => canEdit && onKeyDown(e, block, index)}
-                        disabled={!canEdit}
-                        InputProps={{
-                            disableUnderline: true,
-                            sx: {
-                                fontSize: '0.9rem',
-                                lineHeight: 1.6,
-                                py: 0.3,
-                                textDecoration: block.block_type === 'checkbox' && block.checked ? 'line-through' : 'none',
-                                color: block.block_type === 'checkbox' && block.checked
-                                    ? '#9CA3AF'
-                                    : block.style?.color || '#374151',
-                                fontWeight: block.style?.bold ? 700 : 400,
+                        onKeyDown={e => canEdit && handleKeyDownInternal(e)}
+                        data-placeholder={block.block_type === 'checkbox' ? '체크리스트 항목...' : '메모를 작성하세요...'}
+                        sx={{
+                            fontSize: '0.9rem',
+                            lineHeight: 1.8,
+                            py: 0.3,
+                            px: 0.5,
+                            minHeight: '1.8em',
+                            outline: 'none',
+                            borderRadius: 1,
+                            transition: 'background 0.15s',
+                            wordBreak: 'break-word',
+                            whiteSpace: 'pre-wrap',
+                            textDecoration: block.block_type === 'checkbox' && block.checked ? 'line-through' : 'none',
+                            opacity: block.block_type === 'checkbox' && block.checked ? 0.5 : 1,
+                            color: '#374151',
+                            '&:focus': {
+                                bgcolor: 'rgba(41,85,255,0.03)',
                             },
+                            '&:empty::before': {
+                                content: 'attr(data-placeholder)',
+                                color: '#D1D5DB',
+                                pointerEvents: 'none',
+                            },
+                            '& b, & strong': { fontWeight: 700 },
                         }}
                     />
                 </Box>
@@ -161,6 +222,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             opacity: focusedBlockId === block.id ? 1 : 0,
                             transition: 'opacity 0.15s',
                             pt: 0.3,
+                            position: 'relative',
                         }}
                     >
                         <Tooltip title={block.block_type === 'checkbox' ? '텍스트로 변환' : '체크박스로 변환'} arrow>
@@ -171,30 +233,57 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 }
                             </IconButton>
                         </Tooltip>
-                        <Tooltip title="굵게" arrow>
+                        <Tooltip title="굵게 (Ctrl+B)" arrow>
                             <IconButton
                                 size="small"
-                                onClick={() => onToggleBold(block)}
-                                sx={{ color: block.style?.bold ? '#2955FF' : '#9CA3AF', p: 0.4 }}
+                                onMouseDown={(e) => {
+                                    e.preventDefault(); // prevent losing selection
+                                    applyBold();
+                                }}
+                                sx={{ color: '#9CA3AF', p: 0.4, '&:hover': { color: '#2955FF' } }}
                             >
                                 <FormatBoldIcon sx={{ fontSize: '0.85rem' }} />
                             </IconButton>
                         </Tooltip>
-                        <Box sx={{ display: 'flex', gap: 0.2, mx: 0.3 }}>
-                            {COLORS.map(c => (
-                                <Box
-                                    key={c}
-                                    onClick={() => onSetColor(block, c)}
-                                    sx={{
-                                        width: 12, height: 12, borderRadius: '50%',
-                                        bgcolor: c, cursor: 'pointer',
-                                        border: (block.style?.color || '#374151') === c ? '2px solid #2955FF' : '1px solid #E5E7EB',
-                                        transition: 'transform 0.1s',
-                                        '&:hover': { transform: 'scale(1.3)' },
-                                    }}
-                                />
-                            ))}
-                        </Box>
+                        <Tooltip title="텍스트 색상" arrow>
+                            <IconButton
+                                size="small"
+                                onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    onShowColorPicker(showColorPicker === block.id ? null : block.id);
+                                }}
+                                sx={{ color: '#9CA3AF', p: 0.4, '&:hover': { color: '#2955FF' } }}
+                            >
+                                <FormatColorTextIcon sx={{ fontSize: '0.85rem' }} />
+                            </IconButton>
+                        </Tooltip>
+                        {/* Color picker dropdown */}
+                        {showColorPicker === block.id && (
+                            <Box sx={{
+                                position: 'absolute', top: '100%', right: 0, zIndex: 20,
+                                display: 'flex', gap: 0.4, p: 0.8,
+                                bgcolor: '#fff', borderRadius: 2, boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
+                                border: '1px solid #E5E7EB',
+                            }}>
+                                {COLORS.map(c => (
+                                    <Box
+                                        key={c}
+                                        onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            applyColor(c);
+                                            onShowColorPicker(null);
+                                        }}
+                                        sx={{
+                                            width: 16, height: 16, borderRadius: '50%',
+                                            bgcolor: c, cursor: 'pointer',
+                                            border: '1px solid #E5E7EB',
+                                            transition: 'transform 0.1s',
+                                            '&:hover': { transform: 'scale(1.3)' },
+                                        }}
+                                    />
+                                ))}
+                            </Box>
+                        )}
                         <Tooltip title="삭제" arrow>
                             <IconButton
                                 size="small"
@@ -247,7 +336,8 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
 const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, taskTitle, canEdit }) => {
     const queryClient = useQueryClient();
     const [focusedBlockId, setFocusedBlockId] = useState<number | null>(null);
-    const blockRefs = useRef<Map<number, HTMLInputElement>>(new Map());
+    const [showColorPicker, setShowColorPicker] = useState<number | null>(null);
+    const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map());
     const pendingFocusRef = useRef<number | null>(null);
 
     const { data: blocks = [] } = useQuery<TaskActivity[]>({
@@ -294,7 +384,16 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
             if (found) {
                 setTimeout(() => {
                     const el = blockRefs.current.get(targetId);
-                    if (el) el.focus();
+                    if (el) {
+                        el.focus();
+                        // Place cursor at end
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        range.collapse(false);
+                        const sel = window.getSelection();
+                        sel?.removeAllRanges();
+                        sel?.addRange(range);
+                    }
                 }, 50);
                 pendingFocusRef.current = null;
             }
@@ -318,21 +417,32 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
 
     const handleKeyDown = (e: React.KeyboardEvent, block: TaskActivity, index: number) => {
         if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            const orderIndex = block.order_index + 1;
-            createMut.mutate({ content: '', block_type: block.block_type, order_index: orderIndex });
+            // Checkbox blocks: Enter creates a new checkbox block
+            if (block.block_type === 'checkbox') {
+                e.preventDefault();
+                const orderIndex = block.order_index + 1;
+                createMut.mutate({ content: '', block_type: 'checkbox', order_index: orderIndex });
+            }
+            // Text blocks: Enter = natural new line (don't prevent default)
         }
         if (e.key === 'Backspace') {
-            const input = e.target as HTMLInputElement;
-            if (input.value === '' && blocks.length > 1) {
+            const el = e.target as HTMLDivElement;
+            const text = el.textContent || '';
+            if (text === '' && blocks.length > 1) {
                 e.preventDefault();
                 if (index > 0) {
                     const prevId = blocks[index - 1].id;
                     setTimeout(() => {
-                        const el = blockRefs.current.get(prevId);
-                        if (el) {
-                            el.focus();
-                            el.setSelectionRange(el.value.length, el.value.length);
+                        const prevEl = blockRefs.current.get(prevId);
+                        if (prevEl) {
+                            prevEl.focus();
+                            // Place cursor at end
+                            const range = document.createRange();
+                            range.selectNodeContents(prevEl);
+                            range.collapse(false);
+                            const sel = window.getSelection();
+                            sel?.removeAllRanges();
+                            sel?.addRange(range);
                         }
                     }, 50);
                 }
@@ -341,18 +451,8 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         }
     };
 
-    const toggleBold = (block: TaskActivity) => {
-        updateMut.mutate({
-            id: block.id,
-            style: { ...block.style, bold: !block.style?.bold },
-        });
-    };
-
-    const setColor = (block: TaskActivity, color: string) => {
-        updateMut.mutate({
-            id: block.id,
-            style: { ...block.style, color: color === '#374151' ? undefined : color },
-        });
+    const handleContentChange = (block: TaskActivity, html: string) => {
+        updateMut.mutate({ id: block.id, content: html });
     };
 
     const toggleBlockType = (block: TaskActivity) => {
@@ -378,6 +478,17 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         const newOrder = arrayMove(blocks.map(b => b.id), oldIndex, newIndex);
         reorderMut.mutate(newOrder);
     };
+
+    // Close color picker when clicking outside
+    useEffect(() => {
+        if (showColorPicker === null) return;
+        const handler = () => setShowColorPicker(null);
+        const timer = setTimeout(() => document.addEventListener('click', handler), 0);
+        return () => {
+            clearTimeout(timer);
+            document.removeEventListener('click', handler);
+        };
+    }, [showColorPicker]);
 
     return (
         <Dialog
@@ -475,17 +586,15 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                                 canEdit={canEdit}
                                 focusedBlockId={focusedBlockId}
                                 onCheck={(b) => updateMut.mutate({ id: b.id, checked: !b.checked })}
-                                onBlur={(b, val) => {
-                                    if (val !== b.content) updateMut.mutate({ id: b.id, content: val });
-                                }}
+                                onContentChange={handleContentChange}
                                 onFocus={setFocusedBlockId}
                                 onKeyDown={handleKeyDown}
                                 onToggleType={toggleBlockType}
-                                onToggleBold={toggleBold}
-                                onSetColor={setColor}
                                 onDelete={(id) => deleteMut.mutate(id)}
                                 onInsertAfter={insertAfter}
                                 blockRefs={blockRefs}
+                                showColorPicker={showColorPicker}
+                                onShowColorPicker={setShowColorPicker}
                             />
                         ))}
                     </SortableContext>
