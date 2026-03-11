@@ -3269,6 +3269,353 @@ def delete_report_data(
 # =========================
 # AI Project Q&A
 # =========================
+# ═══════════════════════════════════════════════════════════════
+# AI 자유 질문 - Structured Data Query + LLM Formatting
+# ═══════════════════════════════════════════════════════════════
+
+def _resolve_question_scope(query: str, task_details: list, today) -> dict:
+    """질문 대상(scope) 판별: project / task / assignee / schedule / notes"""
+    query_lower = query.lower().strip()
+
+    _stopwords = {'의', '에', '는', '은', '을', '를', '이', '가', '과', '와', '도', '로', '으로',
+                  '에서', '까지', '부터', '대해', '관해', '관련', '어떻게', '얼마나', '언제',
+                  '현황', '상태', '진행', '알려줘', '보여줘', '뭐야', '뭔가요', '있어', '없어',
+                  '해줘', '할', '한', '하는', '된', '되는', '좀', '다', '그', '저', '이', '것'}
+
+    # 1) Task 이름 매칭
+    query_matched_tasks = []
+    for t in task_details:
+        title = (t.get("title") or "").strip()
+        if not title:
+            continue
+        title_lower = title.lower()
+        if title_lower in query_lower or title in query:
+            query_matched_tasks.append(t)
+            continue
+        query_words = [w for w in query_lower.split() if len(w) >= 2 and w not in _stopwords]
+        if query_words and any(w in title_lower for w in query_words):
+            query_matched_tasks.append(t)
+
+    # 2) 기간 매칭
+    window = _parse_time_window_from_query(query, today)
+
+    # 3) 전체 현황 키워드
+    is_full_overview = any(kw in query_lower for kw in [
+        "전체 현황", "프로젝트 현황", "전체 요약", "전체 상태", "전체 진행",
+        "프로젝트 상태", "프로젝트 진행", "프로젝트 요약", "전반적",
+    ])
+
+    # 4) 담당자 관련 키워드
+    is_assignee_query = any(kw in query_lower for kw in [
+        "담당자", "담당", "누가", "맡고", "배정", "할당",
+    ])
+
+    # scope 결정
+    if query_matched_tasks:
+        scope_type = "task"
+    elif window:
+        scope_type = "schedule"
+    elif is_full_overview:
+        scope_type = "project"
+    elif is_assignee_query:
+        scope_type = "assignee"
+    else:
+        scope_type = "general"
+
+    return {
+        "scope_type": scope_type,
+        "matched_tasks": query_matched_tasks,
+        "window": window,
+        "is_full_overview": is_full_overview,
+        "is_assignee_query": is_assignee_query,
+        "query_lower": query_lower,
+    }
+
+
+def _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes):
+    """프로젝트 수준 컨텍스트: 프로젝트 전체 정보 수집"""
+    member_lines = []
+    for m in members:
+        role = m.get("role", "member")
+        if role == "viewer":
+            continue
+        uid = int(m.get("user_id"))
+        u = users_map.get(uid)
+        if u:
+            dept = u.get("deptname", "") or ""
+            dept_str = f" ({dept})" if dept else ""
+            member_lines.append(f"  - {u['username']}{dept_str} [{role}]")
+
+    sp_lines = []
+    for sp in sub_projects:
+        sp_name = sp.get("name", "")
+        sp_desc = sp.get("description", "")
+        sp_tasks = [t for t in task_details if t.get("sub_project") == sp_name]
+        done_count = sum(1 for t in sp_tasks if t.get("status") == "done")
+        sp_lines.append(f"  - {sp_name}: {len(sp_tasks)}개 task ({done_count}개 완료)")
+        if sp_desc:
+            sp_lines.append(f"    설명: {sp_desc}")
+
+    note_lines = []
+    for n in project_notes[:10]:
+        author = n.get("author_name", "")
+        content = (n.get("content", "") or "")[:300]
+        created = n.get("created_at", "")[:10] if n.get("created_at") else ""
+        note_lines.append(f"  - [{created}] {author}: {content}")
+
+    # Task 요약 (전체 현황용)
+    total = len(task_details)
+    done = sum(1 for t in task_details if t.get("status") == "done")
+    in_prog = sum(1 for t in task_details if t.get("status") == "in_progress")
+    todo = sum(1 for t in task_details if t.get("status") == "todo")
+    hold = sum(1 for t in task_details if t.get("status") == "hold")
+
+    ctx = f"""[프로젝트 정보]
+프로젝트명: {project.name}
+설명: {project.description or "없음"}
+전체 Task: {total}개 (완료 {done}, 진행중 {in_prog}, 대기 {todo}, 보류 {hold})
+
+[팀원 ({len(member_lines)}명)]
+{chr(10).join(member_lines) if member_lines else "  없음"}
+"""
+    if sp_lines:
+        ctx += f"\n[서브프로젝트]\n{chr(10).join(sp_lines)}\n"
+    if note_lines:
+        ctx += f"\n[프로젝트 노트 (최근 10개)]\n{chr(10).join(note_lines)}\n"
+    return ctx
+
+
+def _fetch_task_context_detail(t: dict, users_map: dict, db, include_full_text=True) -> str:
+    """개별 Task 상세 컨텍스트 (자유 질문용 - 풍부한 텍스트 포함)"""
+    lines = []
+    lines.append(f"[Task: {t['title']}]")
+    lines.append(f"  상태: {t['status']}")
+    lines.append(f"  우선순위: {t['priority']}")
+    lines.append(f"  진행률: {t['progress']}%")
+    lines.append(f"  시작일: {t.get('start_date') or '미정'}")
+    lines.append(f"  마감일: {t.get('due_date') or '미정'}")
+
+    # 담당자 (assignee 기준)
+    if t.get("assignees"):
+        lines.append(f"  담당자: {', '.join(t['assignees'])}")
+    else:
+        lines.append(f"  담당자: 미배정")
+
+    # 서브프로젝트
+    if t.get("sub_project"):
+        lines.append(f"  서브프로젝트: {t['sub_project']}")
+
+    # 태그
+    if t.get("tags"):
+        lines.append(f"  태그: {', '.join(t['tags'])}")
+
+    # 설명 (description) - 전문 포함
+    desc = (t.get("description") or "").strip()
+    if desc:
+        if include_full_text:
+            lines.append(f"  설명:\n    {desc}")
+        else:
+            lines.append(f"  설명: {desc[:200]}{'...' if len(desc) > 200 else ''}")
+
+    # 작업노트 (activity) - 전문 포함
+    activity_items = t.get("activity_items", [])
+    if activity_items:
+        total_cb = t.get("activity_total", 0)
+        checked_cb = t.get("activity_checked", 0)
+        lines.append(f"  작업노트: 체크리스트 {total_cb}개 중 {checked_cb}개 완료")
+        cb_idx = 0
+        for item in activity_items:
+            if item["type"] == "checkbox":
+                cb_idx += 1
+                mark = "완료" if item["checked"] else "미완료"
+                content = (item.get("content") or "").strip()
+                # HTML 태그 제거 (간단)
+                import re
+                content = re.sub(r'<[^>]+>', '', content)
+                lines.append(f"    {cb_idx}. {content} ({mark})")
+            else:
+                content = (item.get("content") or "").strip()
+                if content:
+                    import re
+                    content = re.sub(r'<[^>]+>', '', content)
+                    if include_full_text:
+                        lines.append(f"    (메모) {content}")
+                    else:
+                        lines.append(f"    (메모) {content[:200]}{'...' if len(content) > 200 else ''}")
+
+    # 첨부파일/URL
+    attachments = t.get("attachments", [])
+    if attachments:
+        lines.append(f"  첨부/참조자료:")
+        for a in attachments:
+            fname = a.get("filename") or a.get("url", "")
+            url = a.get("url", "")
+            if url:
+                lines.append(f"    - {fname}: {url}")
+            else:
+                lines.append(f"    - {fname}")
+
+    return "\n".join(lines)
+
+
+def _build_ai_free_question_context(
+    scope: dict, db, project, sub_projects, members, users_map,
+    task_details, project_notes, today
+) -> tuple:
+    """질문 scope에 따라 컨텍스트 문자열, scope_hint, prompt_tasks, context_members 생성"""
+    import re
+    scope_type = scope["scope_type"]
+    matched_tasks = scope["matched_tasks"]
+    window = scope["window"]
+    is_full_overview = scope["is_full_overview"]
+    ws = we = None
+
+    # ── scope별 prompt_tasks / context 결정 ──
+    if scope_type == "task" and matched_tasks:
+        prompt_tasks = matched_tasks
+        scope_hint = (
+            f"\n[범위 제약]\n"
+            f"사용자가 특정 Task({', '.join(t['title'] for t in matched_tasks)})에 대해 질문했습니다.\n"
+            f"해당 Task 중심으로만 상세하게 답변하세요. 다른 Task는 언급하지 마세요.\n"
+            f"제목만 말하지 말고, 아래 컨텍스트에 포함된 설명/작업노트/메모/일정/담당자/참조자료를 최대한 활용해서 풍부하게 설명하세요.\n"
+        )
+        # Task 질문: 해당 task assignees만
+        task_assignee_ids = set()
+        for t in matched_tasks:
+            for aid in (t.get("assignee_ids") or []):
+                task_assignee_ids.add(int(aid))
+        if task_assignee_ids:
+            context_members = []
+            for uid in task_assignee_ids:
+                u = users_map.get(uid)
+                if u:
+                    dept = u.get("deptname", "") or ""
+                    dept_str = f" ({dept})" if dept else ""
+                    context_members.append(f"{u['username']}{dept_str}")
+        else:
+            context_members = ["미배정"]
+
+        # 상세 컨텍스트 빌드
+        task_ctx_lines = []
+        for t in matched_tasks:
+            task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=True))
+
+        context_str = f"""프로젝트명: {project.name}
+프로젝트 설명: {project.description or "없음"}
+
+[질문 대상 Task 상세 정보]
+{chr(10).join(task_ctx_lines)}
+
+[담당자]
+{', '.join(context_members)}
+"""
+
+    elif scope_type == "schedule" and window:
+        ws, we = window
+        filtered_by_time = [t for t in task_details if _task_overlaps_window(t, ws, we)]
+        prompt_tasks = filtered_by_time
+        scope_hint = (
+            f"\n[기간 제약]\n"
+            f"사용자 질문이 요청한 기간은 {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()} 입니다.\n"
+            f"이 기간에 해당하는 Task만 관련 Task로 다루고, 기간 밖 Task는 절대 언급하지 마세요.\n"
+            f"각 Task의 설명/작업노트/일정/담당자를 상세하게 답변하세요.\n"
+        )
+        # 기간 질문: project members
+        context_members = _get_project_member_names(members, users_map)
+
+        task_ctx_lines = []
+        for t in filtered_by_time[:30]:
+            task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=True))
+
+        proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
+        context_str = f"""{proj_ctx}
+
+[기간 내 Task 상세 정보 ({ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()})]
+{chr(10).join(task_ctx_lines) if task_ctx_lines else "해당 기간에 Task 없음"}
+"""
+
+    elif scope_type == "project" or is_full_overview:
+        prompt_tasks = task_details
+        scope_hint = (
+            "\n[범위]\n"
+            "사용자가 프로젝트 전체 현황을 요청했습니다.\n"
+            "핵심 항목(진행 중, 임박, 지연)을 중심으로 요약하되, 각 주요 Task에 대해서는 설명/작업내용도 간략히 포함하세요.\n"
+        )
+        context_members = _get_project_member_names(members, users_map)
+
+        proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
+
+        # 전체 현황: 모든 task를 간략 상세로
+        task_ctx_lines = []
+        for t in task_details[:40]:
+            task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=False))
+
+        context_str = f"""{proj_ctx}
+
+[전체 Task 상세]
+{chr(10).join(task_ctx_lines) if task_ctx_lines else "Task 없음"}
+"""
+
+    elif scope_type == "assignee":
+        prompt_tasks = task_details
+        scope_hint = (
+            "\n[범위]\n"
+            "사용자가 담당자 관련 질문을 했습니다.\n"
+            "질문에서 언급된 담당자와 관련된 Task만 선별해서 답변하세요.\n"
+            "각 Task의 담당자는 task.assignee 기준으로 판단하세요.\n"
+        )
+        context_members = _get_project_member_names(members, users_map)
+
+        task_ctx_lines = []
+        for t in task_details[:40]:
+            task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=False))
+
+        proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
+        context_str = f"""{proj_ctx}
+
+[전체 Task 상세 (담당자 포함)]
+{chr(10).join(task_ctx_lines) if task_ctx_lines else "Task 없음"}
+"""
+
+    else:
+        # general: 질문과 관련된 Task를 선별
+        prompt_tasks = task_details
+        scope_hint = (
+            "\n[범위]\n"
+            "질문과 관련된 Task만 선별해서 답변하세요. 전체 Task를 나열하지 마세요.\n"
+            "답변할 때 관련 Task의 설명/작업노트/메모/일정/담당자를 최대한 활용해서 상세하게 설명하세요.\n"
+        )
+        context_members = _get_project_member_names(members, users_map)
+
+        proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
+
+        task_ctx_lines = []
+        for t in task_details[:40]:
+            task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=True))
+
+        context_str = f"""{proj_ctx}
+
+[전체 Task 상세]
+{chr(10).join(task_ctx_lines) if task_ctx_lines else "Task 없음"}
+"""
+
+    return context_str, scope_hint, prompt_tasks, context_members, ws, we
+
+
+def _get_project_member_names(members: list, users_map: dict) -> list:
+    """프로젝트 멤버 이름 목록 (viewer 제외)"""
+    names = []
+    for m in members:
+        role = m.get("role", "member")
+        if role == "viewer":
+            continue
+        uid = int(m.get("user_id"))
+        u = users_map.get(uid)
+        if u:
+            names.append(f'{u["username"]} ({role})')
+    return names
+
+
 @app.post("/api/projects/{project_id}/ai-query")
 def generate_project_ai_query(
     project_id: int,
@@ -3277,6 +3624,7 @@ def generate_project_ai_query(
     db: Session = Depends(get_db),
 ):
     import requests
+    import re
 
     state = load_state()
     check_project_access(db, state, project_id, user_id)
@@ -3296,33 +3644,41 @@ def generate_project_ai_query(
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # ── 1. 전체 데이터 수집 ──
     task_rows = db.query(Task).filter(Task.project_id == project_id, Task.archived_at.is_(None)).all()
     tasks = [task_dict(t, state) for t in task_rows]
 
-    # DB 기준 멤버 (viewer 제외)
     db_members = db.query(ProjectMemberModel).filter(
         ProjectMemberModel.project_id == project_id,
         ProjectMemberModel.role != 'viewer'
     ).all()
     members = [{"user_id": m.user_id, "role": m.role, "project_id": m.project_id} for m in db_members]
     sub_projects = get_subprojects_from_db(db, project_id)
-    all_attachments = state.get("attachments", [])
 
     users_map = {u.id: user_dict(u, state) for u in db.query(User).all()}
 
+    # Task 상세 수집 (assignee_ids 포함)
     task_details = []
     for t in tasks:
-        assignees = [users_map.get(a, {}).get("username", f"User {a}") for a in (t.get("assignee_ids") or [])]
+        assignee_ids_raw = t.get("assignee_ids") or []
+        assignees = [users_map.get(a, {}).get("username", f"User {a}") for a in assignee_ids_raw]
 
         sp_name = ""
         if t.get("sub_project_id"):
             sp = next((s for s in sub_projects if int(s["id"]) == int(t["sub_project_id"])), None)
             sp_name = sp["name"] if sp else ""
 
-        task_attachments = [a for a in all_attachments if int(a.get("task_id")) == int(t["id"])]
+        # DB 기반 첨부파일 조회
+        db_attachments = db.query(AttachmentModel).filter(AttachmentModel.task_id == int(t["id"])).all()
+        task_attachments = [
+            {"id": a.id, "filename": a.filename or "", "url": a.url or "", "type": a.type or "url"}
+            for a in db_attachments
+        ]
 
-        # 작업노트(activity) 상세 정보 (AI 자유질문용)
-        activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == int(t["id"])).order_by(TaskActivityModel.order_index).all()
+        # 작업노트(activity) 상세 정보
+        activities = db.query(TaskActivityModel).filter(
+            TaskActivityModel.task_id == int(t["id"])
+        ).order_by(TaskActivityModel.order_index).all()
         activity_items = []
         for act in activities:
             block_type = act.block_type or "checkbox"
@@ -3343,123 +3699,61 @@ def generate_project_ai_query(
             "progress": t.get("progress", 0) or 0,
             "start_date": t.get("start_date"),
             "due_date": t.get("due_date"),
+            "assignee_ids": assignee_ids_raw,
             "assignees": assignees or [],
             "sub_project": sp_name or "",
             "tags": t.get("tags", []) or [],
-            "attachments": [
-                {
-                    "id": a.get("id"),
-                    "filename": a.get("filename", "") or "",
-                    "url": a.get("url", "") or "",
-                    "type": a.get("type", "url") or "url",
-                }
-                for a in task_attachments
-            ],
+            "attachments": task_attachments,
             "activity_items": activity_items,
             "activity_checked": checked_count,
             "activity_total": total_checkboxes,
         })
 
-    member_names = []
-    for m in members:
-        role = m.get("role", "member")
-        if role == "viewer":
-            continue
-        uid = int(m.get("user_id"))
-        u = users_map.get(uid)
-        if u:
-            member_names.append(f'{u["username"]} ({role})')
+    # 프로젝트 노트 수집
+    db_notes = db.query(NoteModel).filter(NoteModel.project_id == project_id).order_by(NoteModel.created_at.desc()).all()
+    project_notes = []
+    for n in db_notes:
+        author = users_map.get(n.author_id)
+        project_notes.append({
+            "id": n.id,
+            "content": n.content or "",
+            "author_name": author["username"] if author else "",
+            "created_at": n.created_at.isoformat() if n.created_at else "",
+        })
 
-    # ✅ 질문 범위 분석: 기간 / Task 이름 / 전체 현황
+    # ── 2. 질문 scope 판별 ──
     today = _today_kst()
-    window = _parse_time_window_from_query(req.query, today)
-    filtered_by_time = None
-    if window:
-        ws, we = window
-        filtered_by_time = [t for t in task_details if _task_overlaps_window(t, ws, we)]
-    else:
-        ws = we = None
+    scope = _resolve_question_scope(req.query, task_details, today)
 
-    # ✅ 질문에서 Task 이름 매칭 (부분 일치 지원)
-    query_lower = req.query.lower().strip()
-    # 질문에서 불용어 제거 후 키워드 추출
-    _stopwords = {'의', '에', '는', '은', '을', '를', '이', '가', '과', '와', '도', '로', '으로',
-                  '에서', '까지', '부터', '대해', '관해', '관련', '어떻게', '얼마나', '언제',
-                  '현황', '상태', '진행', '알려줘', '보여줘', '뭐야', '뭔가요', '있어', '없어',
-                  '해줘', '할', '한', '하는', '된', '되는', '좀', '다', '그', '저', '이', '것'}
-    query_matched_tasks = []
-    for t in task_details:
-        title = (t.get("title") or "").strip()
-        if not title:
-            continue
-        title_lower = title.lower()
-        # 1) 제목 전체가 질문에 포함
-        if title_lower in query_lower or title in req.query:
-            query_matched_tasks.append(t)
-            continue
-        # 2) 질문 키워드가 제목에 포함 (부분 일치)
-        query_words = [w for w in query_lower.split() if len(w) >= 2 and w not in _stopwords]
-        if query_words and any(w in title_lower for w in query_words):
-            query_matched_tasks.append(t)
+    # ── 3. scope별 컨텍스트 빌드 ──
+    context_str, scope_hint, prompt_tasks, context_members, ws, we = _build_ai_free_question_context(
+        scope, db, p, sub_projects, members, users_map, task_details, project_notes, today
+    )
 
-    # ✅ 질문 유형 판별
-    is_full_overview = any(kw in query_lower for kw in [
-        "전체 현황", "프로젝트 현황", "전체 요약", "전체 상태", "전체 진행",
-        "프로젝트 상태", "프로젝트 진행", "프로젝트 요약", "전반적",
-    ])
+    # ── 4. LLM 프롬프트 구성 ──
+    is_task_scope = scope["scope_type"] == "task" and scope["matched_tasks"]
 
-    # ✅ 프롬프트에 넣을 task 선별
-    if query_matched_tasks:
-        # 특정 task를 물어본 경우 → 해당 task만
-        prompt_tasks = query_matched_tasks
-        scope_hint = f"\n[범위 제약]\n사용자가 특정 Task({', '.join(t['title'] for t in query_matched_tasks)})에 대해 질문했습니다.\n해당 Task 중심으로만 답변하고, 다른 Task는 언급하지 마세요.\n"
-    elif filtered_by_time is not None:
-        prompt_tasks = filtered_by_time
-        scope_hint = (
-            f"\n[기간 제약]\n"
-            f"사용자 질문이 요청한 기간은 {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()} 입니다.\n"
-            f"이 기간에 해당하는 Task만 관련 Task로 다루고, 기간 밖 Task는 절대 언급하지 마세요.\n"
+    if is_task_scope:
+        detail_instruction = (
+            "이 질문은 특정 Task에 대한 질문입니다.\n"
+            "제목만 말하지 말고, 컨텍스트에 있는 설명/작업노트/메모/일정/담당자/참조자료를 모두 활용해서 최대한 상세하게 답변하세요.\n"
+            "사용자가 작성해둔 텍스트(설명, 작업노트, 메모)가 있으면 그 내용을 그대로 활용해서 풍부하게 설명하세요.\n"
         )
-    elif is_full_overview:
-        prompt_tasks = task_details
-        scope_hint = "\n[범위]\n사용자가 전체 현황을 요청했습니다. 요약 중심으로 답변하되, 전체 Task를 나열하지 말고 핵심 항목(진행 중, 임박, 지연)을 중심으로 정리하세요.\n"
     else:
-        prompt_tasks = task_details
-        scope_hint = "\n[범위]\n질문과 관련된 Task만 선별해서 답변하세요. 전체 Task를 나열하지 마세요.\n"
+        detail_instruction = (
+            "컨텍스트에 있는 설명/작업노트/메모/일정/담당자 정보를 활용해서 답변하세요.\n"
+            "제목만 나열하지 말고, 관련 상세 내용을 함께 설명하세요.\n"
+        )
 
-    tasks_summary_lines = []
-    for t in prompt_tasks[:40]:
-        line = f'{t["title"]} / {t["status"]} / {t["progress"]}% / {t["due_date"] or "미정"}'
-        # 작업노트 상세 정보 추가
-        if t.get("activity_total", 0) > 0:
-            line += f' / 작업노트: {t["activity_total"]}개 항목 중 {t["activity_checked"]}개 완료'
-            cb_idx = 0
-            for item in t.get("activity_items", []):
-                if item["type"] == "checkbox":
-                    cb_idx += 1
-                    mark = "완료" if item["checked"] else "미완료"
-                    line += f'\n    {cb_idx}. {item["content"]} ({mark})'
-                else:
-                    if item["content"]:
-                        line += f'\n    (메모) {item["content"]}'
-        tasks_summary_lines.append(line)
-
-    context_str = f"""프로젝트명: {p.name}
-설명: {p.description or "없음"}
-
-Task 목록:
-{chr(10).join(tasks_summary_lines) if tasks_summary_lines else "Task 없음"}
-"""
-
-    # ✅✅ user prompt 강화: 질문 범위 기반 응답
     prompt = f"""당신은 전문 프로젝트 매니저 보조 AI입니다.
 아래 컨텍스트를 바탕으로 사용자의 질문에 답변해주세요.
 {scope_hint}
 [핵심 원칙]
 - 질문 범위를 먼저 파악하고, 그 범위 안에서만 답변하세요.
 - 전체 Task 나열은 금지입니다. 질문과 관련된 Task만 선별하세요.
-- 전체 현황 질문이라도 요약 중심으로 구성하세요 (핵심 진행 항목, 임박 일정, 지연/리스크 항목).
-- 특정 Task 질문이면 해당 Task의 상태/일정/담당자/작업노트만 중심으로 답변하세요.
+- {detail_instruction}
+- 특정 Task 질문이면 해당 Task의 상태/일정/담당자/작업노트/설명/첨부자료를 중심으로 답변하세요.
+- Task 질문일 때 담당자는 해당 Task의 assignee만 언급하세요. 프로젝트 전체 팀원을 보여주지 마세요.
 
 [컨텍스트]
 {context_str}
@@ -3480,14 +3774,17 @@ Task 목록:
 결론을 한 문장으로만 작성.
 
 [섹션2: 상세설명]
-근거/상황/주의사항을 설명.
+근거/상황/주의사항을 충분히 상세하게 설명.
 질문 범위에 해당하는 내용만 작성하세요.
+사용자가 작성해둔 텍스트(설명, 작업노트, 메모)가 있으면 적극 활용하세요.
+연결된 URL이나 참조자료가 있으면 함께 언급하세요.
 컨텍스트 밖은 추측하지 말고 "알 수 없음"이라고 명시.
 
 [섹션3: 핵심 일정]
 질문과 직접 관련된 Task만 최대 8개.
 각 Task를 아래 형식으로 작성 (슬래시(/) 구분자를 쓰지 마세요):
 Task명: OOO
+담당자: OOO (해당 Task의 assignee만 표시)
 진행률: OO%
 일정: YYYY-MM-DD ~ YYYY-MM-DD (시작일이나 마감일이 없으면 "미정"으로 표시)
 상태: 진행 중/대기/보류/완료
@@ -3502,7 +3799,6 @@ Task 간에는 빈 줄로 구분하세요.
 각 액션은 번호를 매겨서 한 줄씩 작성. 예) 1. 액션 내용
 """
 
-    # ✅✅ system prompt 강화: 범위 제한 + 형식/줄바꿈 강제
     system_prompt = """
 당신은 전문 프로젝트 매니저 보조 AI입니다.
 반드시 한국어로 답변하세요.
@@ -3515,10 +3811,12 @@ Task 간에는 빈 줄로 구분하세요.
 - 사용자의 질문 범위를 먼저 파악하세요.
 - 질문 범위 밖의 Task는 절대 언급하지 마세요.
 - 전체 Task를 나열하지 마세요. 질문과 관련된 것만 선별하세요.
-- 프로젝트 현황 질문이라도 요약 중심으로 답하세요 (핵심 진행 항목, 임박 일정, 지연 항목).
 - 특정 Task 질문에는 해당 Task만 답하세요.
 - Task를 언급할 때는 반드시 [Task: Task제목] 형식으로 제목을 단독 줄에 작성하고, 그 아래에 분석 내용을 작성하세요.
-- 팀원 정보는 담당자만 표시하고 Viewer는 제외하세요.
+- Task 질문에서 담당자는 해당 Task의 assignee만 표시하세요. 프로젝트 전체 팀원을 담당자로 보여주면 안 됩니다.
+- Viewer는 절대 담당자로 표시하지 마세요.
+- 제목만 말하지 말고, 컨텍스트에 있는 상세 내용(설명, 작업노트, 메모, 첨부자료)을 적극 활용해서 풍부하게 답변하세요.
+- 사용자가 작성해둔 텍스트가 있으면 반드시 그 내용을 답변에 반영하세요.
 """.strip()
 
     try:
@@ -3527,14 +3825,13 @@ Task 간에는 빈 줄로 구분하세요.
             model_name=model_name,
             system_prompt=system_prompt,
             user_prompt=prompt,
-            temperature=0.2,     # ✅ 안정성 ↑
-            max_tokens=4096,     # ✅ 끊김 ↓ (필요하면 4096)
+            temperature=0.2,
+            max_tokens=4096,
         )
 
-        # ✅✅ ai-query 전용 sanitize로 교체 (가독성 유지)
         content = sanitize_llm_text_ai(content)
 
-        # ✅ 섹션 파싱
+        # ── 섹션 파싱 ──
         parsed = {"one_liner": "", "details": "", "key_schedule": "", "next_actions": ""}
         current = ""
         for line in content.split("\n"):
@@ -3555,11 +3852,10 @@ Task 간에는 빈 줄로 구분하세요.
             parsed["one_liner"] = (content[:200].strip() + ("…" if len(content) > 200 else "")) if content else ""
             parsed["details"] = content
 
-        # ✅ context_tasks: 질문 범위에 맞는 Task만 선별
-        # 1순위: 질문에서 직접 언급한 task
-        # 2순위: 기간 필터 결과
-        # 3순위: AI 응답에서 언급한 task
-        # fallback: prompt_tasks (이미 범위 필터링됨)
+        # ── context_tasks 선별 ──
+        matched_tasks = scope["matched_tasks"]
+        window = scope["window"]
+
         schedule_text = parsed.get("key_schedule", "") or ""
         response_matched = []
         if schedule_text:
@@ -3567,13 +3863,14 @@ Task 간에는 빈 줄로 구분하세요.
                 if t["title"] and t["title"] in schedule_text:
                     response_matched.append(t)
 
-        if query_matched_tasks:
-            context_tasks = query_matched_tasks
+        if matched_tasks:
+            context_tasks = matched_tasks
         elif window:
+            filtered_by_time = [t for t in task_details if _task_overlaps_window(t, ws, we)] if ws and we else []
             context_tasks = filtered_by_time
         elif response_matched:
             context_tasks = response_matched
-        elif is_full_overview:
+        elif scope["is_full_overview"]:
             context_tasks = prompt_tasks[:15]
         else:
             context_tasks = response_matched if response_matched else prompt_tasks[:8]
@@ -3605,20 +3902,6 @@ Task 간에는 빈 줄로 구분하세요.
         db.commit()
         db.refresh(db_record)
 
-        # 특정 Task 질문 시 해당 Task 담당자만 표시
-        if query_matched_tasks:
-            task_assignee_ids = set()
-            for t in query_matched_tasks:
-                for aid in (t.get("assignee_ids") or []):
-                    task_assignee_ids.add(int(aid))
-            context_members = [
-                f'{users_map[uid]["username"]} ({users_map[uid].get("role", "member")})'
-                for uid in task_assignee_ids
-                if uid in users_map
-            ] if task_assignee_ids else member_names
-        else:
-            context_members = member_names
-
         context = {
             "status_breakdown": {
                 "total": len(context_tasks),
@@ -3632,9 +3915,9 @@ Task 간에는 빈 줄로 구분하세요.
             "members": context_members,
             "tasks": context_tasks,
             "filter": {
-                "mode": "time_window" if window else ("name_match" if query_matched_tasks else "fallback"),
-                "window_start": ws.isoformat() if window else None,
-                "window_end": we.isoformat() if window else None,
+                "mode": scope["scope_type"],
+                "window_start": ws.isoformat() if ws else None,
+                "window_end": we.isoformat() if we else None,
             },
         }
 
