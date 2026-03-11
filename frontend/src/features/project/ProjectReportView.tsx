@@ -423,8 +423,9 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
             )}
             <Box sx={{ px: 1.5, pb: 0.8, pt: isLabeled ? 0.2 : 0.8 }}>
               {(() => {
-                // 작업노트: 쉼표로 구분된 항목을 번호 매겨서 표시
-                if (section.label === '작업노트') {
+                // 과제, 작업노트, 완료/미완료 항목, 참고자료, 주의사항: 쉼표 분리 + 번호 매기기
+                const numberedSections = ['과제', '작업노트', '완료 항목', '미완료 항목', '참고자료', '주의사항'];
+                if (numberedSections.includes(section.label)) {
                   const items = section.content
                     .flatMap(line => line.split(/[,，]\s*/))
                     .map(s => s.trim())
@@ -440,26 +441,12 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
                     </Box>
                   ));
                 }
-                return section.content.map((line, li) => {
-                  const numMatch = line.match(/^(\d+)\.\s+(.+)$/);
-                  if (numMatch) {
-                    return (
-                      <Box key={li} sx={{ display: 'flex', gap: 0.8, alignItems: 'flex-start', mb: 0.2 }}>
-                        <Typography sx={{ fontSize: '0.83rem', fontWeight: 700, color: '#6B7280', minWidth: 18, textAlign: 'right', flexShrink: 0 }}>
-                          {numMatch[1]}.
-                        </Typography>
-                        <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151' }}>
-                          {numMatch[2]}
-                        </Typography>
-                      </Box>
-                    );
-                  }
-                  return (
-                    <Typography key={li} sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151', mb: 0.2 }}>
-                      {line}
-                    </Typography>
-                  );
-                });
+                // 기간, 담당자 등 기타 섹션: 기존 방식
+                return section.content.map((line, li) => (
+                  <Typography key={li} sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151', mb: 0.2 }}>
+                    {line}
+                  </Typography>
+                ));
               })()}
             </Box>
           </Box>

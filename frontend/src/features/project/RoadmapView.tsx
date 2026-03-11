@@ -756,9 +756,9 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
   }, [viewMode, dateRange, dateHeaders]);
 
   // Min width per column for scrollable views
-  const minColWidth = viewMode === 'week' ? 100 : viewMode === 'month' ? 120 : undefined;
+  const minColWidth = viewMode === 'week' ? 120 : viewMode === 'month' ? 120 : undefined;
   const timelineMinWidth = minColWidth
-    ? dateHeaders.reduce((sum, h) => sum + h.span * minColWidth, 0)
+    ? dateHeaders.length * minColWidth
     : undefined;
 
   // Auto-scroll to today instantly on view change
