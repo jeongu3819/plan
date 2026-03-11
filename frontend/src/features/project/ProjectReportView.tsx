@@ -423,19 +423,46 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
             )}
             <Box sx={{ px: 1.5, pb: 0.8, pt: isLabeled ? 0.2 : 0.8 }}>
               {(() => {
-                // 과제, 작업노트, 완료/미완료 항목, 참고자료, 주의사항: 쉼표 분리 + 번호 매기기
+                // 과제, 작업노트, 완료/미완료 항목, 참고자료, 주의사항: 스마트 분리 + 번호 매기기
                 const numberedSections = ['과제', '작업노트', '완료 항목', '미완료 항목', '참고자료', '주의사항'];
                 if (numberedSections.includes(section.label)) {
-                  const items = section.content
-                    .flatMap(line => line.split(/[,，]\s*/))
-                    .map(s => s.trim())
-                    .filter(Boolean);
+                  const splitDetailItems = (lines: string[]): string[] => {
+                    const joined = lines.join(' ').replace(/\s+/g, ' ').trim();
+                    if (!joined) return [];
+                    // Strategy 1: inline numbered items (e.g. "1. xxx 2. yyy 3. zzz")
+                    const parts = joined.split(/\s+(?=\d+\.\s)/);
+                    if (parts.length >= 2) {
+                      return parts.map(s => s.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
+                    }
+                    // Strategy 2: comma split respecting parentheses
+                    const commaItems: string[] = [];
+                    let buf = '';
+                    let depth = 0;
+                    for (const ch of joined) {
+                      if (ch === '(' || ch === '（') depth++;
+                      else if (ch === ')' || ch === '）') depth = Math.max(0, depth - 1);
+                      if ((ch === ',' || ch === '，') && depth === 0) {
+                        const t = buf.trim();
+                        if (t) commaItems.push(t);
+                        buf = '';
+                      } else { buf += ch; }
+                    }
+                    const last = buf.trim();
+                    if (last) commaItems.push(last);
+                    // Long single items: try sentence splitting
+                    if (commaItems.length === 1 && commaItems[0].length > 100) {
+                      const sentences = commaItems[0].split(/(?<=\.)\s+/).filter(Boolean);
+                      if (sentences.length > 1) return sentences;
+                    }
+                    return commaItems;
+                  };
+                  const items = splitDetailItems(section.content);
                   return items.map((item, ni) => (
-                    <Box key={ni} sx={{ display: 'flex', gap: 0.8, alignItems: 'flex-start', mb: 0.2 }}>
-                      <Typography sx={{ fontSize: '0.83rem', fontWeight: 700, color: '#6B7280', minWidth: 18, textAlign: 'right', flexShrink: 0 }}>
+                    <Box key={ni} sx={{ display: 'flex', gap: 0.8, alignItems: 'flex-start', mb: 0.5 }}>
+                      <Typography sx={{ fontSize: '0.83rem', fontWeight: 700, color: '#6B7280', minWidth: 22, textAlign: 'right', flexShrink: 0 }}>
                         {ni + 1}.
                       </Typography>
-                      <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151' }}>
+                      <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151', overflowWrap: 'break-word' }}>
                         {item}
                       </Typography>
                     </Box>
