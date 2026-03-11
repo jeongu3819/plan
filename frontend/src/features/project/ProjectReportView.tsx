@@ -434,7 +434,13 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
                     if (parts.length >= 2) {
                       return parts.map(s => s.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
                     }
-                    // Strategy 2: comma split respecting parentheses
+                    // Strategy 2: split by (완료)/(미완료) status markers
+                    // e.g. "Task A (완료) Task B (미완료)" → ["Task A (완료)", "Task B (미완료)"]
+                    const statusParts = joined.split(/(?<=\((?:완료|미완료)\))\s+(?=\S)/);
+                    if (statusParts.length >= 2) {
+                      return statusParts.map(s => s.trim()).filter(Boolean);
+                    }
+                    // Strategy 3: comma split respecting parentheses
                     const commaItems: string[] = [];
                     let buf = '';
                     let depth = 0;
