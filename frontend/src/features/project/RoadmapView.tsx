@@ -544,7 +544,6 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                   const todayOffset = differenceInDays(today, rangeStart);
                   if (todayOffset >= 0 && todayOffset < totalDays) {
                     const leftPct = `${(todayOffset / totalDays) * 100}%`;
-                    const isProject = item.type === 'project';
                     const showLabel = !todayLabelShown;
                     if (showLabel) todayLabelShown = true;
                     return (

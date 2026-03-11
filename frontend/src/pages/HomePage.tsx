@@ -41,6 +41,8 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import CheckIcon from '@mui/icons-material/Check';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DashboardStats, ProjectStats, Shortcut, UserShortcut } from '../api/client';
 import { Task } from '../types';
@@ -230,6 +232,10 @@ const HomePage: React.FC = () => {
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [hideDoneTasks, setHideDoneTasks] = useState(false);
+
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
+  const meRole = ((me as any)?.role || '').toLowerCase().trim();
+  const isAdminLike = meRole === 'admin' || meRole === 'super_admin';
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['stats', currentUserId],
@@ -1157,7 +1163,27 @@ const HomePage: React.FC = () => {
         <Box sx={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', px: 2 }}>
           <ShortcutSection currentUserId={currentUserId} navigate={navigate} />
         </Box>
-        <Box sx={{ flex: '0 0 auto' }}>
+        <Box sx={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 0.8 }}>
+          {isAdminLike && (
+            <Tooltip title="어드민">
+              <IconButton
+                onClick={() => navigate('/admin')}
+                sx={{ bgcolor: '#F3F4F6', color: '#6B7280', '&:hover': { bgcolor: '#E5E7EB', color: '#374151' } }}
+                size="small"
+              >
+                <AdminPanelSettingsIcon sx={{ fontSize: '1.2rem' }} />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Tooltip title="Trash">
+            <IconButton
+              onClick={() => navigate('/trash')}
+              sx={{ bgcolor: '#F3F4F6', color: '#6B7280', '&:hover': { bgcolor: '#FEE2E2', color: '#EF4444' } }}
+              size="small"
+            >
+              <DeleteOutlineIcon sx={{ fontSize: '1.2rem' }} />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Widget Settings">
             <IconButton
               onClick={() => setPaletteOpen(true)}
