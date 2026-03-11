@@ -123,7 +123,7 @@ const GlobalRoadmapPage: React.FC = () => {
   // v1.2: Resizable left panel
   const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
     const saved = localStorage.getItem('globalRoadmap_leftPanelWidth');
-    return saved ? parseInt(saved, 10) : 400;
+    return saved ? Math.max(parseInt(saved, 10), 430) : 430;
   });
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
@@ -672,7 +672,7 @@ const GlobalRoadmapPage: React.FC = () => {
                   if (todayOffset >= 0 && todayOffset < totalDays) {
                     const leftPct = `${(todayOffset / totalDays) * 100}%`;
                     const isProject = item.type === 'project';
-                    const showLabel = !todayLabelShown && isProject;
+                    const showLabel = !todayLabelShown;
                     if (showLabel) todayLabelShown = true;
                     return (
                       <Box
