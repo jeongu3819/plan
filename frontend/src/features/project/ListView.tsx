@@ -37,6 +37,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 
 // dnd-kit imports
 import {
@@ -271,6 +273,7 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
   const [sortField, setSortField] = useState<SortField>('default');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [collapsedSubs, setCollapsedSubs] = useState<Set<number>>(new Set());
+  const [hideDone, setHideDone] = useState(false);
 
   // SubProject edit state
   const [editingSub, setEditingSub] = useState<SubProject | null>(null);
@@ -417,7 +420,10 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
   // Group tasks by subproject (with saved order)
   const groupedTasks = useMemo(() => {
     const q = filterSearch.trim().toLowerCase();
-    const allTasks = (tasks || []).filter(t => !q || t.title.toLowerCase().includes(q));
+    let allTasks = (tasks || []).filter(t => !q || t.title.toLowerCase().includes(q));
+    if (hideDone) {
+      allTasks = allTasks.filter(t => t.status !== 'done');
+    }
     const rootTasks = allTasks.filter(t => !t.sub_project_id);
 
     // Apply saved subproject order
@@ -433,12 +439,14 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
       });
     }
 
-    const subGroups = orderedSps.map(sp => ({
-      subProject: sp,
-      tasks: allTasks.filter(t => t.sub_project_id === sp.id),
-    }));
+    const subGroups = orderedSps
+      .map(sp => ({
+        subProject: sp,
+        tasks: allTasks.filter(t => t.sub_project_id === sp.id),
+      }))
+      .filter(g => !hideDone || g.tasks.length > 0);
     return { rootTasks, subGroups };
-  }, [tasks, subProjects, allOrders, filterSearch]);
+  }, [tasks, subProjects, allOrders, filterSearch, hideDone]);
 
   const hasSubProjects = subProjects.length > 0;
 
@@ -569,6 +577,15 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
       <QuickAdd projectId={projectId} />
       {/* Sort Controls */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 1, mb: 1 }}>
+        <Tooltip title={hideDone ? '완료된 항목 보기' : '완료된 항목 숨기기'}>
+          <IconButton
+            size="small"
+            onClick={() => setHideDone(!hideDone)}
+            sx={{ color: hideDone ? '#9CA3AF' : '#22C55E', p: 0.5 }}
+          >
+            {hideDone ? <VisibilityOffIcon sx={{ fontSize: '1.1rem' }} /> : <VisibilityIcon sx={{ fontSize: '1.1rem' }} />}
+          </IconButton>
+        </Tooltip>
         <SortIcon sx={{ fontSize: 18, color: '#6B7280' }} />
         <TextField
           select

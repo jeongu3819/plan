@@ -22,6 +22,8 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import SortIcon from '@mui/icons-material/Sort';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
@@ -119,6 +121,7 @@ const GlobalRoadmapPage: React.FC = () => {
   const currentMarkerRef = useRef<HTMLDivElement>(null);
   const [sortKey, setSortKey] = useState<SortKey>('default');
   const [sortAsc, setSortAsc] = useState(true);
+  const [hideDone, setHideDone] = useState(false);
 
   // v1.2: Resizable left panel
   const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
@@ -203,11 +206,30 @@ const GlobalRoadmapPage: React.FC = () => {
     [sortKey, sortAsc]
   );
 
-  // Display items: sorted or drag-ordered
+  // Filter done items recursively: hide done tasks, hide project/subproject only if ALL children are done
+  const filterDoneItems = useCallback((items: RoadmapItem[]): RoadmapItem[] => {
+    if (!hideDone) return items;
+    return items.reduce<RoadmapItem[]>((acc, item) => {
+      if (item.type === 'task') {
+        if (item.status !== 'done') acc.push(item);
+      } else {
+        // project or subproject: filter children first
+        const filteredChildren = item.children ? filterDoneItems(item.children) : [];
+        // Show if any non-done children remain, OR if the item itself is not done
+        if (filteredChildren.length > 0 || item.status !== 'done') {
+          acc.push({ ...item, children: filteredChildren });
+        }
+      }
+      return acc;
+    }, []);
+  }, [hideDone]);
+
+  // Display items: sorted or drag-ordered, then filtered
   const displayItems = useMemo(() => {
     const base = localItems.length > 0 ? localItems : roadmapData?.items || [];
-    return sortKey === 'default' ? base : sortItems(base);
-  }, [localItems, roadmapData, sortKey, sortAsc, sortItems]);
+    const sorted = sortKey === 'default' ? base : sortItems(base);
+    return filterDoneItems(sorted);
+  }, [localItems, roadmapData, sortKey, sortAsc, sortItems, filterDoneItems]);
 
   // ── Drag helpers ──
   const findSiblings = useCallback((items: RoadmapItem[], id: string): RoadmapItem[] | null => {
@@ -835,6 +857,16 @@ const GlobalRoadmapPage: React.FC = () => {
               </Tooltip>
             )}
           </Box>
+
+          <Tooltip title={hideDone ? '완료된 항목 보기' : '완료된 항목 숨기기'}>
+            <IconButton
+              size="small"
+              onClick={() => setHideDone(!hideDone)}
+              sx={{ color: hideDone ? '#9CA3AF' : '#22C55E' }}
+            >
+              {hideDone ? <VisibilityOffIcon sx={{ fontSize: '1.1rem' }} /> : <VisibilityIcon sx={{ fontSize: '1.1rem' }} />}
+            </IconButton>
+          </Tooltip>
 
           <ToggleButtonGroup
             value={viewMode}

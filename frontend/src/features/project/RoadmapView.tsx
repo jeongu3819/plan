@@ -29,6 +29,8 @@ import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { RoadmapItem } from '../../types';
@@ -114,6 +116,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
   const currentMarkerRef = useRef<HTMLDivElement>(null);
   const [nameColumnWidth, setNameColumnWidth] = useState(360);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [hideDone, setHideDone] = useState(false);
 
   const deleteSubProjectMutation = useMutation({
     mutationFn: (subId: number) => api.deleteSubProject(subId),
@@ -739,8 +742,25 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
     );
   }
 
+  // Filter done items recursively
+  const filterDoneItems = useCallback((items: RoadmapItem[]): RoadmapItem[] => {
+    if (!hideDone) return items;
+    return items.reduce<RoadmapItem[]>((acc, item) => {
+      if (item.type === 'task') {
+        if (item.status !== 'done') acc.push(item);
+      } else {
+        const filteredChildren = item.children ? filterDoneItems(item.children) : [];
+        if (filteredChildren.length > 0 || item.status !== 'done') {
+          acc.push({ ...item, children: filteredChildren });
+        }
+      }
+      return acc;
+    }, []);
+  }, [hideDone]);
+
   // Use localItems (drag-reordered) with fallback to API data
-  const displayItems = localItems.length > 0 ? localItems : roadmapData?.items || [];
+  const baseItems = localItems.length > 0 ? localItems : roadmapData?.items || [];
+  const displayItems = filterDoneItems(baseItems);
 
   // Min width per column for scrollable week view
   const minColWidth = viewMode === 'week' ? 100 : undefined;
@@ -773,6 +793,16 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         <Tooltip title="Today">
           <IconButton size="small" sx={{ color: '#EF4444' }}>
             <TodayIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+
+        <Tooltip title={hideDone ? '완료된 항목 보기' : '완료된 항목 숨기기'}>
+          <IconButton
+            size="small"
+            onClick={() => setHideDone(!hideDone)}
+            sx={{ color: hideDone ? '#9CA3AF' : '#22C55E' }}
+          >
+            {hideDone ? <VisibilityOffIcon sx={{ fontSize: '1.1rem' }} /> : <VisibilityIcon sx={{ fontSize: '1.1rem' }} />}
           </IconButton>
         </Tooltip>
 
