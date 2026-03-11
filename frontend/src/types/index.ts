@@ -221,5 +221,10 @@ export interface ProjectAiQueryResponse {
       hold: number;
       overall_progress: number;
     };
+    filter?: {
+      mode: string;
+      window_start?: string | null;
+      window_end?: string | null;
+    };
   };
 }

@@ -114,7 +114,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
   const [showFilters, setShowFilters] = useState(false);
   const timelineScrollRef = useRef<HTMLDivElement>(null);
   const currentMarkerRef = useRef<HTMLDivElement>(null);
-  const [nameColumnWidth, setNameColumnWidth] = useState(360);
+  const [nameColumnWidth, setNameColumnWidth] = useState(430);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [hideDone, setHideDone] = useState(false);
 
@@ -388,7 +388,6 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
     return ids;
   }, [displayItems, expandedIds]);
 
-  let todayLabelShown = false;
   const renderRow = (item: RoadmapItem, depth: number = 0): React.ReactNode => {
     const hasChildren = item.children && item.children.length > 0;
     const isExpanded = expandedIds.has(item.id);
@@ -544,29 +543,10 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                   const todayOffset = differenceInDays(today, rangeStart);
                   if (todayOffset >= 0 && todayOffset < totalDays) {
                     const leftPct = `${(todayOffset / totalDays) * 100}%`;
-                    const showLabel = !todayLabelShown;
-                    if (showLabel) todayLabelShown = true;
                     return (
-                      <Box
-                        sx={{
-                          position: 'absolute',
-                          top: 0,
-                          bottom: 0,
-                          left: leftPct,
-                          zIndex: 2,
-                        }}
-                      >
-                        {showLabel && (
-                          <Box sx={{
-                            position: 'absolute', top: '50%', transform: 'translateY(-50%) translateX(-50%)',
-                            left: '50%',
-                            fontSize: '0.55rem', fontWeight: 700, color: 'rgba(239, 68, 68, 0.7)',
-                            whiteSpace: 'nowrap', lineHeight: 1, letterSpacing: '-0.02em',
-                            bgcolor: 'rgba(239, 68, 68, 0.08)', px: 0.5, py: 0.2, borderRadius: 0.5,
-                          }}>
-                            {`${today.getMonth() + 1}/${today.getDate()}`}
-                          </Box>
-                        )}
+                      <Box sx={{
+                        position: 'absolute', top: 0, bottom: 0, left: leftPct, zIndex: 2,
+                      }}>
                         <Box sx={{
                           position: 'absolute', top: 0, bottom: 0, left: 0,
                           width: 2, bgcolor: '#EF4444',
@@ -904,7 +884,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
               '&::-webkit-scrollbar-thumb': { bgcolor: '#CBD5E1', borderRadius: 3 },
             }}
           >
-            <Box sx={{ minWidth: timelineMinWidth, display: 'flex', flexDirection: 'column' }}>
+            <Box sx={{ minWidth: timelineMinWidth, display: 'flex', flexDirection: 'column', position: 'relative' }}>
               {/* Month group row for week view */}
               {viewMode === 'week' && monthGroupHeaders.length > 0 && (
                 <Box sx={{ display: 'flex', borderBottom: '1px solid #F3F4F6' }}>
@@ -957,6 +937,28 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                   </Box>
                 ))}
               </Box>
+              {/* Today label in header */}
+              {(() => {
+                const todayOff = differenceInDays(today, rangeStart);
+                if (todayOff >= 0 && todayOff < totalDays) {
+                  const leftPct = `${(todayOff / totalDays) * 100}%`;
+                  return (
+                    <Box sx={{
+                      position: 'absolute', bottom: -1, left: leftPct, zIndex: 10,
+                      transform: 'translateX(-50%)',
+                    }}>
+                      <Box sx={{
+                        fontSize: '0.6rem', fontWeight: 700, color: '#fff',
+                        bgcolor: '#EF4444', px: 0.7, py: 0.15, borderRadius: '4px 4px 0 0',
+                        whiteSpace: 'nowrap', lineHeight: 1.2, letterSpacing: '-0.02em',
+                      }}>
+                        {`${today.getMonth() + 1}/${today.getDate()}`}
+                      </Box>
+                    </Box>
+                  );
+                }
+                return null;
+              })()}
             </Box>
           </Box>
         </Box>

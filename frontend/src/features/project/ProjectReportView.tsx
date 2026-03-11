@@ -218,8 +218,8 @@ const KeyScheduleBlock: React.FC<{ text: string }> = ({ text }) => {
         current = null;
         continue;
       }
-      // "Task명: ...", "진행률: ...", "일정: ...", "상태: ..." 패턴
-      const fieldMatch = line.match(/^(Task명|진행률|일정|상태)\s*[:：]\s*(.+)$/);
+      // "Task명: ...", "담당자: ...", "진행률: ...", "일정: ...", "상태: ..." 패턴
+      const fieldMatch = line.match(/^(Task명|담당자|진행률|일정|상태)\s*[:：]\s*(.+)$/);
       // 번호 매긴 항목 "1. ..."
       const numMatch = line.match(/^\d+\.\s+(.+)$/);
 
@@ -254,7 +254,7 @@ const KeyScheduleBlock: React.FC<{ text: string }> = ({ text }) => {
   }
 
   const fieldColor: Record<string, string> = {
-    'Task명': '#1A1D29', '진행률': '#2955FF', '일정': '#0D9488', '상태': '#8B5CF6',
+    'Task명': '#1A1D29', '담당자': '#6B7280', '진행률': '#2955FF', '일정': '#0D9488', '상태': '#8B5CF6',
   };
 
   return (
@@ -358,6 +358,113 @@ const NumberedListBlock: React.FC<{ text: string }> = ({ text }) => {
           </Typography>
         )
       )}
+    </Box>
+  );
+};
+
+/* ─── Structured Detail Block: 항목별 구분된 상세 내용 렌더링 ─── */
+const DETAIL_SECTION_LABELS = ['과제', '기간', '담당자', '작업노트', '완료 항목', '미완료 항목', '참고자료', '주의사항'];
+const DETAIL_SECTION_COLORS: Record<string, string> = {
+  '과제': '#2955FF', '기간': '#0D9488', '담당자': '#6B7280', '작업노트': '#7C3AED',
+  '완료 항목': '#22C55E', '미완료 항목': '#F59E0B', '참고자료': '#3B82F6', '주의사항': '#EF4444',
+};
+const DETAIL_SECTION_BG: Record<string, string> = {
+  '과제': '#EEF2FF', '기간': '#F0FDFA', '담당자': '#F3F4F6', '작업노트': '#F5F3FF',
+  '완료 항목': '#F0FDF4', '미완료 항목': '#FFFBEB', '참고자료': '#EFF6FF', '주의사항': '#FEF2F2',
+};
+
+const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
+  const sections = useMemo(() => {
+    const result: { label: string; content: string[] }[] = [];
+    let currentLabel = '';
+    let currentContent: string[] = [];
+
+    const rawLines = text.split('\n');
+    for (const raw of rawLines) {
+      const line = raw.trim();
+      if (!line) continue;
+
+      // "항목명:" 패턴 매칭
+      const sectionMatch = line.match(/^(과제|기간|담당자|작업노트|완료\s*항목|미완료\s*항목|참고자료|주의사항)\s*[:：]\s*(.*)$/);
+      if (sectionMatch) {
+        if (currentLabel || currentContent.length > 0) {
+          result.push({ label: currentLabel, content: currentContent });
+        }
+        currentLabel = sectionMatch[1].replace(/\s+/g, ' ');
+        currentContent = sectionMatch[2].trim() ? [cleanText(sectionMatch[2].trim())] : [];
+      } else {
+        currentContent.push(cleanText(line));
+      }
+    }
+    if (currentLabel || currentContent.length > 0) {
+      result.push({ label: currentLabel, content: currentContent });
+    }
+    return result;
+  }, [text]);
+
+  // 구조화된 섹션이 하나도 없으면 기존 NumberedListBlock 방식으로 fallback
+  const hasStructuredSections = sections.some(s => DETAIL_SECTION_LABELS.includes(s.label));
+
+  if (!hasStructuredSections) {
+    return <NumberedListBlock text={text} />;
+  }
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {sections.map((section, idx) => {
+        if (section.content.length === 0) return null;
+        const isLabeled = DETAIL_SECTION_LABELS.includes(section.label);
+        const color = DETAIL_SECTION_COLORS[section.label] || '#374151';
+        const bgColor = DETAIL_SECTION_BG[section.label] || '#F9FAFB';
+
+        if (!isLabeled) {
+          // 라벨 없는 일반 텍스트
+          return (
+            <Box key={idx}>
+              {section.content.map((line, li) => (
+                <Typography key={li} sx={{ fontSize: '0.85rem', lineHeight: 1.7, color: '#374151', mb: 0.3 }}>
+                  {line}
+                </Typography>
+              ))}
+            </Box>
+          );
+        }
+
+        return (
+          <Box key={idx} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #E5E7EB' }}>
+            <Box sx={{
+              px: 1.5, py: 0.6, bgcolor: bgColor,
+              borderBottom: '1px solid #E5E7EB',
+            }}>
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color }}>
+                {section.label}
+              </Typography>
+            </Box>
+            <Box sx={{ px: 1.5, py: 1 }}>
+              {section.content.map((line, li) => {
+                const numMatch = line.match(/^(\d+)\.\s+(.+)$/);
+                if (numMatch) {
+                  return (
+                    <Box key={li} sx={{ display: 'flex', gap: 0.8, alignItems: 'flex-start', mb: 0.2 }}>
+                      <Typography sx={{ fontSize: '0.83rem', fontWeight: 700, color: '#6B7280', minWidth: 18, textAlign: 'right', flexShrink: 0 }}>
+                        {numMatch[1]}.
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151' }}>
+                        {numMatch[2]}
+                      </Typography>
+                    </Box>
+                  );
+                }
+                return (
+                  <Typography key={li} sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151', mb: 0.2 }}>
+                    {line}
+                  </Typography>
+                );
+              })}
+            </Box>
+          </Box>
+        );
+      })}
     </Box>
   );
 };
@@ -1614,7 +1721,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                       variant="h6"
                       sx={{ fontWeight: 700, color: '#1A1D29', fontSize: '1rem' }}
                     >
-                      프로젝트 현황
+                      {queryData.context.filter?.mode === 'task' ? '질문 대상 현황' : '프로젝트 현황'}
                     </Typography>
                   </Box>
 
@@ -1930,7 +2037,7 @@ const ProjectReportView: React.FC<ProjectReportViewProps> = ({ projectId }) => {
                     상세 내용
                   </Typography>
                 </Box>
-                <NumberedListBlock text={queryData.parsed_response.details} />
+                <StructuredDetailBlock text={queryData.parsed_response.details} />
               </Paper>
 
               {/* 핵심 일정 */}
