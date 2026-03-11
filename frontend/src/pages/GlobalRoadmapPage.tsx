@@ -48,12 +48,12 @@ import {
   differenceInDays,
   startOfMonth,
   endOfMonth,
-  startOfWeek,
-  endOfWeek,
+  startOfISOWeek,
+  endOfISOWeek,
   eachDayOfInterval,
   startOfYear,
   endOfYear,
-  getWeek,
+  getISOWeek,
   startOfQuarter,
   endOfQuarter,
   subMonths,
@@ -398,8 +398,8 @@ const GlobalRoadmapPage: React.FC = () => {
       start = earliest;
       end = endOfMonth(new Date(today.getFullYear(), 11, 1)); // end of current year
     } else if (viewMode === 'week') {
-      start = startOfWeek(startOfMonth(subMonths(today, 2)), { weekStartsOn: 1 });
-      end = endOfWeek(endOfMonth(addMonths(today, 3)), { weekStartsOn: 1 });
+      start = startOfISOWeek(startOfMonth(subMonths(today, 2)));
+      end = endOfISOWeek(endOfMonth(addMonths(today, 3)));
     } else {
       start = startOfYear(today);
       end = endOfYear(today);
@@ -459,11 +459,10 @@ const GlobalRoadmapPage: React.FC = () => {
       const result: { label: string; span: number; isCurrent?: boolean; id?: string }[] = [];
       let currentGroup = '';
       dateRange.forEach(d => {
-        const monthLabel = format(d, 'yyyy-MM');
-        const weekNum = getWeek(d, { weekStartsOn: 1 });
-        const weekStart = startOfWeek(d, { weekStartsOn: 1 });
-        const weekEnd = endOfWeek(d, { weekStartsOn: 1 });
-        const key = `${monthLabel}-W${weekNum}`;
+        const weekNum = getISOWeek(d);
+        const weekStart = startOfISOWeek(d);
+        const weekEnd = endOfISOWeek(d);
+        const key = format(weekStart, 'yyyy-MM-dd');
         if (key !== currentGroup) {
           const isCurrent = today >= weekStart && today <= weekEnd;
           result.push({
@@ -509,11 +508,12 @@ const GlobalRoadmapPage: React.FC = () => {
     const weekMonths: string[] = [];
     let lastWeekKey = '';
     dateRange.forEach(d => {
-      const weekNum = getWeek(d, { weekStartsOn: 1 });
-      const monthKey = format(d, 'yyyy-MM');
-      const weekKey = `${monthKey}-W${weekNum}`;
+      const weekStart = startOfISOWeek(d);
+      const weekKey = format(weekStart, 'yyyy-MM-dd');
       if (weekKey !== lastWeekKey) {
-        weekMonths.push(format(d, 'yyyy-MM'));
+        const weekThursday = new Date(weekStart);
+        weekThursday.setDate(weekThursday.getDate() + 3);
+        weekMonths.push(format(weekThursday, 'yyyy-MM'));
         lastWeekKey = weekKey;
       }
     });
