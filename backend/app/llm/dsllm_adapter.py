@@ -198,3 +198,65 @@ def chat(
     choice0 = (data.get("choices") or [{}])[0]
     msg = choice0.get("message") or {}
     return (msg.get("content") or choice0.get("text") or "").strip()
+
+
+def chat_stream(
+    base_url: str,
+    model_name: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+):
+    """
+    Generator 방식 스트리밍 chat.
+    FastAPI StreamingResponse와 호환:
+      return StreamingResponse(chat_stream(...), media_type="text/plain")
+
+    각 yield는 LLM이 생성한 텍스트 토큰(chunk) 단위.
+    """
+    import json as _json
+
+    resolved_base_url, resolved_model, ticket_env, send_headers = _resolve(base_url, model_name)
+
+    endpoint = _normalize_chat_endpoint(resolved_base_url)
+    payload = {
+        "model": resolved_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+
+    timeout = float(os.getenv("DSLLM_TIMEOUT") or "120")
+    verify_ssl = (os.getenv("DSLLM_VERIFY_SSL") or "false").lower() in ("1", "true", "yes")
+
+    with requests.post(
+        endpoint,
+        json=payload,
+        headers=_headers(resolved_base_url, ticket_env=ticket_env, send_headers=send_headers),
+        timeout=timeout,
+        verify=verify_ssl,
+        stream=True,
+    ) as r:
+        r.raise_for_status()
+        for raw_line in r.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data_str = line[len("data:"):].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk = _json.loads(data_str)
+                delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                token = delta.get("content") or ""
+                if token:
+                    yield token
+            except (_json.JSONDecodeError, KeyError, IndexError):
+                continue
