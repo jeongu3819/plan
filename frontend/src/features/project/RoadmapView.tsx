@@ -336,19 +336,6 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
     syncingRef.current = false;
   }, []);
 
-  // Auto-scroll to current period on week/month view
-  useEffect(() => {
-    if ((viewMode === 'week' || viewMode === 'month') && currentMarkerRef.current && timelineScrollRef.current) {
-      setTimeout(() => {
-        currentMarkerRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          inline: 'center',
-          block: 'nearest',
-        });
-      }, 100);
-    }
-  }, [viewMode, dateRange]);
-
   const toggleExpand = (id: string) => {
     setExpandedIds(prev => {
       const next = new Set(prev);
@@ -768,6 +755,30 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
     return result;
   }, [viewMode, dateRange, dateHeaders]);
 
+  // Min width per column for scrollable views
+  const minColWidth = viewMode === 'week' ? 100 : viewMode === 'month' ? 120 : undefined;
+  const timelineMinWidth = minColWidth
+    ? dateHeaders.reduce((sum, h) => sum + h.span * minColWidth, 0)
+    : undefined;
+
+  // Auto-scroll to today instantly on view change
+  useEffect(() => {
+    if ((viewMode === 'week' || viewMode === 'month') && timelineScrollRef.current && timelineMinWidth) {
+      requestAnimationFrame(() => {
+        const todayOffset = differenceInDays(today, rangeStart);
+        if (todayOffset >= 0 && todayOffset < totalDays) {
+          const todayPx = (todayOffset / totalDays) * timelineMinWidth;
+          const containerWidth = timelineScrollRef.current!.clientWidth;
+          const scrollTo = Math.max(0, todayPx - containerWidth / 2);
+          timelineScrollRef.current!.scrollLeft = scrollTo;
+          if (bodyScrollRef.current) {
+            bodyScrollRef.current.scrollLeft = scrollTo;
+          }
+        }
+      });
+    }
+  }, [viewMode, dateRange, timelineMinWidth]);
+
   if (isLoading) {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
@@ -778,12 +789,6 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
       </Box>
     );
   }
-
-  // Min width per column for scrollable views
-  const minColWidth = viewMode === 'week' ? 100 : viewMode === 'month' ? 120 : undefined;
-  const timelineMinWidth = minColWidth
-    ? dateHeaders.reduce((sum, h) => sum + h.span * minColWidth, 0)
-    : undefined;
 
   return (
     <Box>
