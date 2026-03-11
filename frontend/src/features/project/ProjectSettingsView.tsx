@@ -25,6 +25,7 @@ import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import SecurityIcon from '@mui/icons-material/Security';
 import EditIcon from '@mui/icons-material/Edit';
+import DescriptionIcon from '@mui/icons-material/Description';
 import GroupIcon from '@mui/icons-material/Group';
 import SearchIcon from '@mui/icons-material/Search';
 import PublicIcon from '@mui/icons-material/Public';
@@ -74,6 +75,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
 
   // State
   const [editingName, setEditingName] = useState('');
+  const [editingDescription, setEditingDescription] = useState('');
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const [memberSearch, setMemberSearch] = useState('');
@@ -97,6 +99,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   React.useEffect(() => {
     if (project) {
       setEditingName(project.name || '');
+      setEditingDescription(project.description || '');
       setVisibility(project.visibility || 'private');
       setRequireApproval(project.require_approval ?? false);
       setPermissions(
@@ -253,6 +256,46 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
               변경
             </Button>
           </Box>
+        </Paper>
+      )}
+
+      {/* ─── Project Description Section ─── */}
+      {(isOwner || isSuperAdmin) && (
+        <Paper
+          sx={{
+            p: 3, mb: 3, borderRadius: 3,
+            border: '1px solid rgba(0,0,0,0.08)',
+            bgcolor: 'rgba(255,255,255,0.7)',
+            backdropFilter: 'blur(8px)',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <DescriptionIcon sx={{ color: '#2955FF', fontSize: '1.3rem' }} />
+            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', color: '#1A1D29' }}>
+              프로젝트 설명
+            </Typography>
+          </Box>
+          <TextField
+            fullWidth
+            size="small"
+            multiline
+            minRows={2}
+            maxRows={5}
+            value={editingDescription}
+            onChange={e => setEditingDescription(e.target.value)}
+            placeholder="프로젝트에 대한 간단한 설명을 입력하세요..."
+            sx={{ mb: 1.5, '& .MuiOutlinedInput-root': { fontSize: '0.9rem' } }}
+          />
+          <Button
+            variant="contained"
+            size="small"
+            disabled={editingDescription === (project?.description || '') || updateProjectMutation.isPending}
+            onClick={() => updateProjectMutation.mutate({ description: editingDescription.trim() })}
+            sx={{ bgcolor: '#2955FF', '&:hover': { bgcolor: '#1E44CC' }, px: 3, whiteSpace: 'nowrap' }}
+          >
+            저장
+          </Button>
         </Paper>
       )}
 

@@ -61,18 +61,30 @@ import { useUser } from '../context/UserContext';
 import { useAppStore } from '../stores/useAppStore';
 
 const BG_PALETTE = [
+  // Light
   '#F3F4F6',
   '#E5E5E5',
+  '#EEF2FF',
+  '#E0F2FE',
+  '#ECFDF5',
+  '#FEF9C3',
+  '#FFF1F2',
+  '#F3E8FF',
+  // Muted
   '#D8CFDC',
   '#E7C9D1',
   '#E8C097',
   '#E6D395',
   '#B7C9BB',
   '#9EBFD6',
+  '#B4C6D9',
+  '#C7B8D4',
+  // Dark
   '#5C6F8E',
   '#6F647F',
   '#6A4A3F',
   '#195B4E',
+  '#3B5998',
   '#4A4A4A',
 ];
 

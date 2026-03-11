@@ -94,9 +94,28 @@ const ProjectPage: React.FC = () => {
             {/* Header */}
             <Box sx={{ mb: 3 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-                    <Typography variant="h5" sx={{ fontWeight: 800, color: '#1A1D29', letterSpacing: '-0.025em' }}>
-                        {project?.name || 'Loading...'}
-                    </Typography>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="h5" sx={{ fontWeight: 800, color: '#1A1D29', letterSpacing: '-0.025em' }}>
+                            {project?.name || 'Loading...'}
+                        </Typography>
+                        {project?.description && (
+                            <Typography
+                                sx={{
+                                    fontSize: '0.85rem',
+                                    color: '#6B7280',
+                                    mt: 0.3,
+                                    lineHeight: 1.5,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    display: '-webkit-box',
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: 'vertical',
+                                }}
+                            >
+                                {project.description}
+                            </Typography>
+                        )}
+                    </Box>
                     <IconButton
                         onClick={() => openDrawer(null, projectId)}
                         sx={{
