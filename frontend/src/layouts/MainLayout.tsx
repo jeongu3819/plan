@@ -330,7 +330,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         }}
       >
         {/* Logo */}
-        <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer' }} onClick={() => navigate('/')}>
           <Box
             sx={{
               width: 38,
