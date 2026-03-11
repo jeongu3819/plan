@@ -113,6 +113,8 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
   const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
+  const syncingRef = useRef(false);
   const currentMarkerRef = useRef<HTMLDivElement>(null);
   const [nameColumnWidth, setNameColumnWidth] = useState(430);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -287,8 +289,20 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
   const dateRange = useMemo(() => {
     let start: Date, end: Date;
     if (viewMode === 'month') {
-      start = startOfMonth(subMonths(today, 3));
-      end = endOfMonth(addMonths(today, 3));
+      // Scan all items for earliest start_date
+      let earliest = startOfMonth(subMonths(today, 3));
+      const scanEarliest = (items: RoadmapItem[]) => {
+        items.forEach(item => {
+          if (item.start_date) {
+            const d = startOfMonth(new Date(item.start_date));
+            if (d < earliest) earliest = d;
+          }
+          if (item.children) scanEarliest(item.children);
+        });
+      };
+      scanEarliest(roadmapData?.items || []);
+      start = earliest;
+      end = endOfMonth(new Date(today.getFullYear(), 11, 1)); // end of current year
     } else if (viewMode === 'week') {
       // Past 2 months + future 3 months for scrollable week view
       start = startOfWeek(startOfMonth(subMonths(today, 2)), { weekStartsOn: 1 });
@@ -298,14 +312,33 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
       end = endOfYear(today);
     }
     return eachDayOfInterval({ start, end });
-  }, [viewMode]);
+  }, [viewMode, roadmapData]);
 
   const totalDays = dateRange.length;
   const rangeStart = dateRange[0];
 
-  // Auto-scroll to current period on week view
+  // Scroll sync between header and body
+  const handleHeaderScroll = useCallback(() => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    if (timelineScrollRef.current && bodyScrollRef.current) {
+      bodyScrollRef.current.scrollLeft = timelineScrollRef.current.scrollLeft;
+    }
+    syncingRef.current = false;
+  }, []);
+
+  const handleBodyScroll = useCallback(() => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    if (bodyScrollRef.current && timelineScrollRef.current) {
+      timelineScrollRef.current.scrollLeft = bodyScrollRef.current.scrollLeft;
+    }
+    syncingRef.current = false;
+  }, []);
+
+  // Auto-scroll to current period on week/month view
   useEffect(() => {
-    if (viewMode === 'week' && currentMarkerRef.current && timelineScrollRef.current) {
+    if ((viewMode === 'week' || viewMode === 'month') && currentMarkerRef.current && timelineScrollRef.current) {
       setTimeout(() => {
         currentMarkerRef.current?.scrollIntoView({
           behavior: 'smooth',
@@ -423,6 +456,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
               sx={{
                 display: 'flex',
                 minHeight: 44,
+                minWidth: timelineMinWidth ? nameColumnWidth + timelineMinWidth : undefined,
                 borderBottom: '1px solid rgba(0,0,0,0.06)',
                 '&:hover': { bgcolor: 'rgba(41,85,255,0.03)' },
                 '&:hover .subproject-delete-btn': { opacity: 1 },
@@ -440,6 +474,10 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                   pl: 0.5 + depth * 2.5,
                   pr: 1,
                   borderRight: '1px solid rgba(0,0,0,0.06)',
+                  position: 'sticky',
+                  left: 0,
+                  bgcolor: 'rgba(255,255,255,0.95)',
+                  zIndex: 3,
                 }}
               >
                 <Box
@@ -537,7 +575,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                 </Typography>
               </Box>
 
-              <Box sx={{ flexGrow: 1, position: 'relative', overflow: 'hidden' }}>
+              <Box sx={{ flexGrow: 1, minWidth: timelineMinWidth, position: 'relative', overflow: 'hidden' }}>
                 {/* Today marker */}
                 {(() => {
                   const todayOffset = differenceInDays(today, rangeStart);
@@ -741,8 +779,8 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
     );
   }
 
-  // Min width per column for scrollable week view
-  const minColWidth = viewMode === 'week' ? 100 : undefined;
+  // Min width per column for scrollable views
+  const minColWidth = viewMode === 'week' ? 100 : viewMode === 'month' ? 120 : undefined;
   const timelineMinWidth = minColWidth
     ? dateHeaders.reduce((sum, h) => sum + h.span * minColWidth, 0)
     : undefined;
@@ -877,9 +915,10 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
           </Box>
           <Box
             ref={timelineScrollRef}
+            onScroll={handleHeaderScroll}
             sx={{
               flexGrow: 1,
-              overflowX: viewMode === 'week' ? 'auto' : 'hidden',
+              overflowX: 'auto',
               '&::-webkit-scrollbar': { height: 6 },
               '&::-webkit-scrollbar-thumb': { bgcolor: '#CBD5E1', borderRadius: 3 },
             }}
@@ -964,7 +1003,16 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         </Box>
 
         {/* Body rows */}
-        <Box sx={{ overflowY: 'auto' }}>
+        <Box
+          ref={bodyScrollRef}
+          onScroll={handleBodyScroll}
+          sx={{
+            overflowX: 'auto',
+            overflowY: 'auto',
+            '&::-webkit-scrollbar': { height: 6 },
+            '&::-webkit-scrollbar-thumb': { bgcolor: '#CBD5E1', borderRadius: 3 },
+          }}
+        >
           {displayItems.length === 0 ? (
             <Box sx={{ p: 6, textAlign: 'center' }}>
               <Typography variant="body2" color="textSecondary">

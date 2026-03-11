@@ -118,6 +118,8 @@ const GlobalRoadmapPage: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
+  const syncingRef = useRef(false);
   const currentMarkerRef = useRef<HTMLDivElement>(null);
   const [sortKey, setSortKey] = useState<SortKey>('default');
   const [sortAsc, setSortAsc] = useState(true);
@@ -381,8 +383,20 @@ const GlobalRoadmapPage: React.FC = () => {
   const dateRange = useMemo(() => {
     let start: Date, end: Date;
     if (viewMode === 'month') {
-      start = startOfMonth(subMonths(today, 3));
-      end = endOfMonth(addMonths(today, 3));
+      // Scan all items for earliest start_date
+      let earliest = startOfMonth(subMonths(today, 3));
+      const scanEarliest = (items: RoadmapItem[]) => {
+        items.forEach(item => {
+          if (item.start_date) {
+            const d = startOfMonth(new Date(item.start_date));
+            if (d < earliest) earliest = d;
+          }
+          if (item.children) scanEarliest(item.children);
+        });
+      };
+      scanEarliest(roadmapData?.items || []);
+      start = earliest;
+      end = endOfMonth(new Date(today.getFullYear(), 11, 1)); // end of current year
     } else if (viewMode === 'week') {
       start = startOfWeek(startOfMonth(subMonths(today, 2)), { weekStartsOn: 1 });
       end = endOfWeek(endOfMonth(addMonths(today, 3)), { weekStartsOn: 1 });
@@ -391,14 +405,33 @@ const GlobalRoadmapPage: React.FC = () => {
       end = endOfYear(today);
     }
     return eachDayOfInterval({ start, end });
-  }, [viewMode]);
+  }, [viewMode, roadmapData]);
 
   const totalDays = dateRange.length;
   const rangeStart = dateRange[0];
 
-  // Auto-scroll to current period on week view
+  // Scroll sync between header and body
+  const handleHeaderScroll = useCallback(() => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    if (timelineScrollRef.current && bodyScrollRef.current) {
+      bodyScrollRef.current.scrollLeft = timelineScrollRef.current.scrollLeft;
+    }
+    syncingRef.current = false;
+  }, []);
+
+  const handleBodyScroll = useCallback(() => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    if (bodyScrollRef.current && timelineScrollRef.current) {
+      timelineScrollRef.current.scrollLeft = bodyScrollRef.current.scrollLeft;
+    }
+    syncingRef.current = false;
+  }, []);
+
+  // Auto-scroll to current period on week/month view
   useEffect(() => {
-    if (viewMode === 'week' && currentMarkerRef.current && timelineScrollRef.current) {
+    if ((viewMode === 'week' || viewMode === 'month') && currentMarkerRef.current && timelineScrollRef.current) {
       setTimeout(() => {
         currentMarkerRef.current?.scrollIntoView({
           behavior: 'smooth',
@@ -530,7 +563,7 @@ const GlobalRoadmapPage: React.FC = () => {
     };
   };
 
-  const minColWidth = viewMode === 'week' ? 100 : undefined;
+  const minColWidth = viewMode === 'week' ? 100 : viewMode === 'month' ? 120 : undefined;
   const timelineMinWidth = minColWidth
     ? dateHeaders.reduce((sum, h) => sum + h.span * minColWidth, 0)
     : undefined;
@@ -571,6 +604,7 @@ const GlobalRoadmapPage: React.FC = () => {
               sx={{
                 display: 'flex',
                 minHeight: item.type === 'project' ? 40 : 36,
+                minWidth: timelineMinWidth ? leftPanelWidth + timelineMinWidth : undefined,
                 borderBottom: item.type === 'project' ? '1px solid #E5E7EB' : '1px solid #F3F4F6',
                 '&:hover': { bgcolor: '#FAFBFF' },
                 transition: 'background 0.1s',
@@ -587,6 +621,10 @@ const GlobalRoadmapPage: React.FC = () => {
                   pl: 0.5 + depth * 2,
                   pr: 1,
                   borderRight: '1px solid #E5E7EB',
+                  position: 'sticky',
+                  left: 0,
+                  bgcolor: '#fff',
+                  zIndex: 3,
                 }}
               >
                 {/* Drag handle */}
@@ -687,7 +725,7 @@ const GlobalRoadmapPage: React.FC = () => {
               </Box>
 
               {/* Timeline bar */}
-              <Box sx={{ flexGrow: 1, position: 'relative', overflow: 'hidden' }}>
+              <Box sx={{ flexGrow: 1, minWidth: timelineMinWidth, position: 'relative', overflow: 'hidden' }}>
                 {/* Today marker */}
                 {(() => {
                   const todayOffset = differenceInDays(today, rangeStart);
@@ -926,9 +964,10 @@ const GlobalRoadmapPage: React.FC = () => {
             </Box>
             <Box
               ref={timelineScrollRef}
+              onScroll={handleHeaderScroll}
               sx={{
                 flexGrow: 1,
-                overflowX: viewMode === 'week' ? 'auto' : 'hidden',
+                overflowX: 'auto',
                 '&::-webkit-scrollbar': { height: 6 },
                 '&::-webkit-scrollbar-thumb': { bgcolor: '#CBD5E1', borderRadius: 3 },
               }}
@@ -1011,7 +1050,16 @@ const GlobalRoadmapPage: React.FC = () => {
           </Box>
 
           {/* ── Body rows ── */}
-          <Box sx={{ overflowY: 'auto' }}>
+          <Box
+            ref={bodyScrollRef}
+            onScroll={handleBodyScroll}
+            sx={{
+              overflowX: 'auto',
+              overflowY: 'auto',
+              '&::-webkit-scrollbar': { height: 6 },
+              '&::-webkit-scrollbar-thumb': { bgcolor: '#CBD5E1', borderRadius: 3 },
+            }}
+          >
             <DndContext
               sensors={dndSensors}
               collisionDetection={closestCenter}

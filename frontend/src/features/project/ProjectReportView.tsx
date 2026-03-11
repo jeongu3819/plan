@@ -368,10 +368,6 @@ const DETAIL_SECTION_COLORS: Record<string, string> = {
   '과제': '#2955FF', '기간': '#0D9488', '담당자': '#6B7280', '작업노트': '#7C3AED',
   '완료 항목': '#22C55E', '미완료 항목': '#F59E0B', '참고자료': '#3B82F6', '주의사항': '#EF4444',
 };
-const DETAIL_SECTION_BG: Record<string, string> = {
-  '과제': '#EEF2FF', '기간': '#F0FDFA', '담당자': '#F3F4F6', '작업노트': '#F5F3FF',
-  '완료 항목': '#F0FDF4', '미완료 항목': '#FFFBEB', '참고자료': '#EFF6FF', '주의사항': '#FEF2F2',
-};
 
 const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
   const sections = useMemo(() => {
@@ -410,37 +406,22 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+    <Box sx={{ borderRadius: 2, border: '1px solid #E5E7EB', overflow: 'hidden' }}>
       {sections.map((section, idx) => {
         if (section.content.length === 0) return null;
         const isLabeled = DETAIL_SECTION_LABELS.includes(section.label);
         const color = DETAIL_SECTION_COLORS[section.label] || '#374151';
-        const bgColor = DETAIL_SECTION_BG[section.label] || '#F9FAFB';
-
-        if (!isLabeled) {
-          // 라벨 없는 일반 텍스트
-          return (
-            <Box key={idx}>
-              {section.content.map((line, li) => (
-                <Typography key={li} sx={{ fontSize: '0.85rem', lineHeight: 1.7, color: '#374151', mb: 0.3 }}>
-                  {line}
-                </Typography>
-              ))}
-            </Box>
-          );
-        }
 
         return (
-          <Box key={idx} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #E5E7EB' }}>
-            <Box sx={{
-              px: 1.5, py: 0.6, bgcolor: bgColor,
-              borderBottom: '1px solid #E5E7EB',
-            }}>
-              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color }}>
-                {section.label}
-              </Typography>
-            </Box>
-            <Box sx={{ px: 1.5, py: 1 }}>
+          <Box key={idx} sx={{ borderTop: idx > 0 ? '1px solid #F3F4F6' : 'none' }}>
+            {isLabeled && (
+              <Box sx={{ px: 1.5, pt: 0.8, pb: 0.2 }}>
+                <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color, letterSpacing: '0.02em' }}>
+                  {section.label}
+                </Typography>
+              </Box>
+            )}
+            <Box sx={{ px: 1.5, pb: 0.8, pt: isLabeled ? 0.2 : 0.8 }}>
               {section.content.map((line, li) => {
                 const numMatch = line.match(/^(\d+)\.\s+(.+)$/);
                 if (numMatch) {
