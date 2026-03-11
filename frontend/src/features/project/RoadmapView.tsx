@@ -353,7 +353,27 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
     };
   };
 
-  // Flatten visible item IDs for SortableContext
+  // Filter done items recursively
+  const filterDoneItems = useCallback((items: RoadmapItem[]): RoadmapItem[] => {
+    if (!hideDone) return items;
+    return items.reduce<RoadmapItem[]>((acc, item) => {
+      if (item.type === 'task') {
+        if (item.status !== 'done') acc.push(item);
+      } else {
+        const filteredChildren = item.children ? filterDoneItems(item.children) : [];
+        if (filteredChildren.length > 0 || item.status !== 'done') {
+          acc.push({ ...item, children: filteredChildren });
+        }
+      }
+      return acc;
+    }, []);
+  }, [hideDone]);
+
+  // Use localItems (drag-reordered) with fallback to API data
+  const baseItems = localItems.length > 0 ? localItems : roadmapData?.items || [];
+  const displayItems = filterDoneItems(baseItems);
+
+  // Flatten visible item IDs for SortableContext (must match rendered items)
   const flatVisibleIds = useMemo(() => {
     const ids: string[] = [];
     const collect = (items: RoadmapItem[]) => {
@@ -364,9 +384,9 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
         }
       });
     };
-    collect(localItems);
+    collect(displayItems);
     return ids;
-  }, [localItems, expandedIds]);
+  }, [displayItems, expandedIds]);
 
   let todayLabelShown = false;
   const renderRow = (item: RoadmapItem, depth: number = 0): React.ReactNode => {
@@ -741,26 +761,6 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
       </Box>
     );
   }
-
-  // Filter done items recursively
-  const filterDoneItems = useCallback((items: RoadmapItem[]): RoadmapItem[] => {
-    if (!hideDone) return items;
-    return items.reduce<RoadmapItem[]>((acc, item) => {
-      if (item.type === 'task') {
-        if (item.status !== 'done') acc.push(item);
-      } else {
-        const filteredChildren = item.children ? filterDoneItems(item.children) : [];
-        if (filteredChildren.length > 0 || item.status !== 'done') {
-          acc.push({ ...item, children: filteredChildren });
-        }
-      }
-      return acc;
-    }, []);
-  }, [hideDone]);
-
-  // Use localItems (drag-reordered) with fallback to API data
-  const baseItems = localItems.length > 0 ? localItems : roadmapData?.items || [];
-  const displayItems = filterDoneItems(baseItems);
 
   // Min width per column for scrollable week view
   const minColWidth = viewMode === 'week' ? 100 : undefined;
