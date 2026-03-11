@@ -106,6 +106,7 @@ class TaskActivity(Base):
     order_index = Column(Integer, nullable=False, default=0)
     content = Column(Text, nullable=False, default="")
     checked = Column(Boolean, nullable=False, default=False)
+    checked_at = Column(DateTime, nullable=True)  # 체크 완료 시각
     style = Column(JSON, nullable=True)  # {"bold": true, "color": "#EF4444"}
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

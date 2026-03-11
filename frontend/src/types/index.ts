@@ -100,6 +100,7 @@ export interface TaskActivity {
   order_index: number;
   content: string;
   checked: boolean;
+  checked_at?: string | null;
   style?: { bold?: boolean; color?: string };
   created_at?: string;
 }

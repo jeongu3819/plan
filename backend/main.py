@@ -34,7 +34,7 @@ from app.models import (
     MemberGroup, MemberGroupUser,
     TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
 )
-from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS
+from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS, KST
 from app.llm.dsllm_adapter import chat as dsllm_chat
 from app.llm.dsllm_adapter import list_model_keys
 from app.llm.dsllm_adapter import MODEL_CONFIGS
@@ -54,6 +54,9 @@ def _run_migrations():
         if "block_type" not in cols:
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE task_activities ADD COLUMN block_type VARCHAR(20) NOT NULL DEFAULT "checkbox"'))
+        if "checked_at" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE task_activities ADD COLUMN checked_at DATETIME'))
 
 _run_migrations()
 
@@ -2693,6 +2696,7 @@ def get_task_activities(task_id: int, db: Session = Depends(get_db)):
             "order_index": a.order_index,
             "content": a.content,
             "checked": a.checked,
+            "checked_at": a.checked_at.isoformat() if a.checked_at else None,
             "style": a.style,
             "created_at": a.created_at.isoformat() if a.created_at else None,
         }
@@ -2734,6 +2738,7 @@ def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Dep
         "order_index": activity.order_index,
         "content": activity.content,
         "checked": activity.checked,
+        "checked_at": activity.checked_at.isoformat() if activity.checked_at else None,
         "style": activity.style,
         "created_at": activity.created_at.isoformat() if activity.created_at else None,
     }
@@ -2749,6 +2754,10 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
         activity.block_type = body["block_type"]
     if "checked" in body:
         activity.checked = body["checked"]
+        if body["checked"]:
+            activity.checked_at = datetime.now(KST)
+        else:
+            activity.checked_at = None
     if "style" in body:
         activity.style = body["style"]
     if "order_index" in body:
@@ -2763,6 +2772,7 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
         "order_index": activity.order_index,
         "content": activity.content,
         "checked": activity.checked,
+        "checked_at": activity.checked_at.isoformat() if activity.checked_at else None,
         "style": activity.style,
     }
 

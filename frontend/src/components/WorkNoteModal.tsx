@@ -27,6 +27,14 @@ import { CSS } from '@dnd-kit/utilities';
 
 const COLORS = ['#374151', '#EF4444', '#F59E0B', '#22C55E', '#3B82F6', '#8B5CF6'];
 
+/** Restore a previously saved selection range */
+const restoreSelection = (range: Range | null) => {
+    if (!range) return;
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+};
+
 interface WorkNoteModalProps {
     open: boolean;
     onClose: () => void;
@@ -51,21 +59,22 @@ interface SortableBlockProps {
     blockRefs: React.MutableRefObject<Map<number, HTMLDivElement>>;
     showColorPicker: number | null;
     onShowColorPicker: (id: number | null) => void;
+    savedSelection: React.MutableRefObject<Range | null>;
 }
 
-/** Apply execCommand-based formatting to the current selection */
-const applyBold = () => {
-    document.execCommand('bold', false);
-};
-
-const applyColor = (color: string) => {
-    document.execCommand('foreColor', false, color);
+/** Format checked_at date for display */
+const formatCheckedDate = (checkedAt?: string | null): string => {
+    if (!checkedAt) return '';
+    const d = new Date(checkedAt);
+    const m = d.getMonth() + 1;
+    const day = d.getDate();
+    return `${m}/${day}`;
 };
 
 const SortableBlock: React.FC<SortableBlockProps> = ({
     block, index, canEdit, focusedBlockId,
     onCheck, onContentChange, onFocus, onKeyDown, onToggleType, onDelete, onInsertAfter,
-    blockRefs, showColorPicker, onShowColorPicker,
+    blockRefs, showColorPicker, onShowColorPicker, savedSelection,
 }) => {
     const {
         attributes, listeners, setNodeRef, transform, transition, isDragging,
@@ -111,7 +120,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         // Ctrl+B for bold on selected text
         if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
             e.preventDefault();
-            applyBold();
+            document.execCommand('bold', false);
             return;
         }
         onKeyDown(e, block, index);
@@ -124,6 +133,23 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         }
         return () => { blockRefs.current.delete(block.id); };
     }, [block.id]);
+
+    // Save selection on any selection change while this block is focused
+    useEffect(() => {
+        const handler = () => {
+            if (focusedBlockId === block.id && contentRef.current) {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount > 0 && contentRef.current.contains(sel.anchorNode)) {
+                    savedSelection.current = sel.getRangeAt(0).cloneRange();
+                }
+            }
+        };
+        document.addEventListener('selectionchange', handler);
+        return () => document.removeEventListener('selectionchange', handler);
+    }, [focusedBlockId, block.id]);
+
+    const isCheckbox = block.block_type === 'checkbox';
+    const isEmpty = !block.content || block.content.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/gi, '').trim() === '';
 
     return (
         <Box ref={setNodeRef} style={style}>
@@ -159,7 +185,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     display: 'flex', alignItems: 'center', pt: 0.6,
                     minWidth: 28, justifyContent: 'center',
                 }}>
-                    {block.block_type === 'checkbox' ? (
+                    {isCheckbox ? (
                         <IconButton
                             size="small"
                             onClick={() => canEdit && onCheck(block)}
@@ -185,7 +211,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                         onBlur={handleBlur}
                         onFocus={() => onFocus(block.id)}
                         onKeyDown={e => canEdit && handleKeyDownInternal(e)}
-                        data-placeholder={block.block_type === 'checkbox' ? '체크리스트 항목...' : '메모를 작성하세요...'}
+                        data-placeholder={isCheckbox ? '체크리스트 항목...' : '메모를 작성하세요...'}
                         sx={{
                             fontSize: '0.9rem',
                             lineHeight: 1.8,
@@ -197,8 +223,8 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             transition: 'background 0.15s',
                             wordBreak: 'break-word',
                             whiteSpace: 'pre-wrap',
-                            textDecoration: block.block_type === 'checkbox' && block.checked ? 'line-through' : 'none',
-                            opacity: block.block_type === 'checkbox' && block.checked ? 0.5 : 1,
+                            textDecoration: isCheckbox && block.checked ? 'line-through' : 'none',
+                            opacity: isCheckbox && block.checked ? 0.5 : 1,
                             color: '#374151',
                             '&:focus': {
                                 bgcolor: 'rgba(41,85,255,0.03)',
@@ -211,6 +237,32 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             '& b, & strong': { fontWeight: 700 },
                         }}
                     />
+                    {/* Shift+Enter hint for checkbox blocks */}
+                    {isCheckbox && canEdit && focusedBlockId === block.id && isEmpty && (
+                        <Typography
+                            variant="caption"
+                            sx={{
+                                position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
+                                color: '#D1D5DB', fontSize: '0.65rem', pointerEvents: 'none',
+                                whiteSpace: 'nowrap',
+                            }}
+                        >
+                            Shift+Enter 줄바꿈
+                        </Typography>
+                    )}
+                    {/* Checked date display */}
+                    {isCheckbox && block.checked && block.checked_at && (
+                        <Typography
+                            variant="caption"
+                            sx={{
+                                position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
+                                color: '#9CA3AF', fontSize: '0.65rem', pointerEvents: 'none',
+                                whiteSpace: 'nowrap',
+                            }}
+                        >
+                            {formatCheckedDate(block.checked_at)}
+                        </Typography>
+                    )}
                 </Box>
 
                 {/* Block actions */}
@@ -237,8 +289,9 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             <IconButton
                                 size="small"
                                 onMouseDown={(e) => {
-                                    e.preventDefault(); // prevent losing selection
-                                    applyBold();
+                                    e.preventDefault();
+                                    restoreSelection(savedSelection.current);
+                                    setTimeout(() => document.execCommand('bold', false), 0);
                                 }}
                                 sx={{ color: '#9CA3AF', p: 0.4, '&:hover': { color: '#2955FF' } }}
                             >
@@ -270,8 +323,11 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                         key={c}
                                         onMouseDown={(e) => {
                                             e.preventDefault();
-                                            applyColor(c);
-                                            onShowColorPicker(null);
+                                            restoreSelection(savedSelection.current);
+                                            setTimeout(() => {
+                                                document.execCommand('foreColor', false, c);
+                                                onShowColorPicker(null);
+                                            }, 0);
                                         }}
                                         sx={{
                                             width: 16, height: 16, borderRadius: '50%',
@@ -339,6 +395,7 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     const [showColorPicker, setShowColorPicker] = useState<number | null>(null);
     const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map());
     const pendingFocusRef = useRef<number | null>(null);
+    const savedSelection = useRef<Range | null>(null);
 
     const { data: blocks = [] } = useQuery<TaskActivity[]>({
         queryKey: ['activities', taskId],
@@ -497,10 +554,10 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
             maxWidth={false}
             PaperProps={{
                 sx: {
-                    width: '720px',
-                    maxWidth: '90vw',
-                    height: '85vh',
-                    maxHeight: '85vh',
+                    width: '820px',
+                    maxWidth: '92vw',
+                    height: '90vh',
+                    maxHeight: '90vh',
                     borderRadius: 3,
                     display: 'flex',
                     flexDirection: 'column',
@@ -595,6 +652,7 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                                 blockRefs={blockRefs}
                                 showColorPicker={showColorPicker}
                                 onShowColorPicker={setShowColorPicker}
+                                savedSelection={savedSelection}
                             />
                         ))}
                     </SortableContext>
