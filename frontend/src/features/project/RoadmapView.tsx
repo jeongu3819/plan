@@ -570,7 +570,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
                         )}
                         <Box sx={{
                           position: 'absolute', top: 0, bottom: 0, left: 0,
-                          width: 1.5, bgcolor: '#EF4444',
+                          width: 2, bgcolor: '#EF4444',
                           opacity: 0.35,
                         }} />
                       </Box>

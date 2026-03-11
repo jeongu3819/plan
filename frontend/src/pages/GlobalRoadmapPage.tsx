@@ -719,7 +719,7 @@ const GlobalRoadmapPage: React.FC = () => {
                         )}
                         <Box sx={{
                           position: 'absolute', top: 0, bottom: 0, left: 0,
-                          width: isProject ? 2 : 1.5, bgcolor: '#EF4444',
+                          width: 2, bgcolor: '#EF4444',
                           opacity: isProject ? 0.35 : 0.2,
                         }} />
                       </Box>
