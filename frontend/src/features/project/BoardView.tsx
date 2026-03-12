@@ -111,35 +111,39 @@ const DroppableColumn = ({ id, children }: { id: string; children: React.ReactNo
   );
 };
 
-// Flow connector between columns
-const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: string }) => {
-  const gradientId = React.useId();
-  return (
+// Flow connector between columns (CSS-based)
+const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: string }) => (
+  <Box
+    sx={{
+      display: 'flex',
+      alignItems: 'center',
+      width: 40,
+      flexShrink: 0,
+      mx: 0.5,
+    }}
+  >
+    {/* Solid gradient bar */}
     <Box
       sx={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 44,
-        flexShrink: 0,
-        mx: 0.5,
+        flex: 1,
+        height: 3,
+        borderRadius: 2,
+        background: `linear-gradient(to right, ${fromColor}66, ${toColor}99)`,
       }}
-    >
-      <svg width="44" height="20" viewBox="0 0 44 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="44" y2="0" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor={fromColor} stopOpacity="0.4" />
-            <stop offset="100%" stopColor={toColor} stopOpacity="0.6" />
-          </linearGradient>
-        </defs>
-        {/* Solid tapered line */}
-        <path d="M0 10 L32 10" stroke={`url(#${gradientId})`} strokeWidth="2.5" strokeLinecap="round" />
-        {/* Filled arrow head */}
-        <path d="M30 5 L40 10 L30 15" fill={toColor} fillOpacity="0.45" stroke={toColor} strokeWidth="1.2" strokeOpacity="0.5" strokeLinejoin="round" />
-      </svg>
-    </Box>
-  );
-};
+    />
+    {/* Triangle arrowhead */}
+    <Box
+      sx={{
+        width: 0,
+        height: 0,
+        borderTop: '6px solid transparent',
+        borderBottom: '6px solid transparent',
+        borderLeft: `8px solid ${toColor}88`,
+        flexShrink: 0,
+      }}
+    />
+  </Box>
+);
 
 // Droppable hold pill (compact drop target)
 const DroppableHoldPill = ({ children }: { children: React.ReactNode }) => {
