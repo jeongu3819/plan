@@ -15,6 +15,8 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { Task } from '../../types';
 import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -110,23 +112,26 @@ const DroppableColumn = ({ id, children }: { id: string; children: React.ReactNo
   );
 };
 
-// Droppable hold zone
-const DroppableHoldZone = ({ children }: { children: React.ReactNode }) => {
+// Droppable hold pill (compact drop target)
+const DroppableHoldPill = ({ children }: { children: React.ReactNode }) => {
   const { setNodeRef, isOver } = useDroppable({ id: 'hold' });
   return (
-    <div
-      ref={setNodeRef}
-      style={{
-        minHeight: 60,
-        borderRadius: 12,
-        backgroundColor: isOver ? 'rgba(245, 158, 11, 0.1)' : 'rgba(255,255,255,0.4)',
-        border: isOver ? '2px solid rgba(245, 158, 11, 0.4)' : '1px dashed rgba(0,0,0,0.1)',
-        backdropFilter: 'blur(8px)',
-        transition: 'all 0.2s ease',
-        padding: '12px',
-      }}
-    >
+    <div ref={setNodeRef}>
       {children}
+      {/* Invisible expanded drop area when dragging */}
+      {isOver && (
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: -8,
+            borderRadius: 3,
+            border: '2px solid rgba(245, 158, 11, 0.5)',
+            bgcolor: 'rgba(245, 158, 11, 0.08)',
+            pointerEvents: 'none',
+            transition: 'all 0.2s ease',
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -148,6 +153,7 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     return rawTasks.filter(t => t.title.toLowerCase().includes(q));
   }, [rawTasks, filterSearch]);
   const [activeTask, setActiveTask] = React.useState<Task | null>(null);
+  const [holdExpanded, setHoldExpanded] = React.useState(false);
   const [sortField, setSortField] = React.useState<SortField>('default');
   const [sortDirection, setSortDirection] = React.useState<SortDirection>('asc');
 
@@ -475,13 +481,96 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         </Box>
 
         {/* Hold Zone at Bottom */}
-        <Box sx={{ flexShrink: 0, mt: 1 }}>
-          <DroppableHoldZone>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: holdTasks.length > 0 ? 1 : 0 }}>
-              <PauseCircleOutlineIcon sx={{ fontSize: 18, color: '#F59E0B' }} />
+        <Box sx={{ flexShrink: 0, mt: 1, position: 'relative' }}>
+          <DroppableHoldPill>
+            {/* Expandable panel (slides up) */}
+            <Box
+              sx={{
+                maxHeight: holdExpanded ? 320 : 0,
+                overflow: 'hidden',
+                transition: 'max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                mb: holdExpanded ? 1 : 0,
+              }}
+            >
+              {holdTasks.length > 0 ? (
+                <SortableContext
+                  id="hold"
+                  items={holdTasks.map(t => t.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <Box
+                    sx={{
+                      p: 1.5,
+                      bgcolor: 'rgba(255,255,255,0.6)',
+                      backdropFilter: 'blur(8px)',
+                      border: '1px solid rgba(0,0,0,0.06)',
+                      borderRadius: 2,
+                      overflowY: 'auto',
+                      maxHeight: 300,
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                        gap: 1,
+                      }}
+                    >
+                      {holdTasks.map(task => (
+                        <SortableTaskItem
+                          key={task.id}
+                          task={task}
+                          onClick={() => openDrawer(task, projectId)}
+                          compact
+                        />
+                      ))}
+                    </Box>
+                  </Box>
+                </SortableContext>
+              ) : (
+                <Box
+                  sx={{
+                    p: 2,
+                    textAlign: 'center',
+                    bgcolor: 'rgba(255,255,255,0.5)',
+                    border: '1px solid rgba(0,0,0,0.06)',
+                    borderRadius: 2,
+                  }}
+                >
+                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.75rem' }}>
+                    보류된 Task가 없습니다
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+
+            {/* Hold pill button */}
+            <Box
+              onClick={() => setHoldExpanded(prev => !prev)}
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 0.8,
+                px: 2,
+                py: 0.8,
+                borderRadius: 6,
+                bgcolor: holdExpanded ? '#FFFBEB' : 'rgba(255,255,255,0.6)',
+                border: holdExpanded ? '1px solid rgba(245, 158, 11, 0.3)' : '1px solid rgba(0,0,0,0.08)',
+                backdropFilter: 'blur(8px)',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                userSelect: 'none',
+                '&:hover': {
+                  bgcolor: '#FFFBEB',
+                  borderColor: 'rgba(245, 158, 11, 0.35)',
+                  boxShadow: '0 2px 8px rgba(245, 158, 11, 0.12)',
+                },
+              }}
+            >
+              <PauseCircleOutlineIcon sx={{ fontSize: 16, color: '#F59E0B' }} />
               <Typography
-                variant="subtitle2"
-                sx={{ fontWeight: 700, fontSize: '0.82rem', color: '#92400E' }}
+                sx={{ fontWeight: 700, fontSize: '0.78rem', color: '#92400E' }}
               >
                 Hold
               </Typography>
@@ -490,49 +579,23 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   label={holdTasks.length}
                   size="small"
                   sx={{
-                    height: 18,
-                    minWidth: 18,
-                    fontSize: '0.65rem',
-                    fontWeight: 600,
+                    height: 17,
+                    minWidth: 17,
+                    fontSize: '0.6rem',
+                    fontWeight: 700,
                     bgcolor: '#FEF3C7',
                     color: '#92400E',
+                    '& .MuiChip-label': { px: 0.5 },
                   }}
                 />
               )}
-              {holdTasks.length === 0 && (
-                <Typography
-                  variant="caption"
-                  sx={{ color: '#9CA3AF', fontSize: '0.72rem', ml: 0.5 }}
-                >
-                  보류할 Task를 여기로 드래그하세요
-                </Typography>
+              {holdExpanded ? (
+                <KeyboardArrowDownIcon sx={{ fontSize: 16, color: '#92400E' }} />
+              ) : (
+                <KeyboardArrowUpIcon sx={{ fontSize: 16, color: '#9CA3AF' }} />
               )}
             </Box>
-            {holdTasks.length > 0 && (
-              <SortableContext
-                id="hold"
-                items={holdTasks.map(t => t.id)}
-                strategy={verticalListSortingStrategy}
-              >
-                <Box
-                  sx={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-                    gap: 1,
-                  }}
-                >
-                  {holdTasks.map(task => (
-                    <SortableTaskItem
-                      key={task.id}
-                      task={task}
-                      onClick={() => openDrawer(task, projectId)}
-                      compact
-                    />
-                  ))}
-                </Box>
-              </SortableContext>
-            )}
-          </DroppableHoldZone>
+          </DroppableHoldPill>
         </Box>
 
         {/* Drag Overlay */}
