@@ -8,11 +8,13 @@ import {
   MenuItem,
   IconButton,
   Tooltip,
+  LinearProgress,
 } from '@mui/material';
 import SortIcon from '@mui/icons-material/Sort';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import { Task } from '../../types';
 import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -43,12 +45,16 @@ interface BoardViewProps {
   projectId: number;
 }
 
-const COLUMNS: { id: Task['status']; label: string; color: string }[] = [
-  { id: 'todo', label: 'To Do', color: '#6B7280' },
-  { id: 'in_progress', label: 'In Progress', color: '#2955FF' },
-  { id: 'done', label: 'Done', color: '#22C55E' },
-  { id: 'hold', label: 'Hold', color: '#F59E0B' },
+// Visual columns for the main board (no Hold)
+const BOARD_COLUMNS: { id: string; label: string; sublabel?: string; color: string; status: Task['status'] }[] = [
+  { id: 'todo', label: 'To Do', color: '#6B7280', status: 'todo' },
+  { id: 'in_progress', label: 'In Progress', color: '#2955FF', status: 'in_progress' },
+  { id: 'in_progress_advanced', label: 'Almost Done', sublabel: '70% 이상 진행', color: '#7C3AED', status: 'in_progress' },
+  { id: 'done', label: 'Done', color: '#22C55E', status: 'done' },
 ];
+
+// All droppable IDs (including hold)
+const ALL_DROP_IDS = ['todo', 'in_progress', 'in_progress_advanced', 'done', 'hold'];
 
 type SortField = 'default' | 'created_at' | 'due_date' | 'priority' | 'title';
 type SortDirection = 'asc' | 'desc';
@@ -64,7 +70,7 @@ const SORT_OPTIONS: { value: SortField; label: string }[] = [
 const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
 // Sortable task wrapper
-const SortableTaskItem = ({ task, onClick }: { task: Task; onClick: () => void }) => {
+const SortableTaskItem = ({ task, onClick, compact }: { task: Task; onClick: () => void; compact?: boolean }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { task },
@@ -78,7 +84,7 @@ const SortableTaskItem = ({ task, onClick }: { task: Task; onClick: () => void }
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <TaskCard task={task} onClick={onClick} />
+      <TaskCard task={task} onClick={onClick} compact={compact} />
     </div>
   );
 };
@@ -97,6 +103,27 @@ const DroppableColumn = ({ id, children }: { id: string; children: React.ReactNo
         borderRadius: 8,
         backgroundColor: isOver ? 'rgba(41, 85, 255, 0.08)' : 'transparent',
         transition: 'background-color 0.2s ease',
+      }}
+    >
+      {children}
+    </div>
+  );
+};
+
+// Droppable hold zone
+const DroppableHoldZone = ({ children }: { children: React.ReactNode }) => {
+  const { setNodeRef, isOver } = useDroppable({ id: 'hold' });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        minHeight: 60,
+        borderRadius: 12,
+        backgroundColor: isOver ? 'rgba(245, 158, 11, 0.1)' : 'rgba(255,255,255,0.4)',
+        border: isOver ? '2px solid rgba(245, 158, 11, 0.4)' : '1px dashed rgba(0,0,0,0.1)',
+        backdropFilter: 'blur(8px)',
+        transition: 'all 0.2s ease',
+        padding: '12px',
       }}
     >
       {children}
@@ -162,6 +189,28 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     [sortField, sortDirection]
   );
 
+  // Get tasks for each visual column
+  const getColumnTasks = React.useCallback(
+    (colId: string): Task[] => {
+      if (!tasks) return [];
+      switch (colId) {
+        case 'todo':
+          return tasks.filter(t => t.status === 'todo');
+        case 'in_progress':
+          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) < 70);
+        case 'in_progress_advanced':
+          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) >= 70);
+        case 'done':
+          return tasks.filter(t => t.status === 'done');
+        case 'hold':
+          return tasks.filter(t => t.status === 'hold');
+        default:
+          return [];
+      }
+    },
+    [tasks]
+  );
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 8 },
@@ -190,16 +239,17 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     if (!over) return;
 
     const activeId = active.id as number;
-    const overId = over.id;
+    const overId = over.id as string;
 
+    // Determine the target status from drop zone
     let newStatus = '';
-
-    // Check if dropped on a column
-    if (COLUMNS.some(col => col.id === overId)) {
-      newStatus = overId as string;
+    if (ALL_DROP_IDS.includes(overId)) {
+      // Dropped on a column/zone directly
+      const col = BOARD_COLUMNS.find(c => c.id === overId);
+      newStatus = col ? col.status : (overId === 'hold' ? 'hold' : '');
     } else {
-      // Dropped over another task
-      const overTask = tasks?.find(t => t.id === overId);
+      // Dropped over another task — find which column it belongs to
+      const overTask = tasks?.find(t => t.id === Number(overId));
       if (overTask) newStatus = overTask.status;
     }
 
@@ -212,10 +262,10 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
   if (isLoading) {
     return (
       <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
-        {COLUMNS.map(col => (
+        {BOARD_COLUMNS.map(col => (
           <Paper
             key={col.id}
-            sx={{ minWidth: 280, height: 400, bgcolor: '#F3F4F6', borderRadius: 2 }}
+            sx={{ flex: 1, minWidth: 240, height: 400, bgcolor: '#F3F4F6', borderRadius: 2 }}
             elevation={0}
           />
         ))}
@@ -223,10 +273,12 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     );
   }
 
+  const holdTasks = sortTasks(getColumnTasks('hold'));
+
   return (
-    <Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)' }}>
       {/* Sort Controls */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexShrink: 0 }}>
         <SortIcon sx={{ fontSize: 18, color: '#6B7280' }} />
         <TextField
           select
@@ -268,20 +320,20 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
+        {/* Main Board Columns */}
         <Box
-          sx={{ display: 'flex', gap: 0, alignItems: 'stretch', overflowX: 'auto', pb: 2, height: 'calc(100vh - 220px)' }}
+          sx={{ display: 'flex', gap: 0, alignItems: 'stretch', overflowX: 'auto', pb: 1.5, flex: 1, minHeight: 0 }}
         >
-          {COLUMNS.map((col, colIndex) => {
-            const colTasks = sortTasks(tasks?.filter(t => t.status === col.id) || []);
-            // Show arrow after To Do (0) and In Progress (1) — flow: To Do → In Progress → Done
-            const showArrow = colIndex < 2;
+          {BOARD_COLUMNS.map((col, colIndex) => {
+            const colTasks = sortTasks(getColumnTasks(col.id));
+            const showArrow = colIndex < BOARD_COLUMNS.length - 1;
 
             return (
               <React.Fragment key={col.id}>
               <Box
                 sx={{
                   flex: 1,
-                  minWidth: 280,
+                  minWidth: 240,
                   bgcolor: 'rgba(255,255,255,0.5)',
                   backdropFilter: 'blur(8px)',
                   border: '1px solid rgba(0,0,0,0.06)',
@@ -310,6 +362,20 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                     >
                       {col.label}
                     </Typography>
+                    {col.sublabel && (
+                      <Chip
+                        label={col.sublabel}
+                        size="small"
+                        sx={{
+                          height: 18,
+                          fontSize: '0.62rem',
+                          fontWeight: 600,
+                          bgcolor: `${col.color}15`,
+                          color: col.color,
+                          border: `1px solid ${col.color}30`,
+                        }}
+                      />
+                    )}
                     <Chip
                       label={colTasks.length}
                       size="small"
@@ -324,6 +390,25 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                     />
                   </Box>
                 </Box>
+
+                {/* Progress bar for advanced column */}
+                {col.id === 'in_progress_advanced' && (
+                  <Box sx={{ px: 2, pb: 1 }}>
+                    <LinearProgress
+                      variant="determinate"
+                      value={70}
+                      sx={{
+                        height: 3,
+                        borderRadius: 2,
+                        bgcolor: '#E5E7EB',
+                        '& .MuiLinearProgress-bar': {
+                          bgcolor: col.color,
+                          borderRadius: 2,
+                        },
+                      }}
+                    />
+                  </Box>
+                )}
 
                 {/* Droppable + Sortable Area */}
                 <SortableContext
@@ -358,10 +443,12 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   </DroppableColumn>
                 </SortableContext>
 
-                {/* Quick Add */}
-                <Box sx={{ px: 1, pb: 1 }}>
-                  <QuickAdd projectId={projectId} defaultStatus={col.id} />
-                </Box>
+                {/* Quick Add (only for todo and in_progress) */}
+                {(col.id === 'todo' || col.id === 'in_progress') && (
+                  <Box sx={{ px: 1, pb: 1 }}>
+                    <QuickAdd projectId={projectId} defaultStatus={col.status} />
+                  </Box>
+                )}
               </Box>
               {/* Flow arrow between columns */}
               {showArrow && (
@@ -382,13 +469,70 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   />
                 </Box>
               )}
-              {/* Gap between Done and Hold */}
-              {!showArrow && colIndex < COLUMNS.length - 1 && (
-                <Box sx={{ width: 16, flexShrink: 0 }} />
-              )}
               </React.Fragment>
             );
           })}
+        </Box>
+
+        {/* Hold Zone at Bottom */}
+        <Box sx={{ flexShrink: 0, mt: 1 }}>
+          <DroppableHoldZone>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: holdTasks.length > 0 ? 1 : 0 }}>
+              <PauseCircleOutlineIcon sx={{ fontSize: 18, color: '#F59E0B' }} />
+              <Typography
+                variant="subtitle2"
+                sx={{ fontWeight: 700, fontSize: '0.82rem', color: '#92400E' }}
+              >
+                Hold
+              </Typography>
+              {holdTasks.length > 0 && (
+                <Chip
+                  label={holdTasks.length}
+                  size="small"
+                  sx={{
+                    height: 18,
+                    minWidth: 18,
+                    fontSize: '0.65rem',
+                    fontWeight: 600,
+                    bgcolor: '#FEF3C7',
+                    color: '#92400E',
+                  }}
+                />
+              )}
+              {holdTasks.length === 0 && (
+                <Typography
+                  variant="caption"
+                  sx={{ color: '#9CA3AF', fontSize: '0.72rem', ml: 0.5 }}
+                >
+                  보류할 Task를 여기로 드래그하세요
+                </Typography>
+              )}
+            </Box>
+            {holdTasks.length > 0 && (
+              <SortableContext
+                id="hold"
+                items={holdTasks.map(t => t.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                    gap: 1,
+                  }}
+                >
+                  {holdTasks.map(task => (
+                    <SortableTaskItem
+                      key={task.id}
+                      task={task}
+                      onClick={() => openDrawer(task, projectId)}
+                      compact
+                    />
+                  ))}
+                </Box>
+              </SortableContext>
+            )}
+          </DroppableHoldZone>
         </Box>
 
         {/* Drag Overlay */}
