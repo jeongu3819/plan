@@ -120,25 +120,22 @@ const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: str
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 36,
+        width: 44,
         flexShrink: 0,
-        py: 2,
+        mx: 0.5,
       }}
     >
-      <svg width="36" height="28" viewBox="0 0 36 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <svg width="44" height="20" viewBox="0 0 44 20" fill="none" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="36" y2="0" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stopColor={fromColor} stopOpacity="0.25" />
-            <stop offset="50%" stopColor={toColor} stopOpacity="0.5" />
-            <stop offset="100%" stopColor={toColor} stopOpacity="0.25" />
+          <linearGradient id={gradientId} x1="0" y1="0" x2="44" y2="0" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor={fromColor} stopOpacity="0.4" />
+            <stop offset="100%" stopColor={toColor} stopOpacity="0.6" />
           </linearGradient>
         </defs>
-        {/* Dashed line */}
-        <line x1="0" y1="14" x2="24" y2="14" stroke={`url(#${gradientId})`} strokeWidth="2" strokeDasharray="3 3" strokeLinecap="round" />
-        {/* Chevron arrowhead */}
-        <path d="M22 9 L29 14 L22 19" stroke={toColor} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.5" fill="none" />
-        {/* Small dot at start */}
-        <circle cx="1.5" cy="14" r="1.5" fill={fromColor} fillOpacity="0.3" />
+        {/* Solid tapered line */}
+        <path d="M0 10 L32 10" stroke={`url(#${gradientId})`} strokeWidth="2.5" strokeLinecap="round" />
+        {/* Filled arrow head */}
+        <path d="M30 5 L40 10 L30 15" fill={toColor} fillOpacity="0.45" stroke={toColor} strokeWidth="1.2" strokeOpacity="0.5" strokeLinejoin="round" />
       </svg>
     </Box>
   );
