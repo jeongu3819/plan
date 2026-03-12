@@ -376,18 +376,15 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                 >
                   <ArrowForwardIcon
                     sx={{
-                      fontSize: 20,
-                      color: '#D1D5DB',
-                      opacity: 0.8,
+                      fontSize: 24,
+                      color: '#9CA3AF',
                     }}
                   />
                 </Box>
               )}
-              {/* Separator between Done and Hold */}
+              {/* Gap between Done and Hold */}
               {!showArrow && colIndex < COLUMNS.length - 1 && (
-                <Box sx={{ width: 24, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Box sx={{ width: 1, height: '60%', bgcolor: '#E5E7EB', borderRadius: 1 }} />
-                </Box>
+                <Box sx={{ width: 16, flexShrink: 0 }} />
               )}
               </React.Fragment>
             );
