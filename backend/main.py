@@ -39,7 +39,7 @@ from app.llm.dsllm_adapter import chat as dsllm_chat
 from app.llm.dsllm_adapter import chat_stream as dsllm_chat_stream
 from app.llm.dsllm_adapter import list_model_keys
 from app.llm.dsllm_adapter import MODEL_CONFIGS
-from app.utils.text import sanitize_llm_text, sanitize_llm_text_ai
+from app.utils.text import sanitize_llm_text, sanitize_llm_text_ai, normalize_task_blocks
 from app.routers import auth, knox
 
 # ✅ 새 테이블 자동 생성 (member_groups, member_group_users 등)
@@ -3141,9 +3141,23 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
 각 Task에 대해 현재 상태, 진행률, 그리고 현재까지 어떤 단계까지 진행되었는지를 설명하세요.
 작업노트의 체크박스 항목과 텍스트 메모를 맥락적으로 통합하여, 해당 Task에서 무엇이 수행되었고 어떤 결과가 나왔는지를 하나의 흐름으로 서술하세요.
 첨부 자료가 있는 경우, 해당 자료가 Task 진행에서 어떤 역할을 하는지도 설명하세요.
-반드시 아래 형식으로 작성하세요:
-[Task: Task제목]
-해당 Task에 대한 분석 내용을 문장형 서술로 여러 줄 작성.
+
+반드시 아래 형식 규칙을 지켜서 작성하세요:
+- 각 Task의 첫 줄은 반드시 [Task: Task제목] 만 단독 줄로 출력하세요. 같은 줄에 다른 텍스트를 이어서 쓰지 마세요.
+- 각 Task 블록 사이에는 반드시 빈 줄 1줄을 넣으세요.
+- 하나의 Task 분석이 끝나면 줄바꿈 2번 후 다음 [Task: ...]를 시작하세요.
+
+올바른 예시:
+[Task: Data 확보]
+이 작업은 현재 진행 중이며...
+작업노트에 따르면...
+
+[Task: 회의 대응]
+이 작업은 1차 협업 회의를 통해...
+
+잘못된 예시 (절대 이렇게 쓰지 마세요):
+[Task: Data 확보] 이 작업은 현재 진행 중이며...
+[Task: 회의 대응] 다음 작업은...
 
 순서는 반드시 진행 중(in_progress) -> 대기(todo) -> 보류(hold) -> 완료(done) 순으로 작성하세요.
 완료된 Task는 맨 마지막에 간략하게만 작성하세요.
@@ -3201,6 +3215,10 @@ def generate_report(body: ReportRequest, db: Session = Depends(get_db)):
 
         if not any(sections.values()):
             sections["overview"] = content
+
+        # ✅ Task 블록 정규화 (task_analysis만)
+        if sections.get("task_analysis"):
+            sections["task_analysis"] = normalize_task_blocks(sections["task_analysis"])
 
         # ✅ DB에 저장
         db_report = ProjectAiReport(

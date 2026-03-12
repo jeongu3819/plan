@@ -23,6 +23,33 @@ def sanitize_llm_text(text: str) -> str:
     return text.strip()
 
 
+def normalize_task_blocks(text: str) -> str:
+    """
+    [Task: ...] 블록을 강제로 정리하여 각 Task가 독립 블록이 되도록 한다.
+    - [Task: ...] 앞에 항상 빈 줄 확보
+    - [Task: ...] 뒤에 같은 줄에 본문이 붙어 있으면 줄바꿈 강제
+    - 개행 과다 정리
+    """
+    if not text:
+        return ""
+
+    s = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # [Task: ...] 앞은 항상 빈 줄 확보
+    s = re.sub(r"\n*(\[Task:\s*)", r"\n\n\1", s)
+
+    # 문서 시작 부분 개행 제거
+    s = s.lstrip()
+
+    # [Task: ...] 뒤에 같은 줄 본문이 붙어 있으면 줄바꿈 강제
+    s = re.sub(r"(\[Task:\s*[^\]\n]+\])[ \t]+(\S)", r"\1\n\2", s)
+
+    # 개행 과다 정리
+    s = re.sub(r"\n{3,}", "\n\n", s)
+
+    return s.strip()
+
+
 def sanitize_llm_text_ai(text: str) -> str:
     """
     좀 더 강한 정리 버전

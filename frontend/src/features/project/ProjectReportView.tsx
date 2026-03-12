@@ -125,44 +125,71 @@ const tokenizeHighlights = (sentence: string) => {
 };
 
 /* ─── Task Analysis Block: [Task: ...] 헤더 기반 그룹 렌더링 ─── */
-const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
-  const groups = useMemo(() => {
-    const result: { title: string; lines: string[] }[] = [];
-    let current: { title: string; lines: string[] } | null = null;
+const splitTaskBlocks = (text: string): { title: string; body: string }[] => {
+  if (!text) return [];
+  const normalized = text.replace(/\r\n/g, '\n');
 
-    for (const raw of text.split('\n')) {
-      const line = raw.trim();
-      if (!line) continue;
-      // 다양한 Task 제목 패턴 매칭
-      const m =
-        line.match(/^\[Task:\s*(.+?)\]$/) ||                  // [Task: 제목]
-        line.match(/^\*\*(.+?)\*\*\s*$/) ||                   // **제목**
-        line.match(/^[-•]\s*\*\*(.+?)\*\*/) ||                // - **제목** or • **제목**
-        line.match(/^Task\s*[:：]\s*(.+)$/i) ||                // Task: 제목
-        line.match(/^[-•]\s*Task\s*[:：]\s*(.+)$/i) ||        // - Task: 제목
-        line.match(/^\d+\.\s*\*\*(.+?)\*\*/) ||               // 1. **제목**
-        line.match(/^\d+\)\s*\*\*(.+?)\*\*/) ||               // 1) **제목**
-        line.match(/^#{1,3}\s+(.+)$/);                         // ## 제목
-      if (m) {
-        current = { title: cleanText(m[1]), lines: [] };
-        result.push(current);
-      } else {
-        if (current) {
+  // [Task: ...] 뒤에 같은 줄에 텍스트 있으면 줄바꿈 강제 (프론트 안전장치)
+  const cleaned = normalized.replace(/(\[Task:\s*[^\]\n]+\])[ \t]+(\S)/g, '$1\n$2');
+
+  // [Task: ...] 기준으로 split
+  const parts = cleaned.split(/\n(?=\[Task:\s*[^\]]+\])/g);
+
+  return parts
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const m = part.match(/^\[Task:\s*([^\]]+)\]\n?/);
+      const title = m ? m[1].trim() : '';
+      const body = m ? part.replace(/^\[Task:\s*[^\]]+\]\n?/, '').trim() : part.trim();
+      return { title, body };
+    });
+};
+
+const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
+  const blocks = useMemo(() => {
+    const taskBlocks = splitTaskBlocks(text);
+
+    // [Task: ...] 패턴이 없으면 기존 fallback 로직
+    if (taskBlocks.length === 0 || (taskBlocks.length === 1 && !taskBlocks[0].title)) {
+      const result: { title: string; lines: string[] }[] = [];
+      let current: { title: string; lines: string[] } | null = null;
+      for (const raw of text.split('\n')) {
+        const line = raw.trim();
+        if (!line) continue;
+        const m =
+          line.match(/^\*\*(.+?)\*\*\s*$/) ||
+          line.match(/^[-•]\s*\*\*(.+?)\*\*/) ||
+          line.match(/^Task\s*[:：]\s*(.+)$/i) ||
+          line.match(/^[-•]\s*Task\s*[:：]\s*(.+)$/i) ||
+          line.match(/^\d+\.\s*\*\*(.+?)\*\*/) ||
+          line.match(/^\d+\)\s*\*\*(.+?)\*\*/) ||
+          line.match(/^#{1,3}\s+(.+)$/);
+        if (m) {
+          current = { title: cleanText(m[1]), lines: [] };
+          result.push(current);
+        } else if (current) {
           current.lines.push(cleanText(line));
         } else {
           current = { title: '', lines: [cleanText(line)] };
           result.push(current);
         }
       }
+      return result;
     }
-    return result;
+
+    // [Task: ...] 기준 블록 → lines 변환
+    return taskBlocks.map(b => ({
+      title: cleanText(b.title),
+      lines: b.body.split('\n').map(l => cleanText(l.trim())).filter(Boolean),
+    }));
   }, [text]);
 
-  if (groups.length === 0) return null;
+  if (blocks.length === 0) return null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {groups.map((g, gi) => (
+      {blocks.map((g, gi) => (
         <Box
           key={gi}
           sx={{
@@ -188,17 +215,9 @@ const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
             </Typography>
           )}
           {g.lines.map((line, li) => (
-            <Box key={li} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 0.3 }}>
-              <Box
-                sx={{
-                  width: 5, height: 5, borderRadius: '50%',
-                  bgcolor: '#CBD5E1', mt: 0.8, flexShrink: 0,
-                }}
-              />
-              <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.6, color: '#374151' }}>
-                {line}
-              </Typography>
-            </Box>
+            <Typography key={li} sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151', mb: 0.3 }}>
+              {line}
+            </Typography>
           ))}
         </Box>
       ))}
