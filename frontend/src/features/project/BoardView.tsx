@@ -117,7 +117,7 @@ const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: str
     sx={{
       display: 'flex',
       alignItems: 'center',
-      width: 40,
+      width: 28,
       flexShrink: 0,
       mx: 0.5,
     }}
@@ -126,7 +126,7 @@ const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: str
     <Box
       sx={{
         flex: 1,
-        height: 3,
+        height: 4,
         borderRadius: 2,
         background: `linear-gradient(to right, ${fromColor}66, ${toColor}99)`,
       }}
@@ -136,9 +136,9 @@ const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: str
       sx={{
         width: 0,
         height: 0,
-        borderTop: '6px solid transparent',
-        borderBottom: '6px solid transparent',
-        borderLeft: `8px solid ${toColor}88`,
+        borderTop: '7px solid transparent',
+        borderBottom: '7px solid transparent',
+        borderLeft: `9px solid ${toColor}88`,
         flexShrink: 0,
       }}
     />
