@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Box, Typography, IconButton, Tooltip, Chip, Paper } from '@mui/material';
+import { Box, Typography, IconButton, Tooltip, Chip, Paper, Popover } from '@mui/material';
 
 import { api } from '../../api/client';
 import { useQuery } from '@tanstack/react-query';
@@ -14,6 +14,10 @@ import {
   getDay,
   addMonths,
   subMonths,
+  setMonth,
+  setYear,
+  getMonth,
+  getYear,
 } from 'date-fns';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -45,6 +49,11 @@ const priorityConfig: Record<string, { label: string; color: string }> = {
 };
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
 
 // ── Korean Public Holidays (2025–2027) ──
 const KOREAN_HOLIDAYS: Record<string, string> = {
@@ -112,6 +121,8 @@ const KOREAN_HOLIDAYS: Record<string, string> = {
 const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
+  const [monthPickerAnchor, setMonthPickerAnchor] = useState<HTMLElement | null>(null);
+  const [pickerYear, setPickerYear] = useState(getYear(new Date()));
   const openDrawer = useAppStore(state => state.openDrawer);
   const currentUserId = useAppStore(state => state.currentUserId);
   const filterSearch = useAppStore(state => state.filterSearch);
@@ -161,7 +172,24 @@ const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
           <IconButton size="small" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}>
             <ChevronLeftIcon />
           </IconButton>
-          <Typography variant="h6" sx={{ fontWeight: 700, minWidth: 180, textAlign: 'center' }}>
+          <Typography
+            variant="h6"
+            onClick={(e) => {
+              setPickerYear(getYear(currentMonth));
+              setMonthPickerAnchor(e.currentTarget);
+            }}
+            sx={{
+              fontWeight: 700,
+              minWidth: 180,
+              textAlign: 'center',
+              cursor: 'pointer',
+              borderRadius: 1,
+              px: 1,
+              py: 0.3,
+              transition: 'all 0.15s',
+              '&:hover': { bgcolor: '#EEF2FF', color: '#2955FF' },
+            }}
+          >
             {format(currentMonth, 'MMMM yyyy')}
           </Typography>
           <IconButton size="small" onClick={() => setCurrentMonth(addMonths(currentMonth, 1))}>
@@ -184,6 +212,74 @@ const CalendarView: React.FC<CalendarViewProps> = ({ projectId }) => {
           Today
         </Typography>
       </Box>
+
+      {/* Month Picker Popover */}
+      <Popover
+        open={Boolean(monthPickerAnchor)}
+        anchorEl={monthPickerAnchor}
+        onClose={() => setMonthPickerAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+        slotProps={{
+          paper: {
+            sx: {
+              mt: 1,
+              p: 2,
+              borderRadius: 2,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+              border: '1px solid rgba(0,0,0,0.06)',
+              minWidth: 280,
+            },
+          },
+        }}
+      >
+        {/* Year Navigation */}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+          <IconButton size="small" onClick={() => setPickerYear(y => y - 1)}>
+            <ChevronLeftIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#1A1D29' }}>
+            {pickerYear}
+          </Typography>
+          <IconButton size="small" onClick={() => setPickerYear(y => y + 1)}>
+            <ChevronRightIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+        </Box>
+        {/* Month Grid */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.5 }}>
+          {MONTH_NAMES.map((name, idx) => {
+            const isCurrentSelection = getYear(currentMonth) === pickerYear && getMonth(currentMonth) === idx;
+            const isThisMonth = getYear(new Date()) === pickerYear && getMonth(new Date()) === idx;
+            return (
+              <Box
+                key={name}
+                onClick={() => {
+                  setCurrentMonth(setMonth(setYear(currentMonth, pickerYear), idx));
+                  setMonthPickerAnchor(null);
+                }}
+                sx={{
+                  py: 1,
+                  px: 1.5,
+                  textAlign: 'center',
+                  borderRadius: 1.5,
+                  cursor: 'pointer',
+                  fontSize: '0.82rem',
+                  fontWeight: isCurrentSelection ? 700 : 500,
+                  color: isCurrentSelection ? '#fff' : isThisMonth ? '#2955FF' : '#374151',
+                  bgcolor: isCurrentSelection ? '#2955FF' : 'transparent',
+                  border: isThisMonth && !isCurrentSelection ? '1px solid #2955FF' : '1px solid transparent',
+                  transition: 'all 0.12s',
+                  '&:hover': {
+                    bgcolor: isCurrentSelection ? '#1E40AF' : '#EEF2FF',
+                  },
+                }}
+              >
+                {name}
+              </Box>
+            );
+          })}
+        </Box>
+      </Popover>
 
       {/* Weekday Headers */}
       <Box

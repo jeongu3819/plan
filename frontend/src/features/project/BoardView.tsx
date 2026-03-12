@@ -12,6 +12,7 @@ import {
 import SortIcon from '@mui/icons-material/Sort';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { Task } from '../../types';
 import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -268,17 +269,19 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         onDragEnd={handleDragEnd}
       >
         <Box
-          sx={{ display: 'flex', gap: 2, overflowX: 'auto', pb: 2, height: 'calc(100vh - 220px)' }}
+          sx={{ display: 'flex', gap: 0, alignItems: 'stretch', overflowX: 'auto', pb: 2, height: 'calc(100vh - 220px)' }}
         >
-          {COLUMNS.map(col => {
+          {COLUMNS.map((col, colIndex) => {
             const colTasks = sortTasks(tasks?.filter(t => t.status === col.id) || []);
+            // Show arrow after To Do (0) and In Progress (1) — flow: To Do → In Progress → Done
+            const showArrow = colIndex < 2;
 
             return (
+              <React.Fragment key={col.id}>
               <Box
-                key={col.id}
                 sx={{
-                  minWidth: 300,
-                  maxWidth: 340,
+                  flex: 1,
+                  minWidth: 280,
                   bgcolor: 'rgba(255,255,255,0.5)',
                   backdropFilter: 'blur(8px)',
                   border: '1px solid rgba(0,0,0,0.06)',
@@ -360,6 +363,33 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   <QuickAdd projectId={projectId} defaultStatus={col.id} />
                 </Box>
               </Box>
+              {/* Flow arrow between columns */}
+              {showArrow && (
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    px: 0.5,
+                    flexShrink: 0,
+                  }}
+                >
+                  <ArrowForwardIcon
+                    sx={{
+                      fontSize: 20,
+                      color: '#D1D5DB',
+                      opacity: 0.8,
+                    }}
+                  />
+                </Box>
+              )}
+              {/* Separator between Done and Hold */}
+              {!showArrow && colIndex < COLUMNS.length - 1 && (
+                <Box sx={{ width: 24, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Box sx={{ width: 1, height: '60%', bgcolor: '#E5E7EB', borderRadius: 1 }} />
+                </Box>
+              )}
+              </React.Fragment>
             );
           })}
         </Box>
