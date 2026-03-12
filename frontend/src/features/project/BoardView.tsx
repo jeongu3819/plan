@@ -13,7 +13,6 @@ import {
 import SortIcon from '@mui/icons-material/Sort';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -109,6 +108,39 @@ const DroppableColumn = ({ id, children }: { id: string; children: React.ReactNo
     >
       {children}
     </div>
+  );
+};
+
+// Flow connector between columns
+const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: string }) => {
+  const gradientId = React.useId();
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 36,
+        flexShrink: 0,
+        py: 2,
+      }}
+    >
+      <svg width="36" height="28" viewBox="0 0 36 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="36" y2="0" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor={fromColor} stopOpacity="0.25" />
+            <stop offset="50%" stopColor={toColor} stopOpacity="0.5" />
+            <stop offset="100%" stopColor={toColor} stopOpacity="0.25" />
+          </linearGradient>
+        </defs>
+        {/* Dashed line */}
+        <line x1="0" y1="14" x2="24" y2="14" stroke={`url(#${gradientId})`} strokeWidth="2" strokeDasharray="3 3" strokeLinecap="round" />
+        {/* Chevron arrowhead */}
+        <path d="M22 9 L29 14 L22 19" stroke={toColor} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.5" fill="none" />
+        {/* Small dot at start */}
+        <circle cx="1.5" cy="14" r="1.5" fill={fromColor} fillOpacity="0.3" />
+      </svg>
+    </Box>
   );
 };
 
@@ -456,24 +488,12 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   </Box>
                 )}
               </Box>
-              {/* Flow arrow between columns */}
+              {/* Flow connector between columns */}
               {showArrow && (
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    px: 0.5,
-                    flexShrink: 0,
-                  }}
-                >
-                  <ArrowForwardIcon
-                    sx={{
-                      fontSize: 24,
-                      color: '#9CA3AF',
-                    }}
-                  />
-                </Box>
+                <FlowConnector
+                  fromColor={col.color}
+                  toColor={BOARD_COLUMNS[colIndex + 1].color}
+                />
               )}
               </React.Fragment>
             );
