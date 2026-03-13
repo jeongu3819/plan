@@ -14,7 +14,6 @@ import SortIcon from '@mui/icons-material/Sort';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
-import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { Task } from '../../types';
 import { api } from '../../api/client';
@@ -502,96 +501,108 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         </Box>
 
         {/* Hold Zone at Bottom */}
-        <Box sx={{ flexShrink: 0, mt: 1, position: 'relative' }}>
+        <Box sx={{ flexShrink: 0, mt: 1.5, position: 'relative' }}>
           <DroppableHoldPill>
-            {/* Expandable panel (slides up) */}
+            {/* Expandable hold panel (slides up from bar) */}
             <Box
               sx={{
-                maxHeight: holdExpanded ? 320 : 0,
+                maxHeight: holdExpanded ? 360 : 0,
                 overflow: 'hidden',
-                transition: 'max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                mb: holdExpanded ? 1 : 0,
+                transition: 'max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                mb: holdExpanded ? 0.8 : 0,
               }}
             >
-              {holdTasks.length > 0 ? (
-                <SortableContext
-                  id="hold"
-                  items={holdTasks.map(t => t.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  <Box
-                    sx={{
-                      p: 1.5,
-                      bgcolor: 'rgba(255,255,255,0.6)',
-                      backdropFilter: 'blur(8px)',
-                      border: '1px solid rgba(0,0,0,0.06)',
-                      borderRadius: 2,
-                      overflowY: 'auto',
-                      maxHeight: 300,
-                    }}
+              <Box
+                sx={{
+                  opacity: holdExpanded ? 1 : 0,
+                  transform: holdExpanded ? 'translateY(0)' : 'translateY(16px)',
+                  transition: holdExpanded
+                    ? 'opacity 0.35s ease 0.08s, transform 0.35s cubic-bezier(0.4, 0, 0.2, 1) 0.08s'
+                    : 'opacity 0.15s ease, transform 0.15s ease',
+                }}
+              >
+                {holdTasks.length > 0 ? (
+                  <SortableContext
+                    id="hold"
+                    items={holdTasks.map(t => t.id)}
+                    strategy={verticalListSortingStrategy}
                   >
                     <Box
                       sx={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-                        gap: 1,
+                        p: 1.5,
+                        bgcolor: 'rgba(255, 251, 235, 0.45)',
+                        backdropFilter: 'blur(8px)',
+                        border: '1px solid rgba(245, 158, 11, 0.12)',
+                        borderRadius: 2,
+                        overflowY: 'auto',
+                        maxHeight: 320,
                       }}
                     >
-                      {holdTasks.map(task => (
-                        <SortableTaskItem
-                          key={task.id}
-                          task={task}
-                          onClick={() => openDrawer(task, projectId)}
-                          compact
-                        />
-                      ))}
+                      <Box
+                        sx={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                          gap: 1,
+                        }}
+                      >
+                        {holdTasks.map(task => (
+                          <SortableTaskItem
+                            key={task.id}
+                            task={task}
+                            onClick={() => openDrawer(task, projectId)}
+                            compact
+                          />
+                        ))}
+                      </Box>
                     </Box>
+                  </SortableContext>
+                ) : (
+                  <Box
+                    sx={{
+                      p: 2.5,
+                      textAlign: 'center',
+                      bgcolor: 'rgba(255, 251, 235, 0.3)',
+                      border: '1px dashed rgba(245, 158, 11, 0.18)',
+                      borderRadius: 2,
+                    }}
+                  >
+                    <Typography variant="caption" sx={{ color: '#B45309', fontSize: '0.75rem', opacity: 0.5 }}>
+                      보류된 Task가 없습니다
+                    </Typography>
                   </Box>
-                </SortableContext>
-              ) : (
-                <Box
-                  sx={{
-                    p: 2,
-                    textAlign: 'center',
-                    bgcolor: 'rgba(255,255,255,0.5)',
-                    border: '1px solid rgba(0,0,0,0.06)',
-                    borderRadius: 2,
-                  }}
-                >
-                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.75rem' }}>
-                    보류된 Task가 없습니다
-                  </Typography>
-                </Box>
-              )}
+                )}
+              </Box>
             </Box>
 
-            {/* Hold pill button */}
+            {/* Hold toggle bar */}
             <Box
               onClick={() => setHoldExpanded(prev => !prev)}
               sx={{
-                display: 'inline-flex',
+                display: 'flex',
                 alignItems: 'center',
                 gap: 0.8,
                 px: 2,
                 py: 0.8,
-                borderRadius: 6,
-                bgcolor: holdExpanded ? '#FFFBEB' : 'rgba(255,255,255,0.6)',
-                border: holdExpanded ? '1px solid rgba(245, 158, 11, 0.3)' : '1px solid rgba(0,0,0,0.08)',
+                borderRadius: 1.5,
+                bgcolor: holdExpanded ? 'rgba(255, 251, 235, 0.9)' : 'rgba(255,255,255,0.55)',
+                border: holdExpanded
+                  ? '1px solid rgba(245, 158, 11, 0.2)'
+                  : '1px solid rgba(0,0,0,0.06)',
                 backdropFilter: 'blur(8px)',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
                 cursor: 'pointer',
-                transition: 'all 0.2s ease',
+                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                 userSelect: 'none',
                 '&:hover': {
-                  bgcolor: '#FFFBEB',
-                  borderColor: 'rgba(245, 158, 11, 0.35)',
-                  boxShadow: '0 2px 8px rgba(245, 158, 11, 0.12)',
+                  bgcolor: 'rgba(255, 251, 235, 0.7)',
+                  borderColor: 'rgba(245, 158, 11, 0.2)',
+                  boxShadow: '0 2px 8px rgba(245, 158, 11, 0.08)',
                 },
               }}
             >
-              <PauseCircleOutlineIcon sx={{ fontSize: 16, color: '#F59E0B' }} />
+              <PauseCircleOutlineIcon sx={{ fontSize: 15, color: '#F59E0B', opacity: 0.85 }} />
               <Typography
-                sx={{ fontWeight: 700, fontSize: '0.78rem', color: '#92400E' }}
+                sx={{ fontWeight: 600, fontSize: '0.78rem', color: '#92400E', letterSpacing: '0.01em' }}
               >
                 Hold
               </Typography>
@@ -600,21 +611,26 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   label={holdTasks.length}
                   size="small"
                   sx={{
-                    height: 17,
-                    minWidth: 17,
-                    fontSize: '0.6rem',
+                    height: 18,
+                    minWidth: 18,
+                    fontSize: '0.62rem',
                     fontWeight: 700,
-                    bgcolor: '#FEF3C7',
+                    bgcolor: holdExpanded ? '#FDE68A' : '#FEF3C7',
                     color: '#92400E',
                     '& .MuiChip-label': { px: 0.5 },
+                    transition: 'background-color 0.3s ease',
                   }}
                 />
               )}
-              {holdExpanded ? (
-                <KeyboardArrowDownIcon sx={{ fontSize: 16, color: '#92400E' }} />
-              ) : (
-                <KeyboardArrowUpIcon sx={{ fontSize: 16, color: '#9CA3AF' }} />
-              )}
+              <Box sx={{ flex: 1 }} />
+              <KeyboardArrowDownIcon
+                sx={{
+                  fontSize: 17,
+                  color: holdExpanded ? '#B45309' : '#9CA3AF',
+                  transform: holdExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s ease',
+                }}
+              />
             </Box>
           </DroppableHoldPill>
         </Box>
