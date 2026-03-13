@@ -50,6 +50,7 @@ class TaskCreate(BaseModel):
     due_date: Optional[str] = None
     assignee_ids: List[int] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
+    remarks: Optional[str] = None
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -60,6 +61,7 @@ class TaskUpdate(BaseModel):
     due_date: Optional[str] = None
     assignee_ids: Optional[List[int]] = None
     tags: Optional[List[str]] = None
+    remarks: Optional[str] = None
 
 class TaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -73,6 +75,7 @@ class TaskOut(BaseModel):
     due_date: Optional[str] = None
     assignee_ids: List[int] = Field(default_factory=list)
     tags: List[int] = Field(default_factory=list)  # ⚠️ 아래 주의 참고
+    remarks: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     archived_at: Optional[datetime] = None

@@ -60,6 +60,7 @@ export interface Task {
   tags?: string[];
   sub_project_id?: number | null;
   progress?: number;
+  remarks?: string;
   attachment_count?: number;
   archived_at?: string | null;
   created_at?: string;

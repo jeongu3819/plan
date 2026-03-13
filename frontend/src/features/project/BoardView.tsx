@@ -13,7 +13,10 @@ import {
 import SortIcon from '@mui/icons-material/Sort';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import CalendarViewWeekIcon from '@mui/icons-material/CalendarViewWeek';
+import ViewKanbanIcon from '@mui/icons-material/ViewKanban';
 import { Task } from '../../types';
+import WeeklyProgressView from './WeeklyProgressView';
 import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../stores/useAppStore';
@@ -163,6 +166,7 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
   const [activeTask, setActiveTask] = React.useState<Task | null>(null);
   const [sortField, setSortField] = React.useState<SortField>('default');
   const [sortDirection, setSortDirection] = React.useState<SortDirection>('asc');
+  const [viewMode, setViewMode] = React.useState<'board' | 'weekly'>('board');
 
   const sortTasks = React.useCallback(
     (taskList: Task[]): Task[] => {
@@ -308,6 +312,35 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     );
   }
 
+  if (viewMode === 'weekly') {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', mb: 1.5, flexShrink: 0 }}>
+          <Tooltip title="보드 뷰">
+            <Chip
+              icon={<ViewKanbanIcon sx={{ fontSize: 16 }} />}
+              label="보드"
+              size="small"
+              onClick={() => setViewMode('board')}
+              sx={{
+                height: 30,
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                bgcolor: '#F3F4F6',
+                color: '#374151',
+                cursor: 'pointer',
+                '&:hover': { bgcolor: '#E5E7EB' },
+              }}
+            />
+          </Tooltip>
+        </Box>
+        <Box sx={{ flex: 1, overflow: 'auto' }}>
+          <WeeklyProgressView projectId={projectId} />
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)' }}>
       {/* Sort Controls */}
@@ -345,6 +378,24 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
             </IconButton>
           </Tooltip>
         )}
+        <Box sx={{ flex: 1 }} />
+        <Tooltip title="주차별 진척사항">
+          <Chip
+            icon={<CalendarViewWeekIcon sx={{ fontSize: 16 }} />}
+            label="주차별 진척사항"
+            size="small"
+            onClick={() => setViewMode('weekly')}
+            sx={{
+              height: 30,
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              bgcolor: '#EEF2FF',
+              color: '#2955FF',
+              cursor: 'pointer',
+              '&:hover': { bgcolor: '#DBEAFE' },
+            }}
+          />
+        </Tooltip>
       </Box>
 
       <DndContext

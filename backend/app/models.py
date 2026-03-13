@@ -92,6 +92,8 @@ class Task(Base):
     sub_project_id = Column(Integer, ForeignKey("sub_projects.id"), nullable=True, index=True)
     progress = Column(Integer, nullable=False, default=0)  # 0~100
 
+    remarks = Column(Text, nullable=True)  # 비고
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     archived_at = Column(DateTime, nullable=True)

@@ -674,6 +674,7 @@ def task_dict(t: Task, state: dict):
         "sub_project_id": meta.get("sub_project_id"),
         "progress": meta.get("progress", 0),
         "created_at": iso(t.created_at),
+        "remarks": t.remarks,
         "updated_at": iso(t.updated_at),
         "archived_at": iso(t.archived_at),
     }
@@ -1752,7 +1753,7 @@ def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: 
     data = updates.model_dump(exclude_unset=True)
 
     # DB fields
-    for k in ["title", "description", "status", "priority", "start_date", "due_date", "assignee_ids", "tags"]:
+    for k in ["title", "description", "status", "priority", "start_date", "due_date", "assignee_ids", "tags", "remarks"]:
         if k in data:
             setattr(t, k, data[k])
 
