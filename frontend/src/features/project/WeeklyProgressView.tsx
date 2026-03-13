@@ -12,8 +12,6 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Avatar,
-  Tooltip,
 } from '@mui/material';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -179,34 +177,14 @@ const WeeklyProgressView: React.FC<WeeklyProgressViewProps> = ({ projectId }) =>
 
   const renderAssignees = (assigneeIds: number[]) => {
     if (!assigneeIds || assigneeIds.length === 0) return <Typography variant="caption" sx={{ color: '#9CA3AF' }}>-</Typography>;
+    const names = assigneeIds
+      .map(id => userMap.get(id)?.username)
+      .filter(Boolean)
+      .join(', ');
     return (
-      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-        {assigneeIds.map(id => {
-          const user = userMap.get(id);
-          if (!user) return null;
-          const initials = user.username.charAt(0).toUpperCase();
-          return (
-            <Tooltip key={id} title={user.username}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <Avatar
-                  sx={{
-                    width: 22,
-                    height: 22,
-                    fontSize: '0.65rem',
-                    fontWeight: 700,
-                    bgcolor: user.avatar_color || '#2955FF',
-                  }}
-                >
-                  {initials}
-                </Avatar>
-                <Typography variant="caption" sx={{ fontSize: '0.75rem', color: '#374151' }}>
-                  {user.username}
-                </Typography>
-              </Box>
-            </Tooltip>
-          );
-        })}
-      </Box>
+      <Typography variant="caption" sx={{ fontSize: '0.8rem', color: '#374151' }}>
+        {names}
+      </Typography>
     );
   };
 

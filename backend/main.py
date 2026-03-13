@@ -2663,6 +2663,8 @@ def get_stats(user_id: Optional[int] = None, db: Session = Depends(get_db)):
 
     overdue = [t for t in tasks if t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done"]
     upcoming = [t for t in tasks if t.get("due_date") and t["due_date"] >= today_str and t.get("status") != "done"]
+    if user_id:
+        upcoming = [t for t in upcoming if user_id in (t.get("assignee_ids") or [])]
     upcoming.sort(key=lambda x: x.get("due_date", ""))
 
     my_tasks = []
