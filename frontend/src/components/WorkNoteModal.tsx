@@ -13,6 +13,7 @@ import FormatColorTextIcon from '@mui/icons-material/FormatColorText';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import AddIcon from '@mui/icons-material/Add';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { TaskActivity } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -459,6 +460,21 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         }
     }, [blocks]);
 
+    const [copied, setCopied] = useState(false);
+    const handleCopyAll = useCallback(() => {
+        const text = blocks.map(b => {
+            const plain = b.content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+            if ((b.block_type || 'checkbox') === 'checkbox') {
+                return `${b.checked ? '[x]' : '[ ]'} ${plain}`;
+            }
+            return plain;
+        }).join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        });
+    }, [blocks]);
+
     const checkboxBlocks = blocks.filter(b => (b.block_type || 'checkbox') === 'checkbox');
     const checkedCount = checkboxBlocks.filter(b => b.checked).length;
     const totalCheckboxes = checkboxBlocks.length;
@@ -587,9 +603,16 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                             {taskTitle}
                         </Typography>
                     </Box>
-                    <IconButton size="small" onClick={onClose} sx={{ mt: -0.5 }}>
-                        <CloseIcon fontSize="small" />
-                    </IconButton>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <Tooltip title={copied ? '복사됨!' : '전체 복사'}>
+                            <IconButton size="small" onClick={handleCopyAll} sx={{ color: copied ? '#22C55E' : '#9CA3AF' }}>
+                                <ContentCopyIcon sx={{ fontSize: 18 }} />
+                            </IconButton>
+                        </Tooltip>
+                        <IconButton size="small" onClick={onClose}>
+                            <CloseIcon fontSize="small" />
+                        </IconButton>
+                    </Box>
                 </Box>
 
                 {/* Progress bar */}
