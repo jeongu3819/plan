@@ -47,7 +47,7 @@ interface BoardViewProps {
 const BOARD_COLUMNS: { id: string; label: string; sublabel?: string; color: string; status: Task['status'] }[] = [
   { id: 'todo', label: 'To Do', color: '#6B7280', status: 'todo' },
   { id: 'in_progress', label: 'In Progress', color: '#2955FF', status: 'in_progress' },
-  { id: 'in_progress_advanced', label: 'Almost Done', sublabel: '50% 이상 진행', color: '#7C3AED', status: 'in_progress' },
+  { id: 'in_progress_advanced', label: 'In Progress', sublabel: '50% 이상 진행', color: '#7C3AED', status: 'in_progress' },
   { id: 'done', label: 'Done', color: '#22C55E', status: 'done' },
   { id: 'hold', label: 'Hold', color: '#F59E0B', status: 'hold' },
 ];
@@ -337,7 +337,8 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         >
           {BOARD_COLUMNS.map((col, colIndex) => {
             const colTasks = sortTasks(getColumnTasks(col.id));
-            const showArrow = colIndex < BOARD_COLUMNS.length - 1;
+            const isLastWorkflow = col.id === 'done';
+            const showArrow = colIndex < BOARD_COLUMNS.length - 1 && !isLastWorkflow;
 
             return (
               <React.Fragment key={col.id}>
@@ -461,12 +462,15 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   </Box>
                 )}
               </Box>
-              {/* Flow connector between columns */}
+              {/* Flow connector between columns / spacer before Hold */}
               {showArrow && (
                 <FlowConnector
                   fromColor={col.color}
                   toColor={BOARD_COLUMNS[colIndex + 1].color}
                 />
+              )}
+              {isLastWorkflow && (
+                <Box sx={{ width: 20 + 8, flexShrink: 0 }} />
               )}
               </React.Fragment>
             );
