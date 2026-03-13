@@ -13,8 +13,6 @@ import {
 import SortIcon from '@mui/icons-material/Sort';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { Task } from '../../types';
 import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -45,12 +43,13 @@ interface BoardViewProps {
   projectId: number;
 }
 
-// Visual columns for the main board (no Hold)
+// Visual columns for the board
 const BOARD_COLUMNS: { id: string; label: string; sublabel?: string; color: string; status: Task['status'] }[] = [
   { id: 'todo', label: 'To Do', color: '#6B7280', status: 'todo' },
   { id: 'in_progress', label: 'In Progress', color: '#2955FF', status: 'in_progress' },
-  { id: 'in_progress_advanced', label: 'Almost Done', sublabel: '70% 이상 진행', color: '#7C3AED', status: 'in_progress' },
+  { id: 'in_progress_advanced', label: 'Almost Done', sublabel: '50% 이상 진행', color: '#7C3AED', status: 'in_progress' },
   { id: 'done', label: 'Done', color: '#22C55E', status: 'done' },
+  { id: 'hold', label: 'Hold', color: '#F59E0B', status: 'hold' },
 ];
 
 // All droppable IDs (including hold)
@@ -116,7 +115,7 @@ const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: str
     sx={{
       display: 'flex',
       alignItems: 'center',
-      width: 28,
+      width: 20,
       flexShrink: 0,
       mx: 0.5,
     }}
@@ -125,8 +124,8 @@ const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: str
     <Box
       sx={{
         flex: 1,
-        height: 4,
-        borderRadius: 2,
+        height: 6,
+        borderRadius: 3,
         background: `linear-gradient(to right, ${fromColor}66, ${toColor}99)`,
       }}
     />
@@ -135,38 +134,15 @@ const FlowConnector = ({ fromColor, toColor }: { fromColor: string; toColor: str
       sx={{
         width: 0,
         height: 0,
-        borderTop: '7px solid transparent',
-        borderBottom: '7px solid transparent',
-        borderLeft: `9px solid ${toColor}88`,
+        borderTop: '8px solid transparent',
+        borderBottom: '8px solid transparent',
+        borderLeft: `10px solid ${toColor}88`,
         flexShrink: 0,
       }}
     />
   </Box>
 );
 
-// Droppable hold pill (compact drop target)
-const DroppableHoldPill = ({ children }: { children: React.ReactNode }) => {
-  const { setNodeRef, isOver } = useDroppable({ id: 'hold' });
-  return (
-    <div ref={setNodeRef}>
-      {children}
-      {/* Invisible expanded drop area when dragging */}
-      {isOver && (
-        <Box
-          sx={{
-            position: 'absolute',
-            inset: -8,
-            borderRadius: 3,
-            border: '2px solid rgba(245, 158, 11, 0.5)',
-            bgcolor: 'rgba(245, 158, 11, 0.08)',
-            pointerEvents: 'none',
-            transition: 'all 0.2s ease',
-          }}
-        />
-      )}
-    </div>
-  );
-};
 
 const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
   const queryClient = useQueryClient();
@@ -185,7 +161,6 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     return rawTasks.filter(t => t.title.toLowerCase().includes(q));
   }, [rawTasks, filterSearch]);
   const [activeTask, setActiveTask] = React.useState<Task | null>(null);
-  const [holdExpanded, setHoldExpanded] = React.useState(false);
   const [sortField, setSortField] = React.useState<SortField>('default');
   const [sortDirection, setSortDirection] = React.useState<SortDirection>('asc');
 
@@ -235,9 +210,9 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         case 'todo':
           return tasks.filter(t => t.status === 'todo');
         case 'in_progress':
-          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) < 70);
+          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) < 50);
         case 'in_progress_advanced':
-          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) >= 70);
+          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) >= 50);
         case 'done':
           return tasks.filter(t => t.status === 'done');
         case 'hold':
@@ -284,7 +259,7 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     if (ALL_DROP_IDS.includes(overId)) {
       // Dropped on a column/zone directly
       const col = BOARD_COLUMNS.find(c => c.id === overId);
-      newStatus = col ? col.status : (overId === 'hold' ? 'hold' : '');
+      newStatus = col ? col.status : '';
     } else {
       // Dropped over another task — find which column it belongs to
       const overTask = tasks?.find(t => t.id === Number(overId));
@@ -310,8 +285,6 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
       </Box>
     );
   }
-
-  const holdTasks = sortTasks(getColumnTasks('hold'));
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)' }}>
@@ -434,7 +407,7 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                   <Box sx={{ px: 2, pb: 1 }}>
                     <LinearProgress
                       variant="determinate"
-                      value={70}
+                      value={50}
                       sx={{
                         height: 3,
                         borderRadius: 2,
@@ -498,141 +471,6 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
               </React.Fragment>
             );
           })}
-        </Box>
-
-        {/* Hold Zone at Bottom */}
-        <Box sx={{ flexShrink: 0, mt: 1.5, position: 'relative' }}>
-          <DroppableHoldPill>
-            {/* Expandable hold panel (slides up from bar) */}
-            <Box
-              sx={{
-                maxHeight: holdExpanded ? 360 : 0,
-                overflow: 'hidden',
-                transition: 'max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-                mb: holdExpanded ? 0.8 : 0,
-              }}
-            >
-              <Box
-                sx={{
-                  opacity: holdExpanded ? 1 : 0,
-                  transform: holdExpanded ? 'translateY(0)' : 'translateY(16px)',
-                  transition: holdExpanded
-                    ? 'opacity 0.35s ease 0.08s, transform 0.35s cubic-bezier(0.4, 0, 0.2, 1) 0.08s'
-                    : 'opacity 0.15s ease, transform 0.15s ease',
-                }}
-              >
-                {holdTasks.length > 0 ? (
-                  <SortableContext
-                    id="hold"
-                    items={holdTasks.map(t => t.id)}
-                    strategy={verticalListSortingStrategy}
-                  >
-                    <Box
-                      sx={{
-                        p: 1.5,
-                        bgcolor: 'rgba(255, 251, 235, 0.45)',
-                        backdropFilter: 'blur(8px)',
-                        border: '1px solid rgba(245, 158, 11, 0.12)',
-                        borderRadius: 2,
-                        overflowY: 'auto',
-                        maxHeight: 320,
-                      }}
-                    >
-                      <Box
-                        sx={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-                          gap: 1,
-                        }}
-                      >
-                        {holdTasks.map(task => (
-                          <SortableTaskItem
-                            key={task.id}
-                            task={task}
-                            onClick={() => openDrawer(task, projectId)}
-                            compact
-                          />
-                        ))}
-                      </Box>
-                    </Box>
-                  </SortableContext>
-                ) : (
-                  <Box
-                    sx={{
-                      p: 2.5,
-                      textAlign: 'center',
-                      bgcolor: 'rgba(255, 251, 235, 0.3)',
-                      border: '1px dashed rgba(245, 158, 11, 0.18)',
-                      borderRadius: 2,
-                    }}
-                  >
-                    <Typography variant="caption" sx={{ color: '#B45309', fontSize: '0.75rem', opacity: 0.5 }}>
-                      보류된 Task가 없습니다
-                    </Typography>
-                  </Box>
-                )}
-              </Box>
-            </Box>
-
-            {/* Hold toggle bar */}
-            <Box
-              onClick={() => setHoldExpanded(prev => !prev)}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.8,
-                px: 2,
-                py: 0.8,
-                borderRadius: 1.5,
-                bgcolor: holdExpanded ? 'rgba(255, 251, 235, 0.9)' : 'rgba(255,255,255,0.55)',
-                border: holdExpanded
-                  ? '1px solid rgba(245, 158, 11, 0.2)'
-                  : '1px solid rgba(0,0,0,0.06)',
-                backdropFilter: 'blur(8px)',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
-                cursor: 'pointer',
-                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                userSelect: 'none',
-                '&:hover': {
-                  bgcolor: 'rgba(255, 251, 235, 0.7)',
-                  borderColor: 'rgba(245, 158, 11, 0.2)',
-                  boxShadow: '0 2px 8px rgba(245, 158, 11, 0.08)',
-                },
-              }}
-            >
-              <PauseCircleOutlineIcon sx={{ fontSize: 15, color: '#F59E0B', opacity: 0.85 }} />
-              <Typography
-                sx={{ fontWeight: 600, fontSize: '0.78rem', color: '#92400E', letterSpacing: '0.01em' }}
-              >
-                Hold
-              </Typography>
-              {holdTasks.length > 0 && (
-                <Chip
-                  label={holdTasks.length}
-                  size="small"
-                  sx={{
-                    height: 18,
-                    minWidth: 18,
-                    fontSize: '0.62rem',
-                    fontWeight: 700,
-                    bgcolor: holdExpanded ? '#FDE68A' : '#FEF3C7',
-                    color: '#92400E',
-                    '& .MuiChip-label': { px: 0.5 },
-                    transition: 'background-color 0.3s ease',
-                  }}
-                />
-              )}
-              <Box sx={{ flex: 1 }} />
-              <KeyboardArrowDownIcon
-                sx={{
-                  fontSize: 17,
-                  color: holdExpanded ? '#B45309' : '#9CA3AF',
-                  transform: holdExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s ease',
-                }}
-              />
-            </Box>
-          </DroppableHoldPill>
         </Box>
 
         {/* Drag Overlay */}
