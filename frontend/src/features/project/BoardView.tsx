@@ -202,6 +202,28 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     [sortField, sortDirection]
   );
 
+  // Sort by due_date ascending (earlier first, no date last)
+  const sortByDueDateAsc = (list: Task[]) =>
+    [...list].sort((a, b) => {
+      const aD = a.due_date || '';
+      const bD = b.due_date || '';
+      if (!aD && !bD) return 0;
+      if (!aD) return 1;
+      if (!bD) return -1;
+      return aD.localeCompare(bD);
+    });
+
+  // Sort by due_date descending (latest first, no date last)
+  const sortByDueDateDesc = (list: Task[]) =>
+    [...list].sort((a, b) => {
+      const aD = a.due_date || '';
+      const bD = b.due_date || '';
+      if (!aD && !bD) return 0;
+      if (!aD) return 1;
+      if (!bD) return -1;
+      return bD.localeCompare(aD);
+    });
+
   // Get tasks for each visual column
   const getColumnTasks = React.useCallback(
     (colId: string): Task[] => {
@@ -210,11 +232,11 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         case 'todo':
           return tasks.filter(t => t.status === 'todo');
         case 'in_progress':
-          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) < 50);
+          return sortByDueDateAsc(tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) < 50));
         case 'in_progress_advanced':
-          return tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) >= 50);
+          return sortByDueDateAsc(tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) >= 50));
         case 'done':
-          return tasks.filter(t => t.status === 'done');
+          return sortByDueDateDesc(tasks.filter(t => t.status === 'done'));
         case 'hold':
           return tasks.filter(t => t.status === 'hold');
         default:
