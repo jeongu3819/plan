@@ -126,10 +126,22 @@ const App: React.FC = () => {
         >
           <UserProvider>
             <Routes>
-              {/* ✅ SSO 콜백은 보통 레이아웃 없이 */}
+              {/* SSO 콜백 (레이아웃 없이) */}
               <Route path="/sso-callback" element={<SsoCallback />} />
+              <Route path="/access-denied" element={<AccessDeniedPage />} />
 
-              {/* ✅ 메인 레이아웃 적용 페이지들 */}
+              {/* Space 기반 라우팅 — 모든 페이지가 space 컨텍스트 아래 */}
+              <Route path="/space/:spaceSlug" element={withMainLayout(<HomePage />)} />
+              <Route path="/space/:spaceSlug/project/kanbanboard" element={withMainLayout(<KanbanBoardPage />)} />
+              <Route path="/space/:spaceSlug/project/:id" element={withMainLayout(<ProjectPage />)} />
+              <Route path="/space/:spaceSlug/trash" element={withMainLayout(<TrashPage />)} />
+              <Route path="/space/:spaceSlug/ai-settings" element={withMainLayout(<AiSettingsPage />)} />
+              <Route path="/space/:spaceSlug/roadmap" element={withMainLayout(<GlobalRoadmapPage />)} />
+              <Route path="/space/:spaceSlug/mentions" element={withMainLayout(<MentionsPage />)} />
+              <Route path="/space/:spaceSlug/admin" element={withMainLayout(<AdminPage />)} />
+              <Route path="/space/:spaceSlug/groups" element={withMainLayout(<GroupPage />)} />
+
+              {/* 레거시 루트 — space 없이 접근 시 기본 공간으로 리다이렉트 */}
               <Route path="/" element={withMainLayout(<HomePage />)} />
               <Route path="/project/kanbanboard" element={withMainLayout(<KanbanBoardPage />)} />
               <Route path="/project/:id" element={withMainLayout(<ProjectPage />)} />
@@ -140,14 +152,11 @@ const App: React.FC = () => {
               <Route path="/admin" element={withMainLayout(<AdminPage />)} />
               <Route path="/groups" element={withMainLayout(<GroupPage />)} />
 
-              {/* ✅ 접근 거부 페이지 (레이아웃 없이) */}
-              <Route path="/access-denied" element={<AccessDeniedPage />} />
-
-              {/* ✅ fallback */}
+              {/* fallback */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
 
-            {/* ✅ 전역 Drawer (UserProvider 안에 위치) */}
+            {/* 전역 Drawer */}
             <TaskDrawer />
           </UserProvider>
         </SnackbarProvider>

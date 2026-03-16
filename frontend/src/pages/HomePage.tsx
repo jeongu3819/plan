@@ -49,6 +49,7 @@ import { api, DashboardStats, ProjectStats, Shortcut, UserShortcut } from '../ap
 import { Task } from '../types';
 import { useAppStore } from '../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
+import { useSpaceNav } from '../hooks/useSpaceNav';
 import { useDensityScores } from '../hooks/useDensityScores';
 import ZeroStateDashboard from '../components/ZeroStateDashboard';
 import {
@@ -299,6 +300,7 @@ const SortableWidget: React.FC<{
 const HomePage: React.FC = () => {
   const currentUserId = useAppStore(state => state.currentUserId);
   const navigate = useNavigate();
+  const { spacePath } = useSpaceNav();
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   const [calMonth, setCalMonth] = useState(new Date());
@@ -945,7 +947,7 @@ const HomePage: React.FC = () => {
               (stats?.project_stats || []).map((p: ProjectStats) => (
                 <Box
                   key={p.id}
-                  onClick={() => navigate(`/project/${p.id}`)}
+                  onClick={() => navigate(spacePath(`/project/${p.id}`))}
                   sx={{
                     py: 1,
                     px: 1.5,
@@ -1424,7 +1426,7 @@ const HomePage: React.FC = () => {
           {isAdminLike && (
             <Tooltip title="어드민">
               <IconButton
-                onClick={() => navigate('/admin')}
+                onClick={() => navigate(spacePath('/admin'))}
                 sx={{ bgcolor: '#F3F4F6', color: '#6B7280', '&:hover': { bgcolor: '#E5E7EB', color: '#374151' } }}
                 size="small"
               >
@@ -1434,7 +1436,7 @@ const HomePage: React.FC = () => {
           )}
           <Tooltip title="Trash">
             <IconButton
-              onClick={() => navigate('/trash')}
+              onClick={() => navigate(spacePath('/trash'))}
               sx={{ bgcolor: '#F3F4F6', color: '#6B7280', '&:hover': { bgcolor: '#FEE2E2', color: '#EF4444' } }}
               size="small"
             >

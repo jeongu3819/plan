@@ -47,7 +47,7 @@ import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import GroupsIcon from '@mui/icons-material/Groups';
 
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import TemplateLibraryDialog from '../components/TemplateLibraryDialog';
 import ImportUploadDialog from '../components/ImportUploadDialog';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -122,6 +122,7 @@ const normalize = (v?: string) =>
 export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { spaceSlug: urlSpaceSlug } = useParams<{ spaceSlug?: string }>();
   const { user: me, loading: meLoading } = useUser();
 
   const queryClient = useQueryClient();
@@ -188,7 +189,11 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
 
   // spaces
   const currentSpaceId = useAppStore(state => state.currentSpaceId);
+  const currentSpaceSlug = useAppStore(state => state.currentSpaceSlug);
   const setCurrentSpace = useAppStore(state => state.setCurrentSpace);
+
+  // Space-aware path helper
+  const sp = (path: string) => currentSpaceSlug ? `/space/${currentSpaceSlug}${path}` : path;
 
   const { data: spaces = [] } = useQuery<any[]>({
     queryKey: ['spaces', effectiveUserId],
@@ -196,12 +201,18 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     enabled: !!me && effectiveUserId > 0,
   });
 
-  // Auto-select first space if none selected
+  // Sync space from URL or auto-select first space
   React.useEffect(() => {
-    if (spaces.length > 0 && !currentSpaceId) {
-      setCurrentSpace(spaces[0].id, spaces[0].name);
+    if (spaces.length === 0) return;
+    if (urlSpaceSlug) {
+      const s = spaces.find((sp: any) => sp.slug === urlSpaceSlug);
+      if (s && s.id !== currentSpaceId) {
+        setCurrentSpace(s.id, s.name, s.slug);
+      }
+    } else if (!currentSpaceId) {
+      setCurrentSpace(spaces[0].id, spaces[0].name, spaces[0].slug);
     }
-  }, [spaces, currentSpaceId, setCurrentSpace]);
+  }, [spaces, urlSpaceSlug, currentSpaceId, setCurrentSpace]);
 
   // projects (filtered by current space)
   const { data: allProjects = [] } = useQuery<Project[]>({
@@ -317,7 +328,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         file_view: 'all',
         file_download: 'all',
       });
-      if (newProject?.id) navigate(`/project/${newProject.id}`);
+      if (newProject?.id) navigate(sp(`/project/${newProject.id}`));
     },
     onError: (err: any) => {
       console.error('Project creation failed:', err);
@@ -364,7 +375,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         }}
       >
         {/* Logo */}
-        <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer' }} onClick={() => navigate('/')}>
+        <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer' }} onClick={() => navigate(sp('/'))}>
           <Box
             sx={{
               width: 38,
@@ -422,7 +433,10 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               onChange={e => {
                 const sid = Number(e.target.value);
                 const s = spaces.find((sp: any) => sp.id === sid);
-                setCurrentSpace(sid, s?.name || '');
+                if (s) {
+                  setCurrentSpace(sid, s.name, s.slug);
+                  navigate(`/space/${s.slug}`);
+                }
               }}
               SelectProps={{ displayEmpty: true }}
               sx={{
@@ -454,29 +468,25 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         {/* Main Menu */}
         <List sx={{ px: 1, py: 1 }}>
           {[
-            { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
+            { text: 'Dashboard', icon: <DashboardIcon />, path: sp('/') },
             {
               text: 'Kanban Board',
               icon: <ViewKanbanIcon />,
-              path: '/project/kanbanboard',
+              path: sp('/project/kanbanboard'),
             },
-            { text: '전체 로드맵', icon: <TimelineIcon />, path: '/roadmap' },
-            // ✅ 추가된 메뉴
-            { text: '@나를 언급', icon: <AlternateEmailIcon />, path: '/mentions' },
-            { text: '그룹', icon: <GroupsIcon />, path: '/groups' },
+            { text: '전체 로드맵', icon: <TimelineIcon />, path: sp('/roadmap') },
+            { text: '@나를 언급', icon: <AlternateEmailIcon />, path: sp('/mentions') },
+            { text: '그룹', icon: <GroupsIcon />, path: sp('/groups') },
             {
               text: 'AI Settings',
               icon: <AutoAwesomeIcon />,
-              path: '/ai-settings',
+              path: sp('/ai-settings'),
               superAdminOnly: true,
             },
           ]
             .filter(item => !(item as any).superAdminOnly || isSuperAdmin)
             .map(item => {
-              const isActive =
-                item.path === '/'
-                  ? location.pathname === '/'
-                  : location.pathname + location.search === item.path;
+              const isActive = location.pathname === item.path;
               return (
                 <ListItem key={item.text} disablePadding sx={{ mb: 0.3 }}>
                   <ListItemButton
@@ -614,7 +624,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                     <Tooltip title={project.name} placement="right" arrow>
                       <ListItemButton
                         onClick={() => {
-                          if (renamingProjectId !== project.id) navigate(`/project/${project.id}`);
+                          if (renamingProjectId !== project.id) navigate(sp(`/project/${project.id}`));
                         }}
                         onDoubleClick={() => {
                           const isProjectOwner = project.owner_id === effectiveUserId;
@@ -849,7 +859,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         <MenuItem
           onClick={() => {
             setProjectMenuAnchor(null);
-            if (projectMenuId) navigate(`/project/${projectMenuId}`);
+            if (projectMenuId) navigate(sp(`/project/${projectMenuId}`));
           }}
           sx={{ fontSize: '0.85rem' }}
         >

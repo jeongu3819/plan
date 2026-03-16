@@ -4623,7 +4623,8 @@ def get_spaces(user_id: int = Query(...), db: Session = Depends(get_db)):
 
 @app.post("/api/spaces")
 def create_space(body: SpaceCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
-    slug = body.slug or _re_slug.sub(r'[^a-z0-9\-]', '-', body.name.lower().strip()).strip('-')[:100]
+    # Use name as slug directly (supports Korean), or custom slug if provided
+    slug = body.slug or _re_slug.sub(r'\s+', '-', body.name.strip())[:100]
     # Ensure unique slug
     existing = db.query(Space).filter(Space.slug == slug).first()
     if existing:
@@ -4678,6 +4679,20 @@ def add_space_member(space_id: int, user_id: int = Query(...), target_user_id: i
     db.add(SpaceMember(space_id=space_id, user_id=target_user_id, role=role))
     db.commit()
     return {"message": "멤버가 추가되었습니다"}
+
+@app.patch("/api/projects/{project_id}/move-space")
+def move_project_space(project_id: int, space_id: int = Query(...), user_id: int = Query(...), db: Session = Depends(get_db)):
+    """Move an existing project to a different space."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    # Verify user is member of target space
+    member = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
+    if not member:
+        raise HTTPException(403, "대상 공간의 멤버가 아닙니다")
+    project.space_id = space_id
+    db.commit()
+    return {"message": "프로젝트가 이동되었습니다", "project_id": project_id, "space_id": space_id}
 
 @app.delete("/api/spaces/{space_id}/members/{target_user_id}")
 def remove_space_member(space_id: int, target_user_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):

@@ -37,7 +37,8 @@ interface AppState {
   // Space context
   currentSpaceId: number | null;
   currentSpaceName: string | null;
-  setCurrentSpace: (id: number | null, name: string | null) => void;
+  currentSpaceSlug: string | null;
+  setCurrentSpace: (id: number | null, name: string | null, slug?: string | null) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -83,7 +84,8 @@ export const useAppStore = create<AppState>()(
       // Space context
       currentSpaceId: null,
       currentSpaceName: null,
-      setCurrentSpace: (id, name) => set({ currentSpaceId: id, currentSpaceName: name }),
+      currentSpaceSlug: null,
+      setCurrentSpace: (id, name, slug = null) => set({ currentSpaceId: id, currentSpaceName: name, currentSpaceSlug: slug }),
     }),
     {
       name: 'antigravity-app-store',
@@ -94,6 +96,7 @@ export const useAppStore = create<AppState>()(
         projectsCollapsed: state.projectsCollapsed,
         currentSpaceId: state.currentSpaceId,
         currentSpaceName: state.currentSpaceName,
+        currentSpaceSlug: state.currentSpaceSlug,
       }),
     }
   )

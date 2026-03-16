@@ -10,7 +10,9 @@ import { format } from 'date-fns';
 
 const MentionsPage: React.FC = () => {
   const currentUserId = useAppStore(state => state.currentUserId);
+  const spaceSlug = useAppStore(state => state.currentSpaceSlug);
   const navigate = useNavigate();
+  const sp = (path: string) => spaceSlug ? `/space/${spaceSlug}${path}` : path;
 
   const { data: mentions = [], isLoading } = useQuery<MentionNote[]>({
     queryKey: ['mentions', currentUserId],
@@ -60,7 +62,7 @@ const MentionsPage: React.FC = () => {
           {mentions.map(note => (
             <Paper
               key={note.id}
-              onClick={() => navigate(`/project/${note.project_id}?tab=notes`)}
+              onClick={() => navigate(sp(`/project/${note.project_id}?tab=messenger`))}
               sx={{
                 p: 2.5,
                 borderRadius: 2,

@@ -18,6 +18,7 @@ import SavingsIcon from '@mui/icons-material/Savings';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useNavigate } from 'react-router-dom';
+import { useAppStore } from '../stores/useAppStore';
 
 // ── Date helpers for template seed data ──
 function relativeDate(daysFromNow: number): string {
@@ -610,6 +611,8 @@ export async function createProjectFromTemplate(
 const ZeroStateDashboard: React.FC<ZeroStateDashboardProps> = ({ currentUserId }) => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const spaceSlug = useAppStore(state => state.currentSpaceSlug);
+  const sp = (path: string) => spaceSlug ? `/space/${spaceSlug}${path}` : path;
   const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate | null>(null);
   const [customName, setCustomName] = useState('');
 
@@ -624,7 +627,7 @@ const ZeroStateDashboard: React.FC<ZeroStateDashboardProps> = ({ currentUserId }
       setSelectedTemplate(null);
       setCustomName('');
       // Navigate with onboarding flag for first-time template projects
-      navigate(`/project/${project.id}?onboarding=1`);
+      navigate(sp(`/project/${project.id}?onboarding=1`));
     },
   });
 

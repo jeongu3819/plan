@@ -14,6 +14,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import { PROJECT_TEMPLATES, ProjectTemplate, createProjectFromTemplate } from './ZeroStateDashboard';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { useAppStore } from '../stores/useAppStore';
 
 interface TemplateLibraryDialogProps {
   open: boolean;
@@ -26,6 +27,8 @@ const TemplateLibraryDialog: React.FC<TemplateLibraryDialogProps> = ({
 }) => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const spaceSlug = useAppStore(state => state.currentSpaceSlug);
+  const sp = (path: string) => spaceSlug ? `/space/${spaceSlug}${path}` : path;
   const [selected, setSelected] = useState<ProjectTemplate | null>(null);
   const [customName, setCustomName] = useState('');
 
@@ -40,7 +43,7 @@ const TemplateLibraryDialog: React.FC<TemplateLibraryDialogProps> = ({
       setSelected(null);
       setCustomName('');
       onClose();
-      navigate(`/project/${project.id}?onboarding=1`);
+      navigate(sp(`/project/${project.id}?onboarding=1`));
     },
   });
 
