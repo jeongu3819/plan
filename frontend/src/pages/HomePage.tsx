@@ -173,7 +173,12 @@ const statusLabels: Record<string, string> = {
 };
 
 // ── Default & min widget height ──
-const DEFAULT_WIDGET_HEIGHT = 180;
+// Dynamically fit 2 rows of widgets into the viewport
+// Header area (~140px) + grid gap (16px) + bottom padding (16px) ≈ 172px overhead
+function getDefaultWidgetHeight() {
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 900;
+  return Math.max(200, Math.floor((vh - 172) / 2));
+}
 const MIN_WIDGET_HEIGHT = 120;
 const MAX_WIDGET_HEIGHT = 600;
 
@@ -348,7 +353,8 @@ const HomePage: React.FC = () => {
       ? (savedLayout.widgetHeights as Record<string, number>)
       : {};
 
-  const getWidgetHeight = (id: string) => widgetHeights[id] || DEFAULT_WIDGET_HEIGHT;
+  const defaultH = getDefaultWidgetHeight();
+  const getWidgetHeight = (id: string) => widgetHeights[id] || defaultH;
 
   const saveDebounceRef = useRef<ReturnType<typeof setTimeout>>();
   const handleWidgetHeightChange = (id: string, height: number) => {
