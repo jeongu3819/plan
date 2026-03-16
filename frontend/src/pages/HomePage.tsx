@@ -754,16 +754,10 @@ const HomePage: React.FC = () => {
         const sortedMyTasks = [...(stats?.my_tasks || [])]
           .filter(t => !(hideDoneTasks && t.status === 'done'))
           .sort((a, b) => {
-            // Hot tasks float to top within same status
-            const da = densityScores.get(a.id);
-            const db = densityScores.get(b.id);
             const sa = statusOrder[a.status] ?? 2;
             const sb = statusOrder[b.status] ?? 2;
             if (sa !== sb) return sa - sb;
-            // Within same status, hot tasks come first
-            const scoreA = da?.score ?? 0;
-            const scoreB = db?.score ?? 0;
-            if (scoreA !== scoreB) return scoreB - scoreA;
+            // Within same status, sort by due date (earliest first, no date last)
             if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
             if (a.due_date) return -1;
             if (b.due_date) return 1;
