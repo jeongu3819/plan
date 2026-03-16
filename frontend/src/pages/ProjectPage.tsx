@@ -57,7 +57,7 @@ const ProjectPage: React.FC = () => {
     const [showOnboarding, setShowOnboarding] = useState(false);
 
     useEffect(() => {
-        if (onboardingParam === '1' && !sessionStorage.getItem('plan-a-onboarding-done')) {
+        if (onboardingParam === '1' && !localStorage.getItem('plan-a-onboarding-disabled')) {
             setShowOnboarding(true);
         }
     }, [onboardingParam]);

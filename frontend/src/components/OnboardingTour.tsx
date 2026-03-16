@@ -14,7 +14,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Typography, Button, Paper, Fade, LinearProgress, Chip } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import SkipNextIcon from '@mui/icons-material/SkipNext';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 interface OnboardingStep {
@@ -112,8 +111,14 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
 
   const handleComplete = useCallback(() => {
     setIsActive(false);
-    sessionStorage.setItem('plan-a-onboarding-done', '1');
     onTabChange(0); // Return to Board
+    onComplete();
+  }, [onComplete, onTabChange]);
+
+  const handleDisablePermanently = useCallback(() => {
+    setIsActive(false);
+    localStorage.setItem('plan-a-onboarding-disabled', '1');
+    onTabChange(0);
     onComplete();
   }, [onComplete, onTabChange]);
 
@@ -206,14 +211,22 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
 
           {/* Actions */}
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2 }}>
-            <Button
-              size="small"
-              onClick={handleSkip}
-              startIcon={<SkipNextIcon sx={{ fontSize: 16 }} />}
-              sx={{ textTransform: 'none', color: '#9CA3AF', fontSize: '0.75rem', fontWeight: 600 }}
-            >
-              건너뛰기
-            </Button>
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              <Button
+                size="small"
+                onClick={handleSkip}
+                sx={{ textTransform: 'none', color: '#9CA3AF', fontSize: '0.72rem', fontWeight: 600, minWidth: 0 }}
+              >
+                닫기
+              </Button>
+              <Button
+                size="small"
+                onClick={handleDisablePermanently}
+                sx={{ textTransform: 'none', color: '#D1D5DB', fontSize: '0.65rem', fontWeight: 500, minWidth: 0 }}
+              >
+                다시 보지 않기
+              </Button>
+            </Box>
             <Button
               size="small"
               variant="contained"
