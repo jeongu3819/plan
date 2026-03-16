@@ -42,6 +42,7 @@ import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import SettingsIcon from '@mui/icons-material/Settings';
 import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -268,6 +269,13 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [templateLibraryOpen, setTemplateLibraryOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
+  const [newSpaceName, setNewSpaceName] = useState('');
+  const [newSpaceDesc, setNewSpaceDesc] = useState('');
+  const [spaceSelectedUserIds, setSpaceSelectedUserIds] = useState<number[]>([]);
+  const [spaceUserSearch, setSpaceUserSearch] = useState('');
+  const [spaceManageMode, setSpaceManageMode] = useState<'create' | 'manage'>('create');
+  const [managingSpace, setManagingSpace] = useState<any>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectVisibility, setNewProjectVisibility] = useState<'private' | 'public'>('private');
@@ -422,9 +430,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           </Box>
         </Box>
 
-        {/* Space Selector */}
-        {spaces.length > 0 && (
-          <Box sx={{ px: 1.5, py: 1 }}>
+        {/* Space Selector + Create */}
+        <Box sx={{ px: 1.5, py: 1, display: 'flex', gap: 0.5, alignItems: 'center' }}>
+          {spaces.length > 0 ? (
             <TextField
               select
               fullWidth
@@ -460,8 +468,59 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 </MenuItem>
               ))}
             </TextField>
-          </Box>
-        )}
+          ) : (
+            <Typography sx={{ fontSize: '0.78rem', color: theme.sidebarMuted, flex: 1, textAlign: 'center' }}>
+              공간을 만들어 시작하세요
+            </Typography>
+          )}
+          <Tooltip title="공간 생성 / 관리">
+            <IconButton
+              size="small"
+              onClick={() => {
+                setSpaceManageMode('create');
+                setNewSpaceName('');
+                setNewSpaceDesc('');
+                setSpaceSelectedUserIds([]);
+                setSpaceDialogOpen(true);
+              }}
+              sx={{
+                color: theme.sidebarMuted,
+                bgcolor: 'rgba(255,255,255,0.06)',
+                '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', color: '#2955FF' },
+                width: 30, height: 30,
+              }}
+            >
+              <AddIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+          {/* Manage current space (gear icon) */}
+          {currentSpaceId && (
+            <Tooltip title="현재 공간 관리">
+              <IconButton
+                size="small"
+                onClick={() => {
+                  const s = spaces.find((sp: any) => sp.id === currentSpaceId);
+                  if (s) {
+                    setManagingSpace(s);
+                    setNewSpaceName(s.name);
+                    setNewSpaceDesc(s.description || '');
+                    setSpaceSelectedUserIds(s.members?.map((m: any) => m.user_id) || []);
+                    setSpaceManageMode('manage');
+                    setSpaceDialogOpen(true);
+                  }
+                }}
+                sx={{
+                  color: theme.sidebarMuted,
+                  bgcolor: 'rgba(255,255,255,0.06)',
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', color: '#F59E0B' },
+                  width: 30, height: 30,
+                }}
+              >
+                <SettingsIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
 
         <Divider sx={{ borderColor: '#2A2F52', mx: 1.5 }} />
 
@@ -1409,6 +1468,141 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         onClose={() => setImportDialogOpen(false)}
         currentUserId={effectiveUserId}
       />
+
+      {/* ─── Space Create/Manage Dialog ─── */}
+      <Dialog
+        open={spaceDialogOpen}
+        onClose={() => setSpaceDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 1 }}>
+          {spaceManageMode === 'create' ? '새 공간 만들기' : `공간 관리: ${managingSpace?.name || ''}`}
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="공간 이름 *"
+            placeholder="예: DA파트, 개발팀"
+            value={newSpaceName}
+            onChange={e => setNewSpaceName(e.target.value)}
+            sx={{ mt: 1, mb: 1 }}
+            helperText={newSpaceName.trim() ? `URL: /space/${newSpaceName.trim().replace(/\s+/g, '-')}` : ''}
+            FormHelperTextProps={{ sx: { fontSize: '0.68rem', color: '#2955FF' } }}
+          />
+          <TextField
+            fullWidth
+            label="설명 (선택)"
+            placeholder="공간에 대한 간단한 설명"
+            value={newSpaceDesc}
+            onChange={e => setNewSpaceDesc(e.target.value)}
+            sx={{ mb: 2 }}
+          />
+
+          {/* Member selection */}
+          <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', mb: 0.5, display: 'block' }}>
+            멤버 선택 ({spaceSelectedUserIds.length}명)
+          </Typography>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="이름, ID로 검색"
+            value={spaceUserSearch}
+            onChange={e => setSpaceUserSearch(e.target.value)}
+            sx={{ mb: 1 }}
+          />
+          <Box sx={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #E5E7EB', borderRadius: 2, p: 0.5 }}>
+            {(users || [])
+              .filter(u => {
+                if (!spaceUserSearch.trim()) return true;
+                const q = spaceUserSearch.toLowerCase();
+                return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+              })
+              .map(user => (
+                <Box
+                  key={user.id}
+                  onClick={() =>
+                    setSpaceSelectedUserIds(prev =>
+                      prev.includes(user.id) ? prev.filter(id => id !== user.id) : [...prev, user.id]
+                    )
+                  }
+                  sx={{
+                    display: 'flex', alignItems: 'center', gap: 1,
+                    py: 0.6, px: 1.5, borderRadius: 1.5, cursor: 'pointer',
+                    '&:hover': { bgcolor: '#F3F4F6' },
+                    bgcolor: spaceSelectedUserIds.includes(user.id) ? '#EEF2FF' : 'transparent',
+                  }}
+                >
+                  <Checkbox size="small" checked={spaceSelectedUserIds.includes(user.id)} sx={{ p: 0.3 }} />
+                  <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                    <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                      {user.username}
+                      <Typography component="span" sx={{ fontSize: '0.68rem', color: '#9CA3AF', ml: 0.5 }}>
+                        ({user.loginid})
+                      </Typography>
+                    </Typography>
+                  </Box>
+                </Box>
+              ))}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setSpaceDialogOpen(false)} sx={{ color: '#6B7280' }}>취소</Button>
+          {spaceManageMode === 'create' ? (
+            <Button
+              variant="contained"
+              disabled={!newSpaceName.trim()}
+              onClick={async () => {
+                try {
+                  const created = await api.createSpace(
+                    { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined, member_user_ids: spaceSelectedUserIds },
+                    effectiveUserId
+                  );
+                  queryClient.invalidateQueries({ queryKey: ['spaces'] });
+                  setSpaceDialogOpen(false);
+                  setCurrentSpace(created.id, created.name, created.slug);
+                  navigate(`/space/${created.slug}`);
+                } catch (e) { console.error(e); }
+              }}
+              sx={{ bgcolor: '#2955FF' }}
+            >
+              생성
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              disabled={!newSpaceName.trim()}
+              onClick={async () => {
+                try {
+                  if (managingSpace) {
+                    await api.updateSpace(managingSpace.id, { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined }, effectiveUserId);
+                    // Sync members: add new, remove old
+                    const currentMembers = new Set((managingSpace.members || []).map((m: any) => m.user_id));
+                    const targetMembers = new Set(spaceSelectedUserIds);
+                    for (const uid of spaceSelectedUserIds) {
+                      if (!currentMembers.has(uid)) {
+                        await api.addSpaceMember(managingSpace.id, uid, effectiveUserId);
+                      }
+                    }
+                    for (const uid of Array.from(currentMembers) as number[]) {
+                      if (!targetMembers.has(uid) && uid !== effectiveUserId) {
+                        await api.removeSpaceMember(managingSpace.id, uid as number, effectiveUserId);
+                      }
+                    }
+                    queryClient.invalidateQueries({ queryKey: ['spaces'] });
+                    setSpaceDialogOpen(false);
+                  }
+                } catch (e) { console.error(e); }
+              }}
+              sx={{ bgcolor: '#2955FF' }}
+            >
+              저장
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
 
       {/* ✅ New User Dialog (Add Member) */}
       <Dialog
