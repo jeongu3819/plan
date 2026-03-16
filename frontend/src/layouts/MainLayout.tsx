@@ -893,38 +893,40 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem' }}>새 프로젝트</Typography>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                setProjectDialogOpen(false);
-                setTemplateLibraryOpen(true);
-              }}
-              sx={{
-                textTransform: 'none', fontWeight: 700, fontSize: '0.78rem',
-                borderColor: '#7C3AED', color: '#7C3AED', borderRadius: 2,
-                px: 2, py: 0.5,
-                '&:hover': { bgcolor: '#F5F3FF', borderColor: '#6D28D9' },
-              }}
-            >
-              템플릿에서 만들기
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                setProjectDialogOpen(false);
-                setImportDialogOpen(true);
-              }}
-              sx={{
-                textTransform: 'none', fontWeight: 700, fontSize: '0.78rem',
-                borderColor: '#059669', color: '#059669', borderRadius: 2,
-                px: 2, py: 0.5,
-                '&:hover': { bgcolor: '#ECFDF5', borderColor: '#047857' },
-              }}
-            >
-              파일에서 가져오기
-            </Button>
+            <Box sx={{ display: 'flex', gap: 0.8 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => {
+                  setProjectDialogOpen(false);
+                  setTemplateLibraryOpen(true);
+                }}
+                sx={{
+                  textTransform: 'none', fontWeight: 600, fontSize: '0.72rem',
+                  borderColor: '#D1D5DB', color: '#6B7280', borderRadius: 1.5,
+                  px: 1.5, py: 0.3, minWidth: 0,
+                  '&:hover': { bgcolor: '#F5F3FF', borderColor: '#7C3AED', color: '#7C3AED' },
+                }}
+              >
+                템플릿
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => {
+                  setProjectDialogOpen(false);
+                  setImportDialogOpen(true);
+                }}
+                sx={{
+                  textTransform: 'none', fontWeight: 600, fontSize: '0.72rem',
+                  borderColor: '#D1D5DB', color: '#6B7280', borderRadius: 1.5,
+                  px: 1.5, py: 0.3, minWidth: 0,
+                  '&:hover': { bgcolor: '#ECFDF5', borderColor: '#059669', color: '#059669' },
+                }}
+              >
+                파일 가져오기
+              </Button>
+            </Box>
           </Box>
         </DialogTitle>
         <DialogContent>
