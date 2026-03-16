@@ -27,6 +27,7 @@ import NodeGraphView from '../features/project/NodeGraphView';
 import { ReactFlowProvider } from 'react-flow-renderer';
 import ProjectReportView from '../features/project/ProjectReportView';
 import ProjectSettingsView from '../features/project/ProjectSettingsView';
+import OnboardingTour from '../components/OnboardingTour';
 
 const TAB_MAP: Record<string, number> = {
     board: 0, list: 1, calendar: 2, roadmap: 3, notes: 4, graph: 5, report: 6, settings: 7,
@@ -50,6 +51,16 @@ const ProjectPage: React.FC = () => {
     const tabParam = searchParams.get('tab');
     const [view, setView] = useState(tabParam ? (TAB_MAP[tabParam] ?? 0) : 0);
     const { openDrawer, filterSearch, setFilterSearch, currentUserId } = useAppStore();
+
+    // Onboarding tour — only for template-created projects (URL has ?onboarding=1)
+    const onboardingParam = searchParams.get('onboarding');
+    const [showOnboarding, setShowOnboarding] = useState(false);
+
+    useEffect(() => {
+        if (onboardingParam === '1' && !sessionStorage.getItem('plan-a-onboarding-done')) {
+            setShowOnboarding(true);
+        }
+    }, [onboardingParam]);
 
     // Update view when URL tab param changes
     useEffect(() => {
@@ -201,6 +212,14 @@ const ProjectPage: React.FC = () => {
                     {view === 6 && <ProjectReportView projectId={projectId} />}
                     {view === 7 && <ProjectSettingsView projectId={projectId} />}
                 </Box>
+            )}
+
+            {/* Onboarding Tour */}
+            {showOnboarding && (
+                <OnboardingTour
+                    onComplete={() => setShowOnboarding(false)}
+                    onTabChange={(tabIndex) => setView(tabIndex)}
+                />
             )}
         </Box>
     );

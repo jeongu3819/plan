@@ -888,7 +888,27 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         fullWidth
         PaperProps={{ sx: { borderRadius: 3 } }}
       >
-        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>새 프로젝트</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem' }}>새 프로젝트</Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                setProjectDialogOpen(false);
+                setTemplateLibraryOpen(true);
+              }}
+              sx={{
+                textTransform: 'none', fontWeight: 700, fontSize: '0.78rem',
+                borderColor: '#7C3AED', color: '#7C3AED', borderRadius: 2,
+                px: 2, py: 0.5,
+                '&:hover': { bgcolor: '#F5F3FF', borderColor: '#6D28D9' },
+              }}
+            >
+              템플릿에서 만들기
+            </Button>
+          </Box>
+        </DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
@@ -1275,29 +1295,18 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           </>}
         </DialogContent>
 
-        <DialogActions sx={{ px: 3, pb: 2, justifyContent: 'space-between' }}>
-          <Button
-            onClick={() => {
-              setProjectDialogOpen(false);
-              setTemplateLibraryOpen(true);
-            }}
-            sx={{ color: '#7C3AED', textTransform: 'none', fontWeight: 600, fontSize: '0.8rem' }}
-          >
-            템플릿에서 만들기
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setProjectDialogOpen(false)} sx={{ color: '#6B7280' }}>
+            취소
           </Button>
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button onClick={() => setProjectDialogOpen(false)} sx={{ color: '#6B7280' }}>
-              취소
-            </Button>
-            <Button
-              variant="contained"
-              onClick={() => createProjectMutation.mutate()}
-              disabled={!newProjectName.trim()}
-              sx={{ bgcolor: '#2955FF' }}
-            >
-              생성
-            </Button>
-          </Box>
+          <Button
+            variant="contained"
+            onClick={() => createProjectMutation.mutate()}
+            disabled={!newProjectName.trim()}
+            sx={{ bgcolor: '#2955FF' }}
+          >
+            생성
+          </Button>
         </DialogActions>
       </Dialog>
 

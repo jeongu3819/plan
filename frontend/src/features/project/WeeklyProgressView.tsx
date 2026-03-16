@@ -125,32 +125,54 @@ const WeeklyProgressView: React.FC<WeeklyProgressViewProps> = ({ projectId }) =>
     const activeTasks = tasks.filter(t => !t.archived_at);
 
     activeTasks.forEach(task => {
-      if (!task.due_date) {
+      if (!task.due_date && !task.start_date) {
         undated.push(task);
         return;
       }
 
-      const dueDate = parseISO(task.due_date);
-      // Check if due_date falls within the current month
-      if (!isWithinInterval(dueDate, { start: monthStart, end: monthEnd })) {
-        return;
+      // Determine the task's effective date range
+      const taskStart = task.start_date ? parseISO(task.start_date) : (task.due_date ? parseISO(task.due_date) : null);
+      const taskEnd = task.due_date ? parseISO(task.due_date) : (task.start_date ? parseISO(task.start_date) : null);
+
+      if (!taskStart || !taskEnd) {
+        // Only one date exists — check if that single date falls within the month
+        const singleDate = taskStart || taskEnd;
+        if (!singleDate || !isWithinInterval(singleDate, { start: monthStart, end: monthEnd })) {
+          // If the single date is outside this month, skip
+          if (!singleDate) { undated.push(task); return; }
+          return;
+        }
+      } else {
+        // Both dates exist — check if the task's date range overlaps with the current month
+        // Overlap condition: taskStart <= monthEnd AND taskEnd >= monthStart
+        if (taskStart > monthEnd || taskEnd < monthStart) {
+          return; // No overlap
+        }
       }
 
-      const weekStart = startOfISOWeek(dueDate);
-      const weekEnd = endOfISOWeek(dueDate);
-      const isoWeek = getISOWeek(dueDate);
+      // Determine which week to place the task in:
+      // Use due_date if it falls in this month, otherwise use the month boundary
+      const effectiveDate = task.due_date ? parseISO(task.due_date) : taskEnd!;
+      const dateForWeek = effectiveDate > monthEnd
+        ? monthEnd // Task extends beyond this month — show in last week
+        : effectiveDate < monthStart
+          ? monthStart // Task started before this month — show in first week
+          : effectiveDate;
+
+      const weekStartDate = startOfISOWeek(dateForWeek);
+      const weekEndDate = endOfISOWeek(dateForWeek);
+      const isoWeek = getISOWeek(dateForWeek);
       const key = `${year}-W${isoWeek}`;
 
       if (!weekMap.has(key)) {
-        // Calculate which week of the month this is
-        const weekOfMonth = Math.ceil(dueDate.getDate() / 7);
-        const rangeStart = format(weekStart, 'M/d');
-        const rangeEnd = format(weekEnd, 'M/d');
+        const weekOfMonth = Math.ceil(dateForWeek.getDate() / 7);
+        const rangeStart = format(weekStartDate, 'M/d');
+        const rangeEnd = format(weekEndDate, 'M/d');
         weekMap.set(key, {
           label: `${month}월 ${weekOfMonth}주차`,
           dateRange: `(${rangeStart}~${rangeEnd})`,
           tasks: [],
-          weekStart,
+          weekStart: weekStartDate,
         });
       }
       weekMap.get(key)!.tasks.push(task);
