@@ -165,7 +165,26 @@ export function parseTaskInput(rawText: string): ParsedTaskInput {
   text = afterPriority;
   if (priority) confidence += 0.1;
 
+  // 3a-0) Korean full date range: "3월10일~11월11일", "3월 10일 ~ 11월 11일", "3월10일부터 11월11일까지"
+  const koreanFullRange = text.match(
+    /(\d{1,2})월\s*(\d{1,2})일?\s*(?:부터|에서)?\s*[~\-]?\s*(\d{1,2})월\s*(\d{1,2})일?\s*(?:까지)?/
+  );
+  if (koreanFullRange) {
+    const year = new Date().getFullYear();
+    const sm = parseInt(koreanFullRange[1]);
+    const sd = parseInt(koreanFullRange[2]);
+    const em = parseInt(koreanFullRange[3]);
+    const ed = parseInt(koreanFullRange[4]);
+    if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12 && sd >= 1 && sd <= 31 && ed >= 1 && ed <= 31) {
+      startDate = `${year}-${String(sm).padStart(2, '0')}-${String(sd).padStart(2, '0')}`;
+      endDate = `${year}-${String(em).padStart(2, '0')}-${String(ed).padStart(2, '0')}`;
+      text = text.replace(koreanFullRange[0], '').trim();
+      confidence += 0.3;
+    }
+  }
+
   // 3a-1) M/D~M/D or M.D~M.D date range: "3/10~10/20", "3.10~10.20"
+  if (!startDate && !endDate) {
   const slashRange = text.match(
     /(\d{1,2})[./](\d{1,2})\s*[~\-]\s*(\d{1,2})[./](\d{1,2})/
   );
@@ -181,6 +200,7 @@ export function parseTaskInput(rawText: string): ParsedTaskInput {
       text = text.replace(slashRange[0], '').trim();
       confidence += 0.3;
     }
+  }
   }
 
   // 3a-2) Korean month range: "3월부터 10월까지", "3월~10월", "3월에서 10월까지"

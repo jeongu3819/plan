@@ -130,7 +130,7 @@ const MagicInput: React.FC<MagicInputProps> = ({ projectId, defaultStatus = 'tod
         )}
         <TextField
           fullWidth
-          placeholder="Add a task... (자연어로 입력 가능)"
+          placeholder="예: 개선 아이템 3~10"
           variant="standard"
           size="small"
           value={rawText}

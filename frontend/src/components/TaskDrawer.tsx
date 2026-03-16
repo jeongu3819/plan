@@ -299,7 +299,7 @@ const TaskDrawer: React.FC = () => {
                 <Stack spacing={3}>
                     {/* Title */}
                     <TextField
-                        placeholder="Task title..."
+                        placeholder={selectedTask ? "Task title..." : "예: 개선 아이템 3월~10월"}
                         fullWidth
                         value={formData.title || ''}
                         onChange={(e) => handleChange('title', e.target.value)}
@@ -310,6 +310,8 @@ const TaskDrawer: React.FC = () => {
                             sx: { fontSize: '1.3rem', fontWeight: 700 },
                             readOnly: !canEdit,
                         }}
+                        helperText={!selectedTask && !formData.title ? '일정을 포함하면 자동 설정됩니다 (예: 3~10, 3/10~10/20)' : undefined}
+                        FormHelperTextProps={{ sx: { fontSize: '0.68rem', color: '#9CA3AF', mt: 0.5 } }}
                         autoFocus={!selectedTask}
                     />
 
