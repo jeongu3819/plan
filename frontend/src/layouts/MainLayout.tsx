@@ -1679,6 +1679,31 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             onChange={e => setSpaceUserSearch(e.target.value)}
             sx={{ mb: 1 }}
           />
+          {/* Group quick-apply */}
+          {memberGroups.length > 0 && (
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mb: 1 }}>
+              {memberGroups.map(g => (
+                <Chip
+                  key={g.id}
+                  label={`${g.name} (${g.member_count})`}
+                  size="small"
+                  onClick={() => {
+                    const groupUserIds = g.members.map((m: any) => m.user_id);
+                    setSpaceSelectedUserIds(prev => {
+                      const s = new Set(prev);
+                      groupUserIds.forEach((id: number) => s.add(id));
+                      return Array.from(s);
+                    });
+                  }}
+                  sx={{
+                    height: 22, fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer',
+                    bgcolor: '#EEF2FF', color: '#2955FF', border: '1px solid #C7D2FE',
+                    '&:hover': { bgcolor: '#DBEAFE' },
+                  }}
+                />
+              ))}
+            </Box>
+          )}
           <Box sx={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #E5E7EB', borderRadius: 2, p: 0.5 }}>
             {(users || [])
               .filter(u => {
