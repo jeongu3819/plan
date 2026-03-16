@@ -165,124 +165,152 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function parseSchedule(raw: string): { start: string | null; end: string | null; error?: string } {
+/**
+ * Parse schedule string to start/end dates.
+ *
+ * Design principle: NEVER return an error. If we can extract any date info, use it.
+ * If we can't parse anything, return null/null silently — the task is still created.
+ *
+ * Strategy:
+ * 1. Try specific range patterns (two dates in one string)
+ * 2. Try single-date/month patterns (→ today ~ that date)
+ * 3. Fallback: extract any year/month numbers from the string generically
+ */
+export function parseSchedule(raw: string): { start: string | null; end: string | null } {
   if (!raw) return { start: null, end: null };
 
-  // Pre-process: normalize cell value (strip quotes, trim)
   let text = normalizeCellValue(raw);
+  // Remove leading ~ (means "from now until")
+  const hasTilde = text.startsWith('~');
+  if (hasTilde) text = text.slice(1).trim();
 
-  // "-" or empty → no schedule (NOT an error)
-  if (!text || text === '-') {
-    return { start: null, end: null };
-  }
+  // "-" or empty → no schedule
+  if (!text || text === '-') return { start: null, end: null };
 
-  // ── Pattern 0: ~YY.M월 or ~YYYY.M월 (today → end of that month) ──
-  const tildeYM = text.match(/^~\s*(\d{2,4})[.](\d{1,2})월?$/);
-  if (tildeYM) {
-    const year = normalizeYear(tildeYM[1]);
-    const month = parseInt(tildeYM[2]);
-    if (month >= 1 && month <= 12) {
-      const lastDay = new Date(parseInt(year), month, 0).getDate();
-      return {
-        start: todayStr(),
-        end: `${year}-${p(month)}-${p(lastDay)}`,
-      };
-    }
-  }
+  const now = new Date();
+  const currentYear = now.getFullYear();
 
-  // ── Pattern 0b: YY.M월 without tilde (standalone, e.g. "26.12월") → today ~ end of month ──
-  const standaloneYM = text.match(/^(\d{2,4})[.](\d{1,2})월?$/);
-  if (standaloneYM) {
-    const year = normalizeYear(standaloneYM[1]);
-    const month = parseInt(standaloneYM[2]);
-    if (month >= 1 && month <= 12) {
-      const lastDay = new Date(parseInt(year), month, 0).getDate();
-      return {
-        start: todayStr(),
-        end: `${year}-${p(month)}-${p(lastDay)}`,
-      };
-    }
-  }
+  // ═══ RANGE PATTERNS (two endpoints) ═══
 
-  // ── Pattern 1: "26년3월1일-26년10월20일" / "2026년3월1일-2026년10월20일" ──
-  const koreanYearFull = text.match(
+  // R1: "26년3월1일-26년10월20일" / "2026년3월1일~2026년10월20일"
+  const r1 = text.match(
     /(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일?\s*[-~]\s*(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일?/
   );
-  if (koreanYearFull) {
-    return {
-      start: `${normalizeYear(koreanYearFull[1])}-${p(koreanYearFull[2])}-${p(koreanYearFull[3])}`,
-      end: `${normalizeYear(koreanYearFull[4])}-${p(koreanYearFull[5])}-${p(koreanYearFull[6])}`,
-    };
-  }
+  if (r1) return {
+    start: `${normalizeYear(r1[1])}-${p(r1[2])}-${p(r1[3])}`,
+    end: `${normalizeYear(r1[4])}-${p(r1[5])}-${p(r1[6])}`,
+  };
 
-  // ── Pattern 2: "3월2일부터10월20일" / "3월10일~11월11일" ──
-  const koreanDateRange = text.match(
+  // R2: "3월10일~11월11일" / "3월2일부터10월20일"
+  const r2 = text.match(
     /(\d{1,2})월\s*(\d{1,2})일?\s*(?:부터|에서)?\s*[-~]?\s*(\d{1,2})월\s*(\d{1,2})일?\s*(?:까지)?/
   );
-  if (koreanDateRange) {
-    const year = new Date().getFullYear();
-    return {
-      start: `${year}-${p(koreanDateRange[1])}-${p(koreanDateRange[2])}`,
-      end: `${year}-${p(koreanDateRange[3])}-${p(koreanDateRange[4])}`,
-    };
-  }
+  if (r2) return {
+    start: `${currentYear}-${p(r2[1])}-${p(r2[2])}`,
+    end: `${currentYear}-${p(r2[3])}-${p(r2[4])}`,
+  };
 
-  // ── Pattern 3: "3월~10월" month range ──
-  const koreanMonthRange = text.match(
+  // R3: "3월~10월" month-month range
+  const r3 = text.match(
     /(\d{1,2})월\s*(?:부터|에서)?\s*[-~]?\s*(\d{1,2})월\s*(?:까지)?/
   );
-  if (koreanMonthRange) {
-    const year = new Date().getFullYear();
-    const sm = parseInt(koreanMonthRange[1]);
-    const em = parseInt(koreanMonthRange[2]);
+  if (r3) {
+    const sm = parseInt(r3[1]), em = parseInt(r3[2]);
     if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12) {
-      const lastDay = new Date(year, em, 0).getDate();
       return {
-        start: `${year}-${p(sm)}-01`,
-        end: `${year}-${p(em)}-${p(lastDay)}`,
+        start: `${currentYear}-${p(sm)}-01`,
+        end: `${currentYear}-${p(em)}-${p(new Date(currentYear, em, 0).getDate())}`,
       };
     }
   }
 
-  // ── Pattern 4: "2026.03.01~2026.10.20" full date range ──
-  const fullDateRange = text.match(
+  // R4: "2026.03.01~2026.10.20" / "2026-03-01~2026-10-20"
+  const r4 = text.match(
     /(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s*[-~]\s*(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/
   );
-  if (fullDateRange) {
-    return {
-      start: `${fullDateRange[1]}-${p(fullDateRange[2])}-${p(fullDateRange[3])}`,
-      end: `${fullDateRange[4]}-${p(fullDateRange[5])}-${p(fullDateRange[6])}`,
-    };
-  }
+  if (r4) return {
+    start: `${r4[1]}-${p(r4[2])}-${p(r4[3])}`,
+    end: `${r4[4]}-${p(r4[5])}-${p(r4[6])}`,
+  };
 
-  // ── Pattern 5: "3/10-11/11" or "3.2-12.2" (M/D range) ──
-  const mdRange = text.match(
+  // R5: "3/10-11/11" / "3.2-12.2" M/D-M/D
+  const r5 = text.match(
     /(\d{1,2})[./](\d{1,2})\s*[-~]\s*(\d{1,2})[./](\d{1,2})/
   );
-  if (mdRange) {
-    const year = new Date().getFullYear();
-    return {
-      start: `${year}-${p(mdRange[1])}-${p(mdRange[2])}`,
-      end: `${year}-${p(mdRange[3])}-${p(mdRange[4])}`,
-    };
-  }
+  if (r5) return {
+    start: `${currentYear}-${p(r5[1])}-${p(r5[2])}`,
+    end: `${currentYear}-${p(r5[3])}-${p(r5[4])}`,
+  };
 
-  // ── Pattern 6: "3~10" simple month range ──
-  const simpleRange = text.match(/^(\d{1,2})\s*[-~]\s*(\d{1,2})$/);
-  if (simpleRange) {
-    const sm = parseInt(simpleRange[1]);
-    const em = parseInt(simpleRange[2]);
+  // R6: "3~10" simple number range → month range
+  const r6 = text.match(/^(\d{1,2})\s*[-~]\s*(\d{1,2})$/);
+  if (r6) {
+    const sm = parseInt(r6[1]), em = parseInt(r6[2]);
     if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12) {
-      const year = new Date().getFullYear();
-      const lastDay = new Date(year, em, 0).getDate();
       return {
-        start: `${year}-${p(sm)}-01`,
-        end: `${year}-${p(em)}-${p(lastDay)}`,
+        start: `${currentYear}-${p(sm)}-01`,
+        end: `${currentYear}-${p(em)}-${p(new Date(currentYear, em, 0).getDate())}`,
       };
     }
   }
 
-  return { start: null, end: null, error: `일정 형식을 해석할 수 없습니다: "${raw}"` };
+  // ═══ SINGLE ENDPOINT PATTERNS (→ today ~ that date) ═══
+
+  // S1: "YY.M월" / "YY/M월" / "YYYY.M월" e.g. "26.12월", "26/8월", "2026.12월"
+  const s1 = text.match(/(\d{2,4})[./](\d{1,2})월?/);
+  if (s1) {
+    const year = normalizeYear(s1[1]);
+    const month = parseInt(s1[2]);
+    if (month >= 1 && month <= 12) {
+      return {
+        start: todayStr(),
+        end: `${year}-${p(month)}-${p(new Date(parseInt(year), month, 0).getDate())}`,
+      };
+    }
+  }
+
+  // S2: "12월" / "8월" — standalone month → today ~ end of that month (current year)
+  const s2 = text.match(/^(\d{1,2})월$/);
+  if (s2) {
+    const month = parseInt(s2[1]);
+    if (month >= 1 && month <= 12) {
+      return {
+        start: todayStr(),
+        end: `${currentYear}-${p(month)}-${p(new Date(currentYear, month, 0).getDate())}`,
+      };
+    }
+  }
+
+  // S3: "M월D일" single date → today ~ that date
+  const s3 = text.match(/(\d{1,2})월\s*(\d{1,2})일?/);
+  if (s3) {
+    const m = parseInt(s3[1]), d = parseInt(s3[2]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return { start: todayStr(), end: `${currentYear}-${p(m)}-${p(d)}` };
+    }
+  }
+
+  // ═══ GENERIC FALLBACK: extract any year/month from the string ═══
+  // Try to find YY or YYYY followed by month number
+  const gYear = text.match(/(\d{2,4})/);
+  const gMonth = text.match(/(\d{1,2})\s*월/) || (gYear ? text.replace(gYear[0], '').match(/(\d{1,2})/) : null);
+
+  if (gMonth) {
+    const month = parseInt(gMonth[1]);
+    if (month >= 1 && month <= 12) {
+      const year = gYear ? normalizeYear(gYear[1]) : String(currentYear);
+      // If extracted year looks like a month (1-12), use current year instead
+      const yearNum = parseInt(year);
+      const finalYear = yearNum < 2000 && yearNum <= 12 ? String(currentYear) : year;
+      return {
+        start: todayStr(),
+        end: `${finalYear}-${p(month)}-${p(new Date(parseInt(finalYear), month, 0).getDate())}`,
+      };
+    }
+  }
+
+  // Nothing found — return null/null silently (task still gets created, just without dates)
+  return { start: null, end: null };
 }
 
 // ══════════════════════════════════════════════════
@@ -383,13 +411,10 @@ export function parseImportData(headers: string[], data: Record<string, string>[
       errors.push(`${rowNum}행: task 값이 비어 있어 스킵됩니다.`);
     }
 
-    // Parse schedule — "-" and empty are normal (no warning)
+    // Parse schedule — never produces errors, task always gets created
     const parsed = parseSchedule(scheduleVal);
     const startDate = parsed.start;
     const endDate = parsed.end;
-    if (parsed.error) {
-      warnings.push(`${rowNum}행: ${parsed.error}`);
-    }
 
     // Normalize status
     let normalizedStatus = 'todo';
