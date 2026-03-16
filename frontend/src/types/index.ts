@@ -18,6 +18,7 @@ export interface Project {
   visibility?: string;
   created_at?: string;
   require_approval?: boolean;
+  space_id?: number;
   permissions?: {
     post_write?: string;
     post_edit?: string;
@@ -26,6 +27,26 @@ export interface Project {
     file_view?: string;
     file_download?: string;
   };
+}
+
+export interface Space {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  created_by?: number;
+  is_active: boolean;
+  created_at?: string;
+  member_count: number;
+  members: SpaceMemberInfo[];
+}
+
+export interface SpaceMemberInfo {
+  user_id: number;
+  role: string;
+  username: string;
+  loginid: string;
+  avatar_color?: string;
 }
 
 export interface ProjectFile {

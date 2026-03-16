@@ -22,6 +22,33 @@ from app.environment import KST
 # Core Tables (기존)
 # =========================================================
 
+# ── Space (workspace) ──
+class Space(Base):
+    __tablename__ = "spaces"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    slug = Column(String(100), unique=True, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class SpaceMember(Base):
+    __tablename__ = "space_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    space_id = Column(Integer, ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(String(30), nullable=False, default="member")  # owner / member
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("space_id", "user_id", name="uq_space_member"),
+    )
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -38,6 +65,9 @@ class Project(Base):
     # ✅ v1.2 조직 기반 확장
     part_id = Column(Integer, ForeignKey("groups.id"), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    # ✅ v2.0 Space 소속
+    space_id = Column(Integer, ForeignKey("spaces.id"), nullable=True, index=True)
 
     created_at = Column(DateTime, server_default=func.now())
     archived_at = Column(DateTime, nullable=True)

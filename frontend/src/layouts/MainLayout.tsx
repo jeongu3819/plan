@@ -186,10 +186,27 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     users.find(u => u.loginid === me?.loginid) ??
     users[0];
 
-  // projects
+  // spaces
+  const currentSpaceId = useAppStore(state => state.currentSpaceId);
+  const setCurrentSpace = useAppStore(state => state.setCurrentSpace);
+
+  const { data: spaces = [] } = useQuery<any[]>({
+    queryKey: ['spaces', effectiveUserId],
+    queryFn: () => api.getSpaces(effectiveUserId),
+    enabled: !!me && effectiveUserId > 0,
+  });
+
+  // Auto-select first space if none selected
+  React.useEffect(() => {
+    if (spaces.length > 0 && !currentSpaceId) {
+      setCurrentSpace(spaces[0].id, spaces[0].name);
+    }
+  }, [spaces, currentSpaceId, setCurrentSpace]);
+
+  // projects (filtered by current space)
   const { data: allProjects = [] } = useQuery<Project[]>({
-    queryKey: ['projects', effectiveUserId],
-    queryFn: () => api.getProjects(effectiveUserId),
+    queryKey: ['projects', effectiveUserId, currentSpaceId],
+    queryFn: () => api.getProjects(effectiveUserId, currentSpaceId),
     enabled: !!me && effectiveUserId > 0,
   });
 
@@ -280,6 +297,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         require_approval: isAdminLike ? requireApproval : false,
         permissions: isAdminLike ? permissions : undefined,
         member_ids: isAdminLike ? selectedMemberIds : [],
+        space_id: currentSpaceId || undefined,
       }),
     onSuccess: newProject => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -392,6 +410,44 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             </Typography>
           </Box>
         </Box>
+
+        {/* Space Selector */}
+        {spaces.length > 0 && (
+          <Box sx={{ px: 1.5, py: 1 }}>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              value={currentSpaceId || ''}
+              onChange={e => {
+                const sid = Number(e.target.value);
+                const s = spaces.find((sp: any) => sp.id === sid);
+                setCurrentSpace(sid, s?.name || '');
+              }}
+              SelectProps={{ displayEmpty: true }}
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: 2,
+                  bgcolor: 'rgba(255,255,255,0.08)',
+                  color: theme.sidebarText,
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                  '& fieldset': { borderColor: 'rgba(255,255,255,0.12)' },
+                  '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.25)' },
+                  '&.Mui-focused fieldset': { borderColor: '#2955FF' },
+                },
+                '& .MuiSelect-icon': { color: theme.sidebarMuted },
+                '& .MuiSelect-select': { py: 0.8 },
+              }}
+            >
+              {spaces.map((s: any) => (
+                <MenuItem key={s.id} value={s.id} sx={{ fontSize: '0.82rem' }}>
+                  {s.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        )}
 
         <Divider sx={{ borderColor: '#2A2F52', mx: 1.5 }} />
 

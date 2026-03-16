@@ -33,6 +33,7 @@ from app.models import (
     NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
     MemberGroup, MemberGroupUser,
     TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
+    Space, SpaceMember,
 )
 from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS, KST
 from app.llm.dsllm_adapter import chat as dsllm_chat
@@ -58,6 +59,36 @@ def _run_migrations():
         if "checked_at" not in cols:
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE task_activities ADD COLUMN checked_at DATETIME'))
+
+    # ── Space system tables + migration ──
+    if "spaces" not in insp.get_table_names():
+        Base.metadata.create_all(bind=engine, tables=[
+            Base.metadata.tables.get("spaces"),
+            Base.metadata.tables.get("space_members"),
+        ])
+    if "projects" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("projects")]
+        if "space_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE projects ADD COLUMN space_id INTEGER'))
+
+    # Create default "General" space and backfill existing projects
+    if "spaces" in insp.get_table_names():
+        with engine.begin() as conn:
+            row = conn.execute(text("SELECT id FROM spaces WHERE slug = 'general' LIMIT 1")).fetchone()
+            if not row:
+                conn.execute(text("INSERT INTO spaces (name, slug, description, is_active) VALUES ('General', 'general', '기본 공간', 1)"))
+                gid = conn.execute(text("SELECT id FROM spaces WHERE slug = 'general' LIMIT 1")).fetchone()
+                if gid:
+                    general_id = gid[0]
+                    conn.execute(text(f"UPDATE projects SET space_id = {general_id} WHERE space_id IS NULL"))
+                    # Add all active users as members of General space
+                    users = conn.execute(text("SELECT id FROM users WHERE is_active = 1")).fetchall()
+                    for u in users:
+                        try:
+                            conn.execute(text(f"INSERT OR IGNORE INTO space_members (space_id, user_id, role) VALUES ({general_id}, {u[0]}, 'member')"))
+                        except Exception:
+                            pass
 
 _run_migrations()
 
@@ -458,6 +489,7 @@ class ProjectCreate(BaseModel):
     require_approval: Optional[bool] = False
     permissions: Optional[Dict[str, str]] = None
     member_ids: Optional[List[int]] = None
+    space_id: Optional[int] = None
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
@@ -640,6 +672,7 @@ def project_dict(p: Project, state: dict):
         "visibility": meta["visibility"],
         "require_approval": meta["require_approval"],
         "permissions": meta["permissions"],
+        "space_id": p.space_id,
     }
 
 def user_dict(u: User, state: dict):
@@ -1184,9 +1217,13 @@ def get_hidden_projects(user_id: int, db: Session = Depends(get_db)):
 # Project Endpoints (DB + project_meta + members sidecar)
 # =========================
 @app.get("/api/projects")
-def get_projects(user_id: Optional[int] = None, db: Session = Depends(get_db), _active: User = Depends(get_active_user)):
+def get_projects(user_id: Optional[int] = None, space_id: Optional[int] = None, db: Session = Depends(get_db), _active: User = Depends(get_active_user)):
     state = load_state()
-    rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    q = db.query(Project).filter(Project.archived_at.is_(None))
+    # Filter by space if provided
+    if space_id:
+        q = q.filter(Project.space_id == space_id)
+    rows = q.all()
     projects = [project_dict(p, state) for p in rows]
 
     if user_id:
@@ -1212,6 +1249,7 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         description=project.description,
         owner_id=default_owner_id,
         created_by=default_owner_id,
+        space_id=project.space_id,
     )
     db.add(p)
     db.commit()
@@ -2630,14 +2668,21 @@ def get_global_roadmap(
 # Dashboard Stats (DB + task_meta)
 # =========================
 @app.get("/api/stats")
-def get_stats(user_id: Optional[int] = None, db: Session = Depends(get_db)):
+def get_stats(user_id: Optional[int] = None, space_id: Optional[int] = None, db: Session = Depends(get_db)):
     state = load_state()
 
-    all_task_rows = db.query(Task).filter(Task.archived_at.is_(None)).all()
-    tasks = [task_dict(t, state) for t in all_task_rows]
-
-    project_rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    pq = db.query(Project).filter(Project.archived_at.is_(None))
+    if space_id:
+        pq = pq.filter(Project.space_id == space_id)
+    project_rows = pq.all()
+    project_ids_in_scope = {p.id for p in project_rows}
     projects = [project_dict(p, state) for p in project_rows]
+
+    tq = db.query(Task).filter(Task.archived_at.is_(None))
+    if space_id:
+        tq = tq.filter(Task.project_id.in_(project_ids_in_scope))
+    all_task_rows = tq.all()
+    tasks = [task_dict(t, state) for t in all_task_rows]
 
     # 권한 필터: 프로젝트 멤버(viewer 제외)인 경우만 표시
     if user_id:
@@ -4534,6 +4579,114 @@ def delete_member_group(group_id: int, user_id: int = Query(...), db: Session = 
     db.delete(g)
     db.commit()
     return {"message": "Group deleted"}
+
+
+# =========================
+# Spaces
+# =========================
+
+class SpaceCreate(BaseModel):
+    name: str
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    member_user_ids: Optional[List[int]] = None
+
+class SpaceUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+def _space_dict(s, db: Session) -> dict:
+    members = db.query(SpaceMember, User).join(User, SpaceMember.user_id == User.id).filter(SpaceMember.space_id == s.id).all()
+    return {
+        "id": s.id,
+        "name": s.name,
+        "slug": s.slug,
+        "description": s.description,
+        "created_by": s.created_by,
+        "is_active": s.is_active,
+        "created_at": iso(s.created_at) if s.created_at else None,
+        "member_count": len(members),
+        "members": [
+            {"user_id": m.user_id, "role": m.role, "username": u.username, "loginid": u.loginid, "avatar_color": u.avatar_color}
+            for m, u in members
+        ],
+    }
+
+import re as _re_slug
+
+@app.get("/api/spaces")
+def get_spaces(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """List spaces the user is a member of."""
+    member_space_ids = [sm.space_id for sm in db.query(SpaceMember).filter(SpaceMember.user_id == user_id).all()]
+    spaces = db.query(Space).filter(Space.id.in_(member_space_ids), Space.is_active == True).order_by(Space.created_at).all()
+    return {"spaces": [_space_dict(s, db) for s in spaces]}
+
+@app.post("/api/spaces")
+def create_space(body: SpaceCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    slug = body.slug or _re_slug.sub(r'[^a-z0-9\-]', '-', body.name.lower().strip()).strip('-')[:100]
+    # Ensure unique slug
+    existing = db.query(Space).filter(Space.slug == slug).first()
+    if existing:
+        slug = f"{slug}-{int(datetime.utcnow().timestamp()) % 10000}"
+    space = Space(name=body.name, slug=slug, description=body.description, created_by=user_id)
+    db.add(space)
+    db.commit()
+    db.refresh(space)
+    # Add creator as owner
+    db.add(SpaceMember(space_id=space.id, user_id=user_id, role="owner"))
+    # Add additional members
+    if body.member_user_ids:
+        for uid in body.member_user_ids:
+            if uid != user_id:
+                db.add(SpaceMember(space_id=space.id, user_id=uid, role="member"))
+    db.commit()
+    return _space_dict(space, db)
+
+@app.get("/api/spaces/{space_id}")
+def get_space(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    space = db.query(Space).filter(Space.id == space_id, Space.is_active == True).first()
+    if not space:
+        raise HTTPException(404, "Space not found")
+    member = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
+    if not member:
+        raise HTTPException(403, "이 공간에 접근 권한이 없습니다")
+    return _space_dict(space, db)
+
+@app.patch("/api/spaces/{space_id}")
+def update_space(space_id: int, body: SpaceUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    space = db.query(Space).filter(Space.id == space_id).first()
+    if not space:
+        raise HTTPException(404, "Space not found")
+    owner = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id, SpaceMember.role == "owner").first()
+    if not owner:
+        raise HTTPException(403, "공간 소유자만 수정할 수 있습니다")
+    if body.name is not None:
+        space.name = body.name
+    if body.description is not None:
+        space.description = body.description
+    db.commit()
+    return _space_dict(space, db)
+
+@app.post("/api/spaces/{space_id}/members")
+def add_space_member(space_id: int, user_id: int = Query(...), target_user_id: int = Query(...), role: str = Query(default="member"), db: Session = Depends(get_db)):
+    owner = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id, SpaceMember.role == "owner").first()
+    if not owner:
+        raise HTTPException(403, "공간 소유자만 멤버를 추가할 수 있습니다")
+    existing = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == target_user_id).first()
+    if existing:
+        return {"message": "이미 멤버입니다"}
+    db.add(SpaceMember(space_id=space_id, user_id=target_user_id, role=role))
+    db.commit()
+    return {"message": "멤버가 추가되었습니다"}
+
+@app.delete("/api/spaces/{space_id}/members/{target_user_id}")
+def remove_space_member(space_id: int, target_user_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    owner = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id, SpaceMember.role == "owner").first()
+    if not owner:
+        raise HTTPException(403, "공간 소유자만 멤버를 제거할 수 있습니다")
+    db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == target_user_id).delete()
+    db.commit()
+    return {"message": "멤버가 제거되었습니다"}
 
 
 # =========================

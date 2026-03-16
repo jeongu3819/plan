@@ -310,9 +310,11 @@ const HomePage: React.FC = () => {
   const meRole = ((me as any)?.role || '').toLowerCase().trim();
   const isAdminLike = meRole === 'admin' || meRole === 'super_admin';
 
+  const currentSpaceId = useAppStore(state => state.currentSpaceId);
+
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ['stats', currentUserId],
-    queryFn: () => api.getStats(currentUserId),
+    queryKey: ['stats', currentUserId, currentSpaceId],
+    queryFn: () => api.getStats(currentUserId, currentSpaceId),
   });
 
   // Density Scores for My Tasks widget

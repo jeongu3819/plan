@@ -33,6 +33,11 @@ interface AppState {
   // Sidebar collapse
   projectsCollapsed: boolean;
   toggleProjectsCollapsed: () => void;
+
+  // Space context
+  currentSpaceId: number | null;
+  currentSpaceName: string | null;
+  setCurrentSpace: (id: number | null, name: string | null) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -74,14 +79,21 @@ export const useAppStore = create<AppState>()(
       projectsCollapsed: false,
       toggleProjectsCollapsed: () =>
         set(state => ({ projectsCollapsed: !state.projectsCollapsed })),
+
+      // Space context
+      currentSpaceId: null,
+      currentSpaceName: null,
+      setCurrentSpace: (id, name) => set({ currentSpaceId: id, currentSpaceName: name }),
     }),
     {
       name: 'antigravity-app-store',
       partialize: state => ({
         currentUserId: state.currentUserId,
-        currentLoginId: state.currentLoginId, // ✅ 추가
+        currentLoginId: state.currentLoginId,
         bgColor: state.bgColor,
         projectsCollapsed: state.projectsCollapsed,
+        currentSpaceId: state.currentSpaceId,
+        currentSpaceName: state.currentSpaceName,
       }),
     }
   )

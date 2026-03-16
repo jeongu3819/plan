@@ -214,16 +214,20 @@ export const api = {
   // =========================
   // Stats
   // =========================
-  getStats: async (userId: number): Promise<DashboardStats> => {
-    const res = await client.get('/stats', { params: { user_id: requireUserId(userId) } });
+  getStats: async (userId: number, spaceId?: number | null): Promise<DashboardStats> => {
+    const params: Record<string, any> = { user_id: requireUserId(userId) };
+    if (spaceId) params.space_id = spaceId;
+    const res = await client.get('/stats', { params });
     return res.data;
   },
 
   // =========================
   // Projects
   // =========================
-  getProjects: async (userId: number): Promise<Project[]> => {
-    const res = await client.get('/projects', { params: { user_id: requireUserId(userId) } });
+  getProjects: async (userId: number, spaceId?: number | null): Promise<Project[]> => {
+    const params: Record<string, any> = { user_id: requireUserId(userId) };
+    if (spaceId) params.space_id = spaceId;
+    const res = await client.get('/projects', { params });
     return res.data.projects || [];
   },
   createProject: async (project: {
@@ -234,8 +238,8 @@ export const api = {
     require_approval?: boolean;
     permissions?: Record<string, string>;
     member_ids?: number[];
+    space_id?: number;
   }): Promise<Project> => {
-    // 백엔드 ProjectCreate: owner_id/visibility/require_approval/permissions/member_ids 지원
     const res = await client.post('/projects', project);
     return res.data;
   },
@@ -969,6 +973,30 @@ export const api = {
   getUnassignedUsers: async (userId: number) => {
     const res = await client.get('/admin/org/unassigned-users', { params: { user_id: requireUserId(userId) } });
     return res.data.users || [];
+  },
+
+  // =========================
+  // Spaces
+  // =========================
+  getSpaces: async (userId: number): Promise<any[]> => {
+    const res = await client.get('/spaces', { params: { user_id: requireUserId(userId) } });
+    return res.data.spaces || [];
+  },
+  createSpace: async (data: { name: string; slug?: string; description?: string; member_user_ids?: number[] }, userId: number): Promise<any> => {
+    const res = await client.post('/spaces', data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  updateSpace: async (spaceId: number, data: { name?: string; description?: string }, userId: number): Promise<any> => {
+    const res = await client.patch(`/spaces/${spaceId}`, data, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  addSpaceMember: async (spaceId: number, targetUserId: number, userId: number, role: string = 'member'): Promise<any> => {
+    const res = await client.post(`/spaces/${spaceId}/members`, null, { params: { user_id: requireUserId(userId), target_user_id: targetUserId, role } });
+    return res.data;
+  },
+  removeSpaceMember: async (spaceId: number, targetUserId: number, userId: number): Promise<any> => {
+    const res = await client.delete(`/spaces/${spaceId}/members/${targetUserId}`, { params: { user_id: requireUserId(userId) } });
+    return res.data;
   },
 };
 

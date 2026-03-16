@@ -349,11 +349,16 @@ const GroupPage: React.FC = () => {
                 <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                   <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
                     {user.username}
+                    <Typography component="span" sx={{ fontSize: '0.7rem', color: '#9CA3AF', ml: 0.5 }}>
+                      ({user.loginid})
+                    </Typography>
                   </Typography>
                 </Box>
-                <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
-                  {user.deptname || user.loginid || ''}
-                </Typography>
+                {user.deptname && (
+                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
+                    {user.deptname}
+                  </Typography>
+                )}
               </Box>
             ))}
             {filteredUsers.length === 0 && (
