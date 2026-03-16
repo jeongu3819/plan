@@ -20,6 +20,7 @@ import { UserProvider } from './context/UserContext';
 import MentionsPage from './pages/MentionsPage';
 import AccessDeniedPage from './pages/AccessDeniedPage';
 import GroupPage from './pages/GroupPage';
+import SpaceManagePage from './pages/SpaceManagePage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -140,6 +141,7 @@ const App: React.FC = () => {
               <Route path="/space/:spaceSlug/mentions" element={withMainLayout(<MentionsPage />)} />
               <Route path="/space/:spaceSlug/admin" element={withMainLayout(<AdminPage />)} />
               <Route path="/space/:spaceSlug/groups" element={withMainLayout(<GroupPage />)} />
+              <Route path="/space/:spaceSlug/spaces" element={withMainLayout(<SpaceManagePage />)} />
 
               {/* 레거시 루트 — space 없이 접근 시 기본 공간으로 리다이렉트 */}
               <Route path="/" element={withMainLayout(<HomePage />)} />
@@ -151,6 +153,7 @@ const App: React.FC = () => {
               <Route path="/mentions" element={withMainLayout(<MentionsPage />)} />
               <Route path="/admin" element={withMainLayout(<AdminPage />)} />
               <Route path="/groups" element={withMainLayout(<GroupPage />)} />
+              <Route path="/spaces" element={withMainLayout(<SpaceManagePage />)} />
 
               {/* fallback */}
               <Route path="*" element={<Navigate to="/" replace />} />

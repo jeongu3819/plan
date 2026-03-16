@@ -35,8 +35,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DashboardIcon from '@mui/icons-material/Dashboard';
-import ViewKanbanIcon from '@mui/icons-material/ViewKanban';
-import TimelineIcon from '@mui/icons-material/Timeline';
+// ViewKanbanIcon, TimelineIcon removed — Kanban/Roadmap menus moved to project-level
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -49,6 +48,7 @@ import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import SearchIcon from '@mui/icons-material/Search';
 import ExpandMoreIcon2 from '@mui/icons-material/KeyboardArrowDown';
+import WorkspacesIcon from '@mui/icons-material/Workspaces';
 import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -691,12 +691,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         <List sx={{ px: 1, py: 1 }}>
           {[
             { text: 'Dashboard', icon: <DashboardIcon />, path: sp('/') },
-            {
-              text: 'Kanban Board',
-              icon: <ViewKanbanIcon />,
-              path: sp('/project/kanbanboard'),
-            },
-            { text: '전체 로드맵', icon: <TimelineIcon />, path: sp('/roadmap') },
+            { text: '공간 관리', icon: <WorkspacesIcon />, path: sp('/spaces') },
             { text: '@나를 언급', icon: <AlternateEmailIcon />, path: sp('/mentions') },
             { text: '그룹', icon: <GroupsIcon />, path: sp('/groups') },
             {

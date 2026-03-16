@@ -4681,6 +4681,35 @@ def update_space(space_id: int, body: SpaceUpdate, user_id: int = Query(...), db
     db.commit()
     return _space_dict(space, db)
 
+@app.delete("/api/spaces/{space_id}")
+def delete_space(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """Delete (deactivate) a space. Only owner can delete."""
+    space = db.query(Space).filter(Space.id == space_id).first()
+    if not space:
+        raise HTTPException(404, "Space not found")
+    owner = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id, SpaceMember.role == "owner").first()
+    if not owner:
+        raise HTTPException(403, "공간 소유자만 삭제할 수 있습니다")
+    space.is_active = False
+    db.commit()
+    return {"message": "공간이 삭제되었습니다"}
+
+@app.get("/api/projects/unassigned")
+def get_unassigned_projects(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """Get projects not assigned to any space or in the default 'general' space."""
+    state = load_state()
+    general = db.query(Space).filter(Space.slug == "general").first()
+    general_id = general.id if general else None
+    rows = db.query(Project).filter(
+        Project.archived_at.is_(None),
+        ((Project.space_id.is_(None)) | (Project.space_id == general_id)) if general_id else Project.space_id.is_(None),
+    ).all()
+    projects = [project_dict(p, state) for p in rows]
+    if user_id:
+        accessible = get_user_project_ids(db, state, user_id)
+        projects = [p for p in projects if p["id"] in accessible or p.get("visibility") == "public"]
+    return {"projects": projects}
+
 @app.post("/api/spaces/{space_id}/members")
 def add_space_member(space_id: int, user_id: int = Query(...), target_user_id: int = Query(...), role: str = Query(default="member"), db: Session = Depends(get_db)):
     _require_space_admin(db, space_id, user_id)

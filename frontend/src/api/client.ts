@@ -986,6 +986,18 @@ export const api = {
     const res = await client.post('/spaces', data, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
+  deleteSpace: async (spaceId: number, userId: number): Promise<any> => {
+    const res = await client.delete(`/spaces/${spaceId}`, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  getUnassignedProjects: async (userId: number): Promise<Project[]> => {
+    const res = await client.get('/projects/unassigned', { params: { user_id: requireUserId(userId) } });
+    return res.data.projects || [];
+  },
+  moveProjectToSpace: async (projectId: number, spaceId: number, userId: number): Promise<any> => {
+    const res = await client.patch(`/projects/${projectId}/move-space`, null, { params: { space_id: spaceId, user_id: requireUserId(userId) } });
+    return res.data;
+  },
   updateSpace: async (spaceId: number, data: { name?: string; description?: string }, userId: number): Promise<any> => {
     const res = await client.patch(`/spaces/${spaceId}`, data, { params: { user_id: requireUserId(userId) } });
     return res.data;
