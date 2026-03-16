@@ -387,12 +387,22 @@ const HomePage: React.FC = () => {
       ...old,
       widgetIds: DEFAULT_VISIBLE,
       widgetOrder: DEFAULT_VISIBLE,
+      widgetHeights: {},
     }));
     saveMutation.mutate({
       widgetIds: DEFAULT_VISIBLE,
       widgetOrder: DEFAULT_VISIBLE,
+      widgetHeights: {},
       gridLayouts: {},
     });
+  };
+
+  const resetWidgetHeights = () => {
+    queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
+      ...old,
+      widgetHeights: {},
+    }));
+    saveMutation.mutate({ widgetIds: visibleWidgets, widgetOrder, widgetHeights: {}, gridLayouts: {} });
   };
 
   // ── DnD sensors ──
@@ -1435,6 +1445,17 @@ const HomePage: React.FC = () => {
               <DeleteOutlineIcon sx={{ fontSize: '1.2rem' }} />
             </IconButton>
           </Tooltip>
+          {Object.keys(widgetHeights).length > 0 && (
+            <Tooltip title="위젯 높이 초기화">
+              <IconButton
+                onClick={resetWidgetHeights}
+                size="small"
+                sx={{ bgcolor: '#F3F4F6', color: '#6B7280', '&:hover': { bgcolor: '#E5E7EB', color: '#374151' } }}
+              >
+                <RestartAltIcon sx={{ fontSize: '1.2rem' }} />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title="Widget Settings">
             <IconButton
               onClick={() => setPaletteOpen(true)}
