@@ -172,8 +172,18 @@ const statusLabels: Record<string, string> = {
   hold: 'Hold',
 };
 
-// ── Sortable Widget Wrapper ──
-const SortableWidget: React.FC<{ id: string; children: React.ReactNode }> = ({ id, children }) => {
+// ── Default & min widget height ──
+const DEFAULT_WIDGET_HEIGHT = 180;
+const MIN_WIDGET_HEIGHT = 120;
+const MAX_WIDGET_HEIGHT = 600;
+
+// ── Sortable Widget Wrapper with resizable height ──
+const SortableWidget: React.FC<{
+  id: string;
+  height: number;
+  onHeightChange: (id: string, height: number) => void;
+  children: React.ReactNode;
+}> = ({ id, height, onHeightChange, children }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
   });
@@ -183,6 +193,26 @@ const SortableWidget: React.FC<{ id: string; children: React.ReactNode }> = ({ i
     opacity: isDragging ? 0.6 : 1,
     zIndex: isDragging ? 10 : ('auto' as any),
   };
+
+  // Resize handle logic
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY;
+    const startHeight = height;
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientY - startY;
+      const newH = Math.max(MIN_WIDGET_HEIGHT, Math.min(MAX_WIDGET_HEIGHT, startHeight + delta));
+      onHeightChange(id, newH);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   return (
     <Paper
       ref={setNodeRef}
@@ -193,13 +223,16 @@ const SortableWidget: React.FC<{ id: string; children: React.ReactNode }> = ({ i
         border: isDragging ? '2px solid #2955FF' : '1px solid rgba(0,0,0,0.08)',
         bgcolor: 'rgba(255,255,255,0.65)',
         backdropFilter: 'blur(12px)',
-        minHeight: 220,
+        height,
         transition: 'box-shadow 0.2s, border 0.2s',
         boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
         '&:hover': { boxShadow: '0 6px 20px rgba(0,0,0,0.08)' },
         '&:hover .drag-handle': { opacity: 1 },
+        '&:hover .resize-handle': { opacity: 1 },
         overflow: 'hidden',
         position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
       <Box
@@ -221,7 +254,39 @@ const SortableWidget: React.FC<{ id: string; children: React.ReactNode }> = ({ i
       >
         <DragIndicatorIcon sx={{ fontSize: '1.1rem' }} />
       </Box>
-      {children}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.12)', borderRadius: 2 } }}>
+        {children}
+      </Box>
+      {/* Resize handle */}
+      <Box
+        className="resize-handle"
+        onMouseDown={handleResizeStart}
+        sx={{
+          position: 'absolute',
+          bottom: 0,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: 40,
+          height: 8,
+          cursor: 'ns-resize',
+          opacity: 0,
+          transition: 'opacity 0.2s',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 5,
+          '&::after': {
+            content: '""',
+            width: 28,
+            height: 3,
+            borderRadius: 2,
+            bgcolor: '#CBD5E1',
+          },
+          '&:hover::after': {
+            bgcolor: '#2955FF',
+          },
+        }}
+      />
     </Paper>
   );
 };
@@ -276,6 +341,29 @@ const HomePage: React.FC = () => {
     savedLayout?.widgetIds && Array.isArray(savedLayout.widgetIds)
       ? (savedLayout.widgetIds as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
       : DEFAULT_VISIBLE;
+
+  // Per-widget heights (persisted in layout)
+  const widgetHeights: Record<string, number> =
+    savedLayout?.widgetHeights && typeof savedLayout.widgetHeights === 'object'
+      ? (savedLayout.widgetHeights as Record<string, number>)
+      : {};
+
+  const getWidgetHeight = (id: string) => widgetHeights[id] || DEFAULT_WIDGET_HEIGHT;
+
+  const saveDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const handleWidgetHeightChange = (id: string, height: number) => {
+    const next = { ...widgetHeights, [id]: height };
+    // Optimistic update
+    queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
+      ...old,
+      widgetHeights: next,
+    }));
+    // Debounced save
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = setTimeout(() => {
+      saveMutation.mutate({ widgetIds: visibleWidgets, widgetOrder, widgetHeights: next, gridLayouts: {} });
+    }, 500);
+  };
 
   const toggleWidget = (id: string) => {
     const next = visibleWidgets.includes(id)
@@ -341,7 +429,7 @@ const HomePage: React.FC = () => {
       );
     }
     return (
-      <Box sx={{ maxHeight: 400, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+      <Box>
         {tasks.map(task => (
           <Box
             key={task.id}
@@ -548,7 +636,7 @@ const HomePage: React.FC = () => {
                         No tasks
                       </Typography>
                     ) : (
-                      <Box sx={{ maxHeight: 320, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+                      <Box>
                       {filteredOverviewTasks.map(task => (
                         <Box
                           key={task.id}
@@ -678,7 +766,7 @@ const HomePage: React.FC = () => {
             );
           }
           return (
-            <Box sx={{ maxHeight: 400, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+            <Box>
               {tasks.map(task => {
                 const density = densityScores.get(task.id);
                 const isHot = density?.level === 'hot';
@@ -1378,7 +1466,7 @@ const HomePage: React.FC = () => {
               }}
             >
               {displayOrder.map(wId => (
-                <SortableWidget key={wId} id={wId}>
+                <SortableWidget key={wId} id={wId} height={getWidgetHeight(wId)} onHeightChange={handleWidgetHeightChange}>
                   {renderWidget(wId)}
                 </SortableWidget>
               ))}
