@@ -13,6 +13,7 @@ import { Box, TextField, Chip, Fade } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { Task } from '../types';
+import { useAppStore } from '../stores/useAppStore';
 import { parseTaskInput, ParsedTaskInput } from '../utils/magicInputParser';
 import AddIcon from '@mui/icons-material/Add';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
@@ -38,6 +39,7 @@ const MagicInput: React.FC<MagicInputProps> = ({ projectId, defaultStatus = 'tod
   const [isFocused, setIsFocused] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const queryClient = useQueryClient();
+  const currentUserId = useAppStore(state => state.currentUserId);
 
   const createMutation = useMutation({
     mutationFn: (newTask: Omit<Task, 'id'>) => api.createTask(newTask),
@@ -76,7 +78,7 @@ const MagicInput: React.FC<MagicInputProps> = ({ projectId, defaultStatus = 'tod
       title: parsed?.title || rawText.trim(),
       project_id: projectId,
       status: defaultStatus,
-      assignee_ids: [],
+      assignee_ids: currentUserId > 0 ? [currentUserId] : [],
       tags: parsed?.tags || [],
       start_date: parsed?.startDate || undefined,
       due_date: parsed?.endDate || undefined,

@@ -21,6 +21,7 @@ import { Task, Attachment, TaskActivity } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, User, API_URL } from '../api/client';
 import WorkNoteModal from './WorkNoteModal';
+import { parseTaskInput } from '../utils/magicInputParser';
 
 const icon = <CheckBoxOutlineBlankIcon fontSize="small" />;
 const checkedIcon = <CheckBoxIcon fontSize="small" />;
@@ -196,6 +197,29 @@ const TaskDrawer: React.FC = () => {
         setFormData((prev) => ({ ...prev, [field]: value }));
     };
 
+    // Auto-parse title for dates/tags when creating a new task
+    const handleTitleBlur = () => {
+        if (selectedTask) return; // only for new tasks
+        const title = formData.title || '';
+        if (!title.trim()) return;
+        const parsed = parseTaskInput(title);
+        if (parsed.confidence > 0.3) {
+            setFormData(prev => ({
+                ...prev,
+                title: parsed.title,
+                start_date: parsed.startDate || prev.start_date,
+                due_date: parsed.endDate || prev.due_date,
+                tags: parsed.tags.length > 0 ? parsed.tags : prev.tags,
+                priority: parsed.priority || prev.priority,
+            }));
+        }
+        // Auto-assign current user if no assignees yet
+        if (selectedAssignees.length === 0 && currentUserId > 0 && users.length > 0) {
+            const me = users.find(u => u.id === currentUserId);
+            if (me) setSelectedAssignees([me]);
+        }
+    };
+
     const handleSave = () => {
         const assigneeIds = selectedAssignees.map(u => u.id);
         if (selectedTask && selectedTask.id) {
@@ -279,6 +303,7 @@ const TaskDrawer: React.FC = () => {
                         fullWidth
                         value={formData.title || ''}
                         onChange={(e) => handleChange('title', e.target.value)}
+                        onBlur={handleTitleBlur}
                         variant="standard"
                         InputProps={{
                             disableUnderline: true,

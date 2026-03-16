@@ -165,25 +165,44 @@ export function parseTaskInput(rawText: string): ParsedTaskInput {
   text = afterPriority;
   if (priority) confidence += 0.1;
 
-  // 3) Extract explicit date range first
-  const rangeMatch = text.match(
-    /(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s*[~\-부터까지to]+\s*(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/
+  // 3a) Korean month range: "3월부터 10월까지", "3월~10월", "3월에서 10월까지", "3월부터 10월"
+  const koreanMonthRange = text.match(
+    /(\d{1,2})월\s*(?:부터|에서)?\s*[~\-]?\s*(\d{1,2})월\s*(?:까지)?/
   );
-  if (rangeMatch) {
-    startDate = `${rangeMatch[1]}-${rangeMatch[2].padStart(2, '0')}-${rangeMatch[3].padStart(2, '0')}`;
-    endDate = `${rangeMatch[4]}-${rangeMatch[5].padStart(2, '0')}-${rangeMatch[6].padStart(2, '0')}`;
-    text = text.replace(rangeMatch[0], '').trim();
-    confidence += 0.3;
-  } else {
-    // Try phrase-based date patterns
-    for (const dp of DATE_PATTERNS) {
-      if (dp.pattern.test(text)) {
-        const resolved = dp.resolver();
-        if (resolved.start) startDate = resolved.start;
-        if (resolved.end) endDate = resolved.end;
-        text = text.replace(dp.pattern, '').trim();
-        confidence += 0.2;
-        break; // only match first date pattern
+  if (koreanMonthRange) {
+    const year = new Date().getFullYear();
+    const sm = parseInt(koreanMonthRange[1]);
+    const em = parseInt(koreanMonthRange[2]);
+    if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12) {
+      startDate = `${year}-${String(sm).padStart(2, '0')}-01`;
+      const lastDay = new Date(year, em, 0).getDate();
+      endDate = `${year}-${String(em).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      text = text.replace(koreanMonthRange[0], '').trim();
+      confidence += 0.3;
+    }
+  }
+
+  // 3b) Extract explicit date range
+  if (!startDate && !endDate) {
+    const rangeMatch = text.match(
+      /(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s*[~\-부터까지to]+\s*(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/
+    );
+    if (rangeMatch) {
+      startDate = `${rangeMatch[1]}-${rangeMatch[2].padStart(2, '0')}-${rangeMatch[3].padStart(2, '0')}`;
+      endDate = `${rangeMatch[4]}-${rangeMatch[5].padStart(2, '0')}-${rangeMatch[6].padStart(2, '0')}`;
+      text = text.replace(rangeMatch[0], '').trim();
+      confidence += 0.3;
+    } else {
+      // Try phrase-based date patterns
+      for (const dp of DATE_PATTERNS) {
+        if (dp.pattern.test(text)) {
+          const resolved = dp.resolver();
+          if (resolved.start) startDate = resolved.start;
+          if (resolved.end) endDate = resolved.end;
+          text = text.replace(dp.pattern, '').trim();
+          confidence += 0.2;
+          break;
+        }
       }
     }
   }
