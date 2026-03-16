@@ -29,6 +29,8 @@ import {
   InputLabel,
   Checkbox,
   Chip,
+  Popover,
+  Pagination,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -43,6 +45,10 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import SettingsIcon from '@mui/icons-material/Settings';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import SearchIcon from '@mui/icons-material/Search';
+import ExpandMoreIcon2 from '@mui/icons-material/KeyboardArrowDown';
 import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -291,6 +297,41 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const [spaceUserSearch, setSpaceUserSearch] = useState('');
   const [spaceManageMode, setSpaceManageMode] = useState<'create' | 'manage'>('create');
   const [managingSpace, setManagingSpace] = useState<any>(null);
+  const [spacePickerAnchor, setSpacePickerAnchor] = useState<HTMLElement | null>(null);
+  const [spaceSearchQuery, setSpaceSearchQuery] = useState('');
+  const [spaceListPage, setSpaceListPage] = useState(0);
+  const SPACES_PER_PAGE = 30;
+
+  // Favorites (localStorage)
+  const [favoriteSpaceIds, setFavoriteSpaceIds] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem('plan-a-fav-spaces') || '[]'); } catch { return []; }
+  });
+  const toggleFavorite = (id: number) => {
+    setFavoriteSpaceIds(prev => {
+      const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+      localStorage.setItem('plan-a-fav-spaces', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // Recently used (localStorage, max 10)
+  const [recentSpaceIds, setRecentSpaceIds] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem('plan-a-recent-spaces') || '[]'); } catch { return []; }
+  });
+  const trackRecent = (id: number) => {
+    setRecentSpaceIds(prev => {
+      const next = [id, ...prev.filter(x => x !== id)].slice(0, 10);
+      localStorage.setItem('plan-a-recent-spaces', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const selectSpace = (s: any) => {
+    setCurrentSpace(s.id, s.name, s.slug);
+    trackRecent(s.id);
+    setSpacePickerAnchor(null);
+    navigate(`/space/${s.slug}`);
+  };
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectVisibility, setNewProjectVisibility] = useState<'private' | 'public'>('private');
@@ -447,47 +488,23 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
 
         {/* Space Selector + Create */}
         <Box sx={{ px: 1.5, py: 1, display: 'flex', gap: 0.5, alignItems: 'center' }}>
-          {spaces.length > 0 ? (
-            <TextField
-              select
-              fullWidth
-              size="small"
-              value={currentSpaceId || ''}
-              onChange={e => {
-                const sid = Number(e.target.value);
-                const s = spaces.find((sp: any) => sp.id === sid);
-                if (s) {
-                  setCurrentSpace(sid, s.name, s.slug);
-                  navigate(`/space/${s.slug}`);
-                }
-              }}
-              SelectProps={{ displayEmpty: true }}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  borderRadius: 2,
-                  bgcolor: 'rgba(255,255,255,0.08)',
-                  color: theme.sidebarText,
-                  fontSize: '0.82rem',
-                  fontWeight: 600,
-                  '& fieldset': { borderColor: 'rgba(255,255,255,0.12)' },
-                  '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.25)' },
-                  '&.Mui-focused fieldset': { borderColor: '#2955FF' },
-                },
-                '& .MuiSelect-icon': { color: theme.sidebarMuted },
-                '& .MuiSelect-select': { py: 0.8 },
-              }}
-            >
-              {spaces.map((s: any) => (
-                <MenuItem key={s.id} value={s.id} sx={{ fontSize: '0.82rem' }}>
-                  {s.name}
-                </MenuItem>
-              ))}
-            </TextField>
-          ) : (
-            <Typography sx={{ fontSize: '0.78rem', color: theme.sidebarMuted, flex: 1, textAlign: 'center' }}>
-              공간을 만들어 시작하세요
+          {/* Clickable space button → opens picker popover */}
+          <Box
+            onClick={e => { setSpacePickerAnchor(e.currentTarget); setSpaceSearchQuery(''); setSpaceListPage(0); }}
+            sx={{
+              flex: 1, display: 'flex', alignItems: 'center', gap: 1,
+              px: 1.5, py: 0.7, borderRadius: 2, cursor: 'pointer',
+              bgcolor: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', borderColor: 'rgba(255,255,255,0.25)' },
+              transition: 'all 0.15s',
+            }}
+          >
+            <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: theme.sidebarText, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {spaces.find((s: any) => s.id === currentSpaceId)?.name || '공간 선택'}
             </Typography>
-          )}
+            <ExpandMoreIcon2 sx={{ fontSize: 16, color: theme.sidebarMuted }} />
+          </Box>
           <Tooltip title="공간 생성 / 관리">
             <IconButton
               size="small"
@@ -548,6 +565,125 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             </Tooltip>
           )}
         </Box>
+
+        {/* Space Picker Popover */}
+        <Popover
+          open={Boolean(spacePickerAnchor)}
+          anchorEl={spacePickerAnchor}
+          onClose={() => setSpacePickerAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+          slotProps={{ paper: { sx: { width: 320, maxHeight: 480, borderRadius: 2, mt: 0.5, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' } } }}
+        >
+          <Box sx={{ p: 1.5 }}>
+            {/* Search */}
+            <TextField
+              fullWidth size="small" placeholder="공간 검색..."
+              value={spaceSearchQuery} onChange={e => { setSpaceSearchQuery(e.target.value); setSpaceListPage(0); }}
+              InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 16, color: '#9CA3AF', mr: 0.5 }} /> }}
+              sx={{ mb: 1.5, '& .MuiOutlinedInput-root': { fontSize: '0.8rem', borderRadius: 1.5 } }}
+            />
+
+            {/* Favorites */}
+            {(() => {
+              const favSpaces = spaces.filter((s: any) => favoriteSpaceIds.includes(s.id));
+              if (favSpaces.length === 0) return null;
+              return (
+                <Box sx={{ mb: 1.5 }}>
+                  <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#F59E0B', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5, px: 0.5 }}>
+                    즐겨찾기 공간
+                  </Typography>
+                  {favSpaces.map((s: any) => (
+                    <Box key={s.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, py: 0.4, px: 0.5, borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: '#F9FAFB' }, bgcolor: s.id === currentSpaceId ? '#EEF2FF' : 'transparent' }}>
+                      <IconButton size="small" onClick={e => { e.stopPropagation(); toggleFavorite(s.id); }} sx={{ p: 0.2 }}>
+                        <StarIcon sx={{ fontSize: 14, color: '#F59E0B' }} />
+                      </IconButton>
+                      <Typography onClick={() => selectSpace(s)} sx={{ fontSize: '0.78rem', fontWeight: s.id === currentSpaceId ? 700 : 500, flex: 1, cursor: 'pointer' }}>
+                        {s.name}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              );
+            })()}
+
+            {/* Recent */}
+            {(() => {
+              const recentSpaces = recentSpaceIds.map(id => spaces.find((s: any) => s.id === id)).filter(Boolean).slice(0, 10);
+              if (recentSpaces.length === 0) return null;
+              return (
+                <Box sx={{ mb: 1.5 }}>
+                  <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5, px: 0.5 }}>
+                    최근 사용한 공간
+                  </Typography>
+                  {recentSpaces.map((s: any) => (
+                    <Box key={s.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, py: 0.4, px: 0.5, borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: '#F9FAFB' }, bgcolor: s.id === currentSpaceId ? '#EEF2FF' : 'transparent' }}>
+                      <IconButton size="small" onClick={e => { e.stopPropagation(); toggleFavorite(s.id); }} sx={{ p: 0.2 }}>
+                        {favoriteSpaceIds.includes(s.id) ? <StarIcon sx={{ fontSize: 14, color: '#F59E0B' }} /> : <StarBorderIcon sx={{ fontSize: 14, color: '#D1D5DB' }} />}
+                      </IconButton>
+                      <Typography onClick={() => selectSpace(s)} sx={{ fontSize: '0.78rem', fontWeight: s.id === currentSpaceId ? 700 : 500, flex: 1, cursor: 'pointer' }}>
+                        {s.name}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              );
+            })()}
+
+            {/* All spaces (searchable, paginated) */}
+            <Divider sx={{ mb: 1 }} />
+            <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5, px: 0.5 }}>
+              공간 목록
+            </Typography>
+            {(() => {
+              const q = spaceSearchQuery.trim().toLowerCase();
+              const filtered = q ? spaces.filter((s: any) => s.name.toLowerCase().includes(q) || s.slug.toLowerCase().includes(q)) : spaces;
+              const totalPages = Math.ceil(filtered.length / SPACES_PER_PAGE);
+              const pageSpaces = filtered.slice(spaceListPage * SPACES_PER_PAGE, (spaceListPage + 1) * SPACES_PER_PAGE);
+              return (
+                <>
+                  <Box sx={{ maxHeight: 200, overflowY: 'auto' }}>
+                    {pageSpaces.length === 0 && (
+                      <Typography sx={{ fontSize: '0.75rem', color: '#9CA3AF', textAlign: 'center', py: 2 }}>검색 결과가 없습니다</Typography>
+                    )}
+                    {pageSpaces.map((s: any) => (
+                      <Box key={s.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, py: 0.4, px: 0.5, borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: '#F9FAFB' }, bgcolor: s.id === currentSpaceId ? '#EEF2FF' : 'transparent' }}>
+                        <IconButton size="small" onClick={e => { e.stopPropagation(); toggleFavorite(s.id); }} sx={{ p: 0.2 }}>
+                          {favoriteSpaceIds.includes(s.id) ? <StarIcon sx={{ fontSize: 14, color: '#F59E0B' }} /> : <StarBorderIcon sx={{ fontSize: 14, color: '#D1D5DB' }} />}
+                        </IconButton>
+                        <Typography onClick={() => selectSpace(s)} sx={{ fontSize: '0.78rem', fontWeight: s.id === currentSpaceId ? 700 : 500, flex: 1, cursor: 'pointer' }}>
+                          {s.name}
+                        </Typography>
+                        <Typography sx={{ fontSize: '0.6rem', color: '#9CA3AF' }}>{s.member_count}명</Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                  {totalPages > 1 && (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+                      <Pagination count={totalPages} page={spaceListPage + 1} onChange={(_, p) => setSpaceListPage(p - 1)} size="small" />
+                    </Box>
+                  )}
+                </>
+              );
+            })()}
+
+            {/* Create new space button */}
+            <Divider sx={{ my: 1 }} />
+            <Button
+              fullWidth size="small"
+              startIcon={<AddIcon sx={{ fontSize: 14 }} />}
+              onClick={() => {
+                setSpacePickerAnchor(null);
+                setSpaceManageMode('create');
+                setNewSpaceName(''); setNewSpaceDesc(''); setSpaceSelectedUserIds([]);
+                setSpaceDialogOpen(true);
+              }}
+              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#2955FF', justifyContent: 'flex-start' }}
+            >
+              새 공간 만들기
+            </Button>
+          </Box>
+        </Popover>
 
         <Divider sx={{ borderColor: '#2A2F52', mx: 1.5 }} />
 
