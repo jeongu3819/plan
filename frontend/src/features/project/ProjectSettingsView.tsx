@@ -727,6 +727,11 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         </Paper>
       )}
 
+      {/* ─── Move to Space Section (Owner only) ─── */}
+      {isOwner && (
+        <SpaceMoveSection projectId={projectId} currentUserId={currentUserId} queryClient={queryClient} />
+      )}
+
       {/* ─── Delete Project Section (Owner only) ─── */}
       {isOwner && (
         <Paper
@@ -1024,6 +1029,96 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         </DialogActions>
       </Dialog>
     </Box>
+  );
+};
+
+// ── Space Move Section ──
+import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
+import MenuItem from '@mui/material/MenuItem';
+import { useSnackbar } from 'notistack';
+
+const SpaceMoveSection: React.FC<{
+  projectId: number;
+  currentUserId: number;
+  queryClient: any;
+}> = ({ projectId, currentUserId, queryClient }) => {
+  const { enqueueSnackbar } = useSnackbar();
+  const [selectedSpaceId, setSelectedSpaceId] = useState<number | ''>('');
+
+  const { data: spaces = [] } = useQuery<any[]>({
+    queryKey: ['spaces', currentUserId],
+    queryFn: () => api.getSpaces(currentUserId),
+    enabled: currentUserId > 0,
+  });
+
+  // Only show spaces where user is owner or admin
+  const managedSpaces = spaces.filter((s: any) =>
+    s.members?.some((m: any) => m.user_id === currentUserId && (m.role === 'owner' || m.role === 'admin'))
+  );
+
+  if (managedSpaces.length === 0) return null;
+
+  const handleMove = async () => {
+    if (!selectedSpaceId) return;
+    try {
+      await api.moveProjectToSpace(projectId, selectedSpaceId as number, currentUserId);
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      const target = managedSpaces.find((s: any) => s.id === selectedSpaceId);
+      enqueueSnackbar(`프로젝트가 "${target?.name}" 공간으로 이동되었습니다`, { variant: 'success' });
+      setSelectedSpaceId('');
+    } catch (e) {
+      enqueueSnackbar('이동에 실패했습니다', { variant: 'error' });
+    }
+  };
+
+  return (
+    <Paper
+      sx={{
+        p: 3, mb: 3, borderRadius: 3,
+        border: '1px solid #C7D2FE',
+        bgcolor: '#FAFBFF',
+        boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+        <MoveToInboxIcon sx={{ color: '#2955FF', fontSize: '1.3rem' }} />
+        <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', color: '#1E40AF' }}>
+          공간 이동
+        </Typography>
+      </Box>
+      <Typography variant="body2" sx={{ color: '#6B7280', fontSize: '0.8rem', mb: 2 }}>
+        이 프로젝트를 다른 공간으로 이동합니다. 내가 관리자인 공간으로만 이동할 수 있습니다.
+      </Typography>
+      <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+        <TextField
+          select
+          size="small"
+          value={selectedSpaceId}
+          onChange={e => setSelectedSpaceId(Number(e.target.value))}
+          sx={{ minWidth: 200, '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+          SelectProps={{ displayEmpty: true }}
+        >
+          <MenuItem value="" disabled>
+            <Typography sx={{ color: '#9CA3AF', fontSize: '0.85rem' }}>공간 선택</Typography>
+          </MenuItem>
+          {managedSpaces.map((s: any) => (
+            <MenuItem key={s.id} value={s.id}>
+              {s.name}
+            </MenuItem>
+          ))}
+        </TextField>
+        <Button
+          variant="contained"
+          size="small"
+          disabled={!selectedSpaceId}
+          onClick={handleMove}
+          sx={{ bgcolor: '#2955FF', textTransform: 'none', fontWeight: 600, px: 3 }}
+        >
+          이동
+        </Button>
+      </Box>
+    </Paper>
   );
 };
 
