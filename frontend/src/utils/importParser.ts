@@ -1,11 +1,14 @@
 /**
  * Import Parser — CSV/XLSX file parsing for bulk project/task creation.
  *
- * Handles:
- * - Column name detection (Korean + English aliases)
- * - Status normalization
- * - Schedule date parsing (reuses magicInputParser patterns)
- * - Row-level validation with detailed error messages
+ * Pipeline:
+ * 1. Read file (CSV/XLSX)
+ * 2. XLSX merged cell expansion
+ * 3. Cell value normalization (trim, strip quotes)
+ * 4. Forward fill for group columns (project, schedule, status)
+ * 5. Schedule parsing (diverse Korean/Excel patterns)
+ * 6. Status normalization
+ * 7. Row-level validation with clear error messages
  */
 
 import Papa from 'papaparse';
@@ -16,6 +19,9 @@ const PROJECT_ALIASES = ['project', '프로젝트'];
 const TASK_ALIASES = ['task', '업무', '작업', '태스크'];
 const SCHEDULE_ALIASES = ['schedule', '일정'];
 const STATUS_ALIASES = ['status', '상태'];
+
+// Columns to apply forward fill (merged cell fallback)
+const FORWARD_FILL_ALIASES = [PROJECT_ALIASES, SCHEDULE_ALIASES, STATUS_ALIASES];
 
 // ── Status normalization map ──
 const STATUS_MAP: Record<string, string> = {
@@ -63,6 +69,10 @@ export interface ImportPreview {
   columnErrors: string[];
 }
 
+// ══════════════════════════════════════════════════
+// Step helpers
+// ══════════════════════════════════════════════════
+
 // ── Detect column by aliases (case-insensitive, trimmed) ──
 function findColumn(headers: string[], aliases: string[]): string | null {
   for (const h of headers) {
@@ -72,31 +82,140 @@ function findColumn(headers: string[], aliases: string[]): string | null {
   return null;
 }
 
+// ── Normalize a single cell value ──
+// Strips leading single-quotes, trims whitespace
+function normalizeCellValue(value: unknown): string {
+  let s = String(value ?? '').trim();
+  // Remove leading single-quotes (Excel text prefix: ', '', etc.)
+  s = s.replace(/^'+/, '');
+  return s.trim();
+}
+
+// ── XLSX merged cell expansion ──
+// Fills merged regions with the top-left cell's value
+function applyMergedCellValues(sheet: XLSX.WorkSheet): void {
+  const merges = sheet['!merges'];
+  if (!merges || merges.length === 0) return;
+
+  for (const merge of merges) {
+    // Get the value from the top-left cell of the merge range
+    const topLeftAddr = XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c });
+    const topLeftCell = sheet[topLeftAddr];
+    const value = topLeftCell ? topLeftCell.v : '';
+
+    // Fill all cells in the merge range
+    for (let r = merge.s.r; r <= merge.e.r; r++) {
+      for (let c = merge.s.c; c <= merge.e.c; c++) {
+        if (r === merge.s.r && c === merge.s.c) continue; // skip top-left itself
+        const addr = XLSX.utils.encode_cell({ r, c });
+        sheet[addr] = { t: 's', v: value };
+      }
+    }
+  }
+}
+
+// ── Forward fill for group columns ──
+// When a cell is empty, carry forward the previous non-empty value
+function forwardFillRows(
+  data: Record<string, string>[],
+  headers: string[],
+  columnAliasGroups: string[][],
+): void {
+  // Find which actual header names need forward fill
+  const fillColumns: string[] = [];
+  for (const aliases of columnAliasGroups) {
+    const col = findColumn(headers, aliases);
+    if (col) fillColumns.push(col);
+  }
+
+  const lastValues: Record<string, string> = {};
+
+  for (const row of data) {
+    for (const col of fillColumns) {
+      const val = normalizeCellValue(row[col]);
+      if (val && val !== '-') {
+        lastValues[col] = val;
+        row[col] = val;
+      } else if (!val && lastValues[col]) {
+        // Empty cell — fill from previous row
+        row[col] = lastValues[col];
+      }
+    }
+  }
+}
+
 // ── Normalize status value ──
-function normalizeStatus(value: string): string | null {
+export function normalizeStatus(value: string): string | null {
   const key = value.trim().toLowerCase().replace(/[\s\-_]+/g, ' ');
   return STATUS_MAP[key] || null;
 }
 
 // ── Parse schedule string to start/end dates ──
-function parseSchedule(raw: string): { start: string | null; end: string | null; error?: string } {
-  if (!raw || !raw.trim()) return { start: null, end: null };
-  const text = raw.trim();
+function p(v: string | number): string {
+  return String(v).padStart(2, '0');
+}
 
-  // 1) "26년3월1일-26년10월20일" or "2026년3월1일-2026년10월20일"
+function normalizeYear(y: string): string {
+  const n = parseInt(y);
+  if (n < 100) return String(2000 + n);
+  return String(n);
+}
+
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function parseSchedule(raw: string): { start: string | null; end: string | null; error?: string } {
+  if (!raw) return { start: null, end: null };
+
+  // Pre-process: normalize cell value (strip quotes, trim)
+  let text = normalizeCellValue(raw);
+
+  // "-" or empty → no schedule (NOT an error)
+  if (!text || text === '-') {
+    return { start: null, end: null };
+  }
+
+  // ── Pattern 0: ~YY.M월 or ~YYYY.M월 (today → end of that month) ──
+  const tildeYM = text.match(/^~\s*(\d{2,4})[.](\d{1,2})월?$/);
+  if (tildeYM) {
+    const year = normalizeYear(tildeYM[1]);
+    const month = parseInt(tildeYM[2]);
+    if (month >= 1 && month <= 12) {
+      const lastDay = new Date(parseInt(year), month, 0).getDate();
+      return {
+        start: todayStr(),
+        end: `${year}-${p(month)}-${p(lastDay)}`,
+      };
+    }
+  }
+
+  // ── Pattern 0b: YY.M월 without tilde (standalone, e.g. "26.12월") → today ~ end of month ──
+  const standaloneYM = text.match(/^(\d{2,4})[.](\d{1,2})월?$/);
+  if (standaloneYM) {
+    const year = normalizeYear(standaloneYM[1]);
+    const month = parseInt(standaloneYM[2]);
+    if (month >= 1 && month <= 12) {
+      const lastDay = new Date(parseInt(year), month, 0).getDate();
+      return {
+        start: todayStr(),
+        end: `${year}-${p(month)}-${p(lastDay)}`,
+      };
+    }
+  }
+
+  // ── Pattern 1: "26년3월1일-26년10월20일" / "2026년3월1일-2026년10월20일" ──
   const koreanYearFull = text.match(
     /(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일?\s*[-~]\s*(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일?/
   );
   if (koreanYearFull) {
-    const sy = normalizeYear(koreanYearFull[1]);
-    const ey = normalizeYear(koreanYearFull[4]);
     return {
-      start: `${sy}-${p(koreanYearFull[2])}-${p(koreanYearFull[3])}`,
-      end: `${ey}-${p(koreanYearFull[5])}-${p(koreanYearFull[6])}`,
+      start: `${normalizeYear(koreanYearFull[1])}-${p(koreanYearFull[2])}-${p(koreanYearFull[3])}`,
+      end: `${normalizeYear(koreanYearFull[4])}-${p(koreanYearFull[5])}-${p(koreanYearFull[6])}`,
     };
   }
 
-  // 2) "3월2일부터10월20일" or "3월10일~11월11일"
+  // ── Pattern 2: "3월2일부터10월20일" / "3월10일~11월11일" ──
   const koreanDateRange = text.match(
     /(\d{1,2})월\s*(\d{1,2})일?\s*(?:부터|에서)?\s*[-~]?\s*(\d{1,2})월\s*(\d{1,2})일?\s*(?:까지)?/
   );
@@ -108,7 +227,7 @@ function parseSchedule(raw: string): { start: string | null; end: string | null;
     };
   }
 
-  // 3) "3월~10월" month range
+  // ── Pattern 3: "3월~10월" month range ──
   const koreanMonthRange = text.match(
     /(\d{1,2})월\s*(?:부터|에서)?\s*[-~]?\s*(\d{1,2})월\s*(?:까지)?/
   );
@@ -119,13 +238,13 @@ function parseSchedule(raw: string): { start: string | null; end: string | null;
     if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12) {
       const lastDay = new Date(year, em, 0).getDate();
       return {
-        start: `${year}-${p(koreanMonthRange[1])}-01`,
-        end: `${year}-${p(koreanMonthRange[2])}-${p(String(lastDay))}`,
+        start: `${year}-${p(sm)}-01`,
+        end: `${year}-${p(em)}-${p(lastDay)}`,
       };
     }
   }
 
-  // 4) "2026.03.01~2026.10.20" or "2026-03-01~2026-10-20" or "2026/3/1~2026/10/20"
+  // ── Pattern 4: "2026.03.01~2026.10.20" full date range ──
   const fullDateRange = text.match(
     /(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s*[-~]\s*(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/
   );
@@ -136,7 +255,7 @@ function parseSchedule(raw: string): { start: string | null; end: string | null;
     };
   }
 
-  // 5) "3/10-11/11" or "3.2-12.2" (M/D or M.D range)
+  // ── Pattern 5: "3/10-11/11" or "3.2-12.2" (M/D range) ──
   const mdRange = text.match(
     /(\d{1,2})[./](\d{1,2})\s*[-~]\s*(\d{1,2})[./](\d{1,2})/
   );
@@ -148,7 +267,7 @@ function parseSchedule(raw: string): { start: string | null; end: string | null;
     };
   }
 
-  // 6) "3~10" simple month range
+  // ── Pattern 6: "3~10" simple month range ──
   const simpleRange = text.match(/^(\d{1,2})\s*[-~]\s*(\d{1,2})$/);
   if (simpleRange) {
     const sm = parseInt(simpleRange[1]);
@@ -157,8 +276,8 @@ function parseSchedule(raw: string): { start: string | null; end: string | null;
       const year = new Date().getFullYear();
       const lastDay = new Date(year, em, 0).getDate();
       return {
-        start: `${year}-${p(simpleRange[1])}-01`,
-        end: `${year}-${p(simpleRange[2])}-${p(String(lastDay))}`,
+        start: `${year}-${p(sm)}-01`,
+        end: `${year}-${p(em)}-${p(lastDay)}`,
       };
     }
   }
@@ -166,15 +285,9 @@ function parseSchedule(raw: string): { start: string | null; end: string | null;
   return { start: null, end: null, error: `일정 형식을 해석할 수 없습니다: "${raw}"` };
 }
 
-function p(v: string | number): string {
-  return String(v).padStart(2, '0');
-}
-
-function normalizeYear(y: string): string {
-  const n = parseInt(y);
-  if (n < 100) return String(2000 + n);
-  return String(n);
-}
+// ══════════════════════════════════════════════════
+// Public API
+// ══════════════════════════════════════════════════
 
 // ── Read file (CSV or XLSX) and return header + rows ──
 export async function readFile(file: File): Promise<{ headers: string[]; data: Record<string, string>[] }> {
@@ -187,7 +300,17 @@ export async function readFile(file: File): Promise<{ headers: string[]; data: R
         skipEmptyLines: true,
         complete: (result) => {
           const headers = result.meta.fields || [];
-          resolve({ headers, data: result.data });
+          // Normalize all cell values
+          const data = result.data.map(row => {
+            const out: Record<string, string> = {};
+            for (const key of headers) {
+              out[key] = normalizeCellValue(row[key]);
+            }
+            return out;
+          });
+          // Forward fill for group columns
+          forwardFillRows(data, headers, FORWARD_FILL_ALIASES);
+          resolve({ headers, data });
         },
         error: (err) => reject(new Error(`CSV 파싱 실패: ${err.message}`)),
       });
@@ -199,16 +322,25 @@ export async function readFile(file: File): Promise<{ headers: string[]; data: R
     const workbook = XLSX.read(buffer, { type: 'array' });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
+
+    // Step 2: Expand merged cells BEFORE converting to JSON
+    applyMergedCellValues(sheet);
+
     const jsonData = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: '' });
     const headers = jsonData.length > 0 ? Object.keys(jsonData[0]) : [];
-    // Convert all values to strings
+
+    // Normalize all cell values
     const data = jsonData.map(row => {
       const out: Record<string, string> = {};
       for (const key of headers) {
-        out[key] = String(row[key] ?? '');
+        out[key] = normalizeCellValue(row[key]);
       }
       return out;
     });
+
+    // Forward fill as additional fallback (in case merge detection missed anything)
+    forwardFillRows(data, headers, FORWARD_FILL_ALIASES);
+
     return { headers, data };
   }
 
@@ -233,15 +365,15 @@ export function parseImportData(headers: string[], data: Record<string, string>[
 
   data.forEach((row, idx) => {
     const rowNum = idx + 2; // 1-based, +1 for header row
-    const projectVal = projectCol ? (row[projectCol] || '').trim() : '';
-    const taskVal = taskCol ? (row[taskCol] || '').trim() : '';
-    const scheduleVal = scheduleCol ? (row[scheduleCol] || '').trim() : '';
-    const statusVal = statusCol ? (row[statusCol] || '').trim() : '';
+    const projectVal = projectCol ? normalizeCellValue(row[projectCol]) : '';
+    const taskVal = taskCol ? normalizeCellValue(row[taskCol]) : '';
+    const scheduleVal = scheduleCol ? normalizeCellValue(row[scheduleCol]) : '';
+    const statusVal = statusCol ? normalizeCellValue(row[statusCol]) : '';
 
     const warnings: string[] = [];
     const errors: string[] = [];
 
-    // Validate project
+    // Validate project (after forward fill, only truly missing rows should error)
     if (!projectVal) {
       errors.push(`${rowNum}행: project 값이 비어 있어 스킵됩니다.`);
     }
@@ -251,21 +383,17 @@ export function parseImportData(headers: string[], data: Record<string, string>[
       errors.push(`${rowNum}행: task 값이 비어 있어 스킵됩니다.`);
     }
 
-    // Parse schedule
-    let startDate: string | null = null;
-    let endDate: string | null = null;
-    if (scheduleVal) {
-      const parsed = parseSchedule(scheduleVal);
-      startDate = parsed.start;
-      endDate = parsed.end;
-      if (parsed.error) {
-        warnings.push(`${rowNum}행: ${parsed.error}`);
-      }
+    // Parse schedule — "-" and empty are normal (no warning)
+    const parsed = parseSchedule(scheduleVal);
+    const startDate = parsed.start;
+    const endDate = parsed.end;
+    if (parsed.error) {
+      warnings.push(`${rowNum}행: ${parsed.error}`);
     }
 
     // Normalize status
     let normalizedStatus = 'todo';
-    if (statusVal) {
+    if (statusVal && statusVal !== '-') {
       const ns = normalizeStatus(statusVal);
       if (ns) {
         normalizedStatus = ns;
@@ -315,7 +443,8 @@ export function generateSampleCSV(): string {
   return `project,task,schedule,status
 원가절감 프로젝트,공정별 분석 정리,26년3월1일-26년10월20일,In Progress
 원가절감 프로젝트,대체 소재 검토,3/10-11/11,To do
-원가절감 프로젝트,효과 측정 보고,3.2-12.2,To do
+원가절감 프로젝트,효과 측정 보고,~26.12월,To do
+원가절감 프로젝트,현행 원가 분석,-,Done
 마케팅 캠페인,타겟 분석,3월~10월,Done
 마케팅 캠페인,콘텐츠 제작,3월2일부터10월20일,In Progress
 마케팅 캠페인,성과 리포트,6~12,To do`;
