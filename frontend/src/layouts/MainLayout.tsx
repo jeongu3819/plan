@@ -49,6 +49,7 @@ import GroupsIcon from '@mui/icons-material/Groups';
 
 import { useNavigate, useLocation } from 'react-router-dom';
 import TemplateLibraryDialog from '../components/TemplateLibraryDialog';
+import ImportUploadDialog from '../components/ImportUploadDialog';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, Project, User, MemberGroup } from '../api/client';
 import {
@@ -238,6 +239,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   // Dialogs & menus
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [templateLibraryOpen, setTemplateLibraryOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectVisibility, setNewProjectVisibility] = useState<'private' | 'public'>('private');
@@ -907,6 +909,22 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             >
               템플릿에서 만들기
             </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                setProjectDialogOpen(false);
+                setImportDialogOpen(true);
+              }}
+              sx={{
+                textTransform: 'none', fontWeight: 700, fontSize: '0.78rem',
+                borderColor: '#059669', color: '#059669', borderRadius: 2,
+                px: 2, py: 0.5,
+                '&:hover': { bgcolor: '#ECFDF5', borderColor: '#047857' },
+              }}
+            >
+              파일에서 가져오기
+            </Button>
           </Box>
         </DialogTitle>
         <DialogContent>
@@ -1314,6 +1332,13 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       <TemplateLibraryDialog
         open={templateLibraryOpen}
         onClose={() => setTemplateLibraryOpen(false)}
+        currentUserId={effectiveUserId}
+      />
+
+      {/* ─── Import Upload Dialog ─── */}
+      <ImportUploadDialog
+        open={importDialogOpen}
+        onClose={() => setImportDialogOpen(false)}
         currentUserId={effectiveUserId}
       />
 
