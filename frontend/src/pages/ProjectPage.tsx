@@ -9,7 +9,7 @@ import ViewKanbanIcon from '@mui/icons-material/ViewKanban';
 import ViewListIcon from '@mui/icons-material/ViewList';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import TimelineIcon from '@mui/icons-material/Timeline';
-import StickyNote2Icon from '@mui/icons-material/StickyNote2';
+import ChatIcon from '@mui/icons-material/Chat';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -30,7 +30,7 @@ import ProjectSettingsView from '../features/project/ProjectSettingsView';
 import OnboardingTour from '../components/OnboardingTour';
 
 const TAB_MAP: Record<string, number> = {
-    board: 0, list: 1, calendar: 2, roadmap: 3, notes: 4, graph: 5, report: 6, settings: 7,
+    board: 0, list: 1, calendar: 2, roadmap: 3, messenger: 4, notes: 4, graph: 5, report: 6, settings: 7,
 };
 
 const tabIcons = [
@@ -38,7 +38,7 @@ const tabIcons = [
     <ViewListIcon sx={{ fontSize: '1rem' }} />,
     <CalendarMonthIcon sx={{ fontSize: '1rem' }} />,
     <TimelineIcon sx={{ fontSize: '1rem' }} />,
-    <StickyNote2Icon sx={{ fontSize: '1rem' }} />,
+    <ChatIcon sx={{ fontSize: '1rem' }} />,
     <AccountTreeIcon sx={{ fontSize: '1rem' }} />,
     <AutoAwesomeIcon sx={{ fontSize: '1rem' }} />,
     <SettingsIcon sx={{ fontSize: '1rem' }} />,
@@ -166,7 +166,7 @@ const ProjectPage: React.FC = () => {
                         <Tab icon={tabIcons[1]} iconPosition="start" label="List" />
                         <Tab icon={tabIcons[2]} iconPosition="start" label="Calendar" />
                         <Tab icon={tabIcons[3]} iconPosition="start" label="Roadmap" />
-                        <Tab icon={tabIcons[4]} iconPosition="start" label="Notes" />
+                        <Tab icon={tabIcons[4]} iconPosition="start" label="Messenger" />
                         <Tab icon={tabIcons[5]} iconPosition="start" label="Graph" />
                         <Tab icon={tabIcons[6]} iconPosition="start" label="AI Report" />
                         <Tab icon={tabIcons[7]} iconPosition="start" label="Settings" />

@@ -50,10 +50,10 @@ const STEPS: OnboardingStep[] = [
     icon: '🗺️',
   },
   {
-    tabIndex: 4, tabName: 'Notes',
-    title: '작업 노트',
-    description: '프로젝트 관련 메모, 회의록, 아이디어를 자유롭게 기록하세요. @멘션으로 팀원에게 알림을 보낼 수 있습니다.',
-    icon: '📝',
+    tabIndex: 4, tabName: 'Messenger',
+    title: 'Messenger',
+    description: '프로젝트 담당자들과 실시간 대화를 나눠보세요. @멘션으로 팀원에게 알림을 보낼 수 있습니다. 메시지는 7일간 보관됩니다.',
+    icon: '💬',
   },
   {
     tabIndex: 5, tabName: 'Graph',

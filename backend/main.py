@@ -2169,6 +2169,23 @@ def get_notes(project_id: int, user_id: Optional[int] = None, db: Session = Depe
     if user_id:
         check_project_access(db, state, project_id, user_id)
 
+    # Auto-cleanup: delete notes older than 7 days
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(days=7)
+    old_notes = db.query(NoteModel).filter(
+        NoteModel.project_id == project_id,
+        NoteModel.created_at < cutoff,
+    ).all()
+    if old_notes:
+        old_ids = [n.id for n in old_notes]
+        db.query(NoteMention).filter(NoteMention.note_id.in_(old_ids)).delete(synchronize_session=False)
+        db.query(NoteModel).filter(NoteModel.id.in_(old_ids)).delete(synchronize_session=False)
+        db.commit()
+        # Also clean sidecar
+        state = load_state()
+        state["notes"] = [n for n in state.get("notes", []) if int(n.get("id")) not in set(old_ids)]
+        save_state(state)
+
     db_notes = db.query(NoteModel).filter(NoteModel.project_id == project_id).order_by(NoteModel.created_at.desc()).all()
 
     users_map = {u.id: u for u in db.query(User).all()}
@@ -2256,8 +2273,19 @@ def create_note(project_id: int, note: NoteCreate, user_id: int = Query(default=
     return {**result, "message": "메모가 등록되었습니다"}
 
 @app.delete("/api/notes/{note_id}")
-def delete_note(note_id: int, db: Session = Depends(get_db)):
-    # C-5: Delete from DB
+def delete_note(note_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    note = db.query(NoteModel).filter(NoteModel.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    # Permission: only the author or project member can delete
+    if user_id and note.author_id != user_id:
+        state = load_state()
+        try:
+            check_project_access(db, state, note.project_id, user_id)
+        except HTTPException:
+            raise HTTPException(status_code=403, detail="삭제 권한이 없습니다")
+
     db.query(NoteMention).filter(NoteMention.note_id == note_id).delete()
     db.query(NoteModel).filter(NoteModel.id == note_id).delete()
     db.commit()
@@ -2265,7 +2293,7 @@ def delete_note(note_id: int, db: Session = Depends(get_db)):
     state = load_state()
     state["notes"] = [n for n in state.get("notes", []) if int(n.get("id")) != note_id]
     save_state(state)
-    return {"message": "Note deleted"}
+    return {"message": "메시지가 삭제되었습니다"}
 
 # =========================
 # Mentions (C-5: DB + sidecar fallback)
