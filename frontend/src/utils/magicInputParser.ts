@@ -165,9 +165,9 @@ export function parseTaskInput(rawText: string): ParsedTaskInput {
   text = afterPriority;
   if (priority) confidence += 0.1;
 
-  // 3a-1) M/D~M/D date range: "3/10~10/20"
+  // 3a-1) M/D~M/D or M.D~M.D date range: "3/10~10/20", "3.10~10.20"
   const slashRange = text.match(
-    /(\d{1,2})\/(\d{1,2})\s*[~\-]\s*(\d{1,2})\/(\d{1,2})/
+    /(\d{1,2})[./](\d{1,2})\s*[~\-]\s*(\d{1,2})[./](\d{1,2})/
   );
   if (slashRange) {
     const year = new Date().getFullYear();
