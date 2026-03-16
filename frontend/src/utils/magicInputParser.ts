@@ -165,20 +165,57 @@ export function parseTaskInput(rawText: string): ParsedTaskInput {
   text = afterPriority;
   if (priority) confidence += 0.1;
 
-  // 3a) Korean month range: "3월부터 10월까지", "3월~10월", "3월에서 10월까지", "3월부터 10월"
-  const koreanMonthRange = text.match(
-    /(\d{1,2})월\s*(?:부터|에서)?\s*[~\-]?\s*(\d{1,2})월\s*(?:까지)?/
+  // 3a-1) M/D~M/D date range: "3/10~10/20"
+  const slashRange = text.match(
+    /(\d{1,2})\/(\d{1,2})\s*[~\-]\s*(\d{1,2})\/(\d{1,2})/
   );
-  if (koreanMonthRange) {
+  if (slashRange) {
     const year = new Date().getFullYear();
-    const sm = parseInt(koreanMonthRange[1]);
-    const em = parseInt(koreanMonthRange[2]);
-    if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12) {
-      startDate = `${year}-${String(sm).padStart(2, '0')}-01`;
-      const lastDay = new Date(year, em, 0).getDate();
-      endDate = `${year}-${String(em).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-      text = text.replace(koreanMonthRange[0], '').trim();
+    const sm = parseInt(slashRange[1]);
+    const sd = parseInt(slashRange[2]);
+    const em = parseInt(slashRange[3]);
+    const ed = parseInt(slashRange[4]);
+    if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12 && sd >= 1 && sd <= 31 && ed >= 1 && ed <= 31) {
+      startDate = `${year}-${String(sm).padStart(2, '0')}-${String(sd).padStart(2, '0')}`;
+      endDate = `${year}-${String(em).padStart(2, '0')}-${String(ed).padStart(2, '0')}`;
+      text = text.replace(slashRange[0], '').trim();
       confidence += 0.3;
+    }
+  }
+
+  // 3a-2) Korean month range: "3월부터 10월까지", "3월~10월", "3월에서 10월까지"
+  if (!startDate && !endDate) {
+    const koreanMonthRange = text.match(
+      /(\d{1,2})월\s*(?:부터|에서)?\s*[~\-]?\s*(\d{1,2})월\s*(?:까지)?/
+    );
+    if (koreanMonthRange) {
+      const year = new Date().getFullYear();
+      const sm = parseInt(koreanMonthRange[1]);
+      const em = parseInt(koreanMonthRange[2]);
+      if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12) {
+        startDate = `${year}-${String(sm).padStart(2, '0')}-01`;
+        const lastDay = new Date(year, em, 0).getDate();
+        endDate = `${year}-${String(em).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        text = text.replace(koreanMonthRange[0], '').trim();
+        confidence += 0.3;
+      }
+    }
+  }
+
+  // 3a-3) Simple number range as months: "3~10" → 3월~10월
+  if (!startDate && !endDate) {
+    const simpleRange = text.match(/(\d{1,2})\s*[~\-]\s*(\d{1,2})(?!\d|\/|\.)/);
+    if (simpleRange) {
+      const sm = parseInt(simpleRange[1]);
+      const em = parseInt(simpleRange[2]);
+      if (sm >= 1 && sm <= 12 && em >= 1 && em <= 12 && em > sm) {
+        const year = new Date().getFullYear();
+        startDate = `${year}-${String(sm).padStart(2, '0')}-01`;
+        const lastDay = new Date(year, em, 0).getDate();
+        endDate = `${year}-${String(em).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        text = text.replace(simpleRange[0], '').trim();
+        confidence += 0.25;
+      }
     }
   }
 
