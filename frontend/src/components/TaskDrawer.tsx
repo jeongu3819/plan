@@ -364,6 +364,33 @@ const TaskDrawer: React.FC = () => {
                         </Box>
                     </Box>
 
+                    {/* SubProject */}
+                    {subProjects.length > 0 && (
+                    <Box>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
+                            Sub Project
+                        </Typography>
+                        <TextField
+                            select
+                            fullWidth
+                            size="small"
+                            value={formData.sub_project_id || ''}
+                            onChange={(e) => handleChange('sub_project_id', e.target.value ? Number(e.target.value) : null)}
+                            disabled={!canEdit}
+                            SelectProps={{ displayEmpty: true }}
+                        >
+                            <MenuItem value="">
+                                <Typography sx={{ color: '#9CA3AF', fontSize: '0.85rem' }}>선택 안 함</Typography>
+                            </MenuItem>
+                            {subProjects.map(sp => (
+                                <MenuItem key={sp.id} value={sp.id}>
+                                    {sp.name}
+                                </MenuItem>
+                            ))}
+                        </TextField>
+                    </Box>
+                    )}
+
                     {/* Progress + Work Note */}
                     <Box>
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
@@ -512,33 +539,6 @@ const TaskDrawer: React.FC = () => {
                             />
                         </Box>
                     </Box>
-
-                    {/* SubProject */}
-                    {subProjects.length > 0 && (
-                    <Box>
-                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
-                            Sub Project
-                        </Typography>
-                        <TextField
-                            select
-                            fullWidth
-                            size="small"
-                            value={formData.sub_project_id || ''}
-                            onChange={(e) => handleChange('sub_project_id', e.target.value ? Number(e.target.value) : null)}
-                            disabled={!canEdit}
-                            SelectProps={{ displayEmpty: true }}
-                        >
-                            <MenuItem value="">
-                                <Typography sx={{ color: '#9CA3AF', fontSize: '0.85rem' }}>선택 안 함</Typography>
-                            </MenuItem>
-                            {subProjects.map(sp => (
-                                <MenuItem key={sp.id} value={sp.id}>
-                                    {sp.name}
-                                </MenuItem>
-                            ))}
-                        </TextField>
-                    </Box>
-                    )}
 
                     {/* Description */}
                     <Box>
