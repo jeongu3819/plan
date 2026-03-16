@@ -33,7 +33,7 @@ from app.models import (
     NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
     MemberGroup, MemberGroupUser,
     TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
-    Space, SpaceMember,
+    Space, SpaceMember, SpaceJoinRequest,
 )
 from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS, KST
 from app.llm.dsllm_adapter import chat as dsllm_chat
@@ -66,6 +66,10 @@ def _run_migrations():
             Base.metadata.tables.get("spaces"),
             Base.metadata.tables.get("space_members"),
         ])
+    if "space_join_requests" not in insp.get_table_names():
+        t = Base.metadata.tables.get("space_join_requests")
+        if t is not None:
+            Base.metadata.create_all(bind=engine, tables=[t])
     if "projects" in insp.get_table_names():
         cols = [c["name"] for c in insp.get_columns("projects")]
         if "space_id" not in cols:
@@ -4653,14 +4657,23 @@ def get_space(space_id: int, user_id: int = Query(...), db: Session = Depends(ge
         raise HTTPException(403, "이 공간에 접근 권한이 없습니다")
     return _space_dict(space, db)
 
+def _require_space_admin(db: Session, space_id: int, user_id: int):
+    """Check that user is owner or admin of the space."""
+    m = db.query(SpaceMember).filter(
+        SpaceMember.space_id == space_id,
+        SpaceMember.user_id == user_id,
+        SpaceMember.role.in_(["owner", "admin"]),
+    ).first()
+    if not m:
+        raise HTTPException(403, "공간 소유자 또는 관리자만 이 작업을 수행할 수 있습니다")
+    return m
+
 @app.patch("/api/spaces/{space_id}")
 def update_space(space_id: int, body: SpaceUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
     space = db.query(Space).filter(Space.id == space_id).first()
     if not space:
         raise HTTPException(404, "Space not found")
-    owner = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id, SpaceMember.role == "owner").first()
-    if not owner:
-        raise HTTPException(403, "공간 소유자만 수정할 수 있습니다")
+    _require_space_admin(db, space_id, user_id)
     if body.name is not None:
         space.name = body.name
     if body.description is not None:
@@ -4670,9 +4683,7 @@ def update_space(space_id: int, body: SpaceUpdate, user_id: int = Query(...), db
 
 @app.post("/api/spaces/{space_id}/members")
 def add_space_member(space_id: int, user_id: int = Query(...), target_user_id: int = Query(...), role: str = Query(default="member"), db: Session = Depends(get_db)):
-    owner = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id, SpaceMember.role == "owner").first()
-    if not owner:
-        raise HTTPException(403, "공간 소유자만 멤버를 추가할 수 있습니다")
+    _require_space_admin(db, space_id, user_id)
     existing = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == target_user_id).first()
     if existing:
         return {"message": "이미 멤버입니다"}
@@ -4680,13 +4691,33 @@ def add_space_member(space_id: int, user_id: int = Query(...), target_user_id: i
     db.commit()
     return {"message": "멤버가 추가되었습니다"}
 
+@app.delete("/api/spaces/{space_id}/members/{target_user_id}")
+def remove_space_member(space_id: int, target_user_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    _require_space_admin(db, space_id, user_id)
+    db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == target_user_id).delete()
+    db.commit()
+    return {"message": "멤버가 제거되었습니다"}
+
+@app.patch("/api/spaces/{space_id}/members/{target_user_id}/role")
+def update_space_member_role(space_id: int, target_user_id: int, role: str = Query(...), user_id: int = Query(...), db: Session = Depends(get_db)):
+    """Change a member's role. Only owner can promote to admin; owner/admin can set member."""
+    caller = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
+    if not caller or caller.role not in ("owner", "admin"):
+        raise HTTPException(403, "권한이 없습니다")
+    if role == "admin" and caller.role != "owner":
+        raise HTTPException(403, "관리자 지정은 소유자만 가능합니다")
+    target = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == target_user_id).first()
+    if not target:
+        raise HTTPException(404, "해당 멤버를 찾을 수 없습니다")
+    target.role = role
+    db.commit()
+    return {"message": f"역할이 {role}로 변경되었습니다"}
+
 @app.patch("/api/projects/{project_id}/move-space")
 def move_project_space(project_id: int, space_id: int = Query(...), user_id: int = Query(...), db: Session = Depends(get_db)):
-    """Move an existing project to a different space."""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
-    # Verify user is member of target space
     member = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
     if not member:
         raise HTTPException(403, "대상 공간의 멤버가 아닙니다")
@@ -4694,14 +4725,74 @@ def move_project_space(project_id: int, space_id: int = Query(...), user_id: int
     db.commit()
     return {"message": "프로젝트가 이동되었습니다", "project_id": project_id, "space_id": space_id}
 
-@app.delete("/api/spaces/{space_id}/members/{target_user_id}")
-def remove_space_member(space_id: int, target_user_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
-    owner = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id, SpaceMember.role == "owner").first()
-    if not owner:
-        raise HTTPException(403, "공간 소유자만 멤버를 제거할 수 있습니다")
-    db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == target_user_id).delete()
+# ── Space Join Requests ──
+@app.get("/api/spaces/by-slug/{slug}")
+def get_space_by_slug(slug: str, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Public lookup by slug. Returns basic info + whether user is a member."""
+    space = db.query(Space).filter(Space.slug == slug, Space.is_active == True).first()
+    if not space:
+        raise HTTPException(404, "공간을 찾을 수 없습니다")
+    is_member = False
+    if user_id:
+        m = db.query(SpaceMember).filter(SpaceMember.space_id == space.id, SpaceMember.user_id == user_id).first()
+        is_member = m is not None
+    pending = False
+    if user_id and not is_member:
+        pr = db.query(SpaceJoinRequest).filter(
+            SpaceJoinRequest.space_id == space.id, SpaceJoinRequest.user_id == user_id, SpaceJoinRequest.status == "pending"
+        ).first()
+        pending = pr is not None
+    return {"id": space.id, "name": space.name, "slug": space.slug, "description": space.description, "is_member": is_member, "pending_request": pending}
+
+@app.post("/api/spaces/{space_id}/join-request")
+def request_join_space(space_id: int, user_id: int = Query(...), message: Optional[str] = None, db: Session = Depends(get_db)):
+    existing = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
+    if existing:
+        return {"message": "이미 멤버입니다"}
+    pending = db.query(SpaceJoinRequest).filter(
+        SpaceJoinRequest.space_id == space_id, SpaceJoinRequest.user_id == user_id, SpaceJoinRequest.status == "pending"
+    ).first()
+    if pending:
+        return {"message": "이미 신청 대기 중입니다"}
+    req = SpaceJoinRequest(space_id=space_id, user_id=user_id, message=message)
+    db.add(req)
     db.commit()
-    return {"message": "멤버가 제거되었습니다"}
+    return {"message": "접속 권한이 신청되었습니다"}
+
+@app.get("/api/spaces/{space_id}/join-requests")
+def get_space_join_requests(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    _require_space_admin(db, space_id, user_id)
+    reqs = db.query(SpaceJoinRequest, User).join(User, SpaceJoinRequest.user_id == User.id).filter(
+        SpaceJoinRequest.space_id == space_id, SpaceJoinRequest.status == "pending"
+    ).all()
+    return {"requests": [
+        {"id": r.id, "user_id": r.user_id, "username": u.username, "loginid": u.loginid, "message": r.message, "created_at": iso(r.created_at)}
+        for r, u in reqs
+    ]}
+
+@app.post("/api/spaces/{space_id}/join-requests/{request_id}/approve")
+def approve_join_request(space_id: int, request_id: int, action: str = Query(...), user_id: int = Query(...), db: Session = Depends(get_db)):
+    """action: 'approve' or 'reject'"""
+    _require_space_admin(db, space_id, user_id)
+    req = db.query(SpaceJoinRequest).filter(SpaceJoinRequest.id == request_id, SpaceJoinRequest.space_id == space_id).first()
+    if not req:
+        raise HTTPException(404, "요청을 찾을 수 없습니다")
+    if action == "approve":
+        req.status = "approved"
+        req.resolved_by = user_id
+        req.resolved_at = datetime.utcnow()
+        existing = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == req.user_id).first()
+        if not existing:
+            db.add(SpaceMember(space_id=space_id, user_id=req.user_id, role="member"))
+        db.commit()
+        return {"message": "승인되었습니다"}
+    elif action == "reject":
+        req.status = "rejected"
+        req.resolved_by = user_id
+        req.resolved_at = datetime.utcnow()
+        db.commit()
+        return {"message": "거절되었습니다"}
+    raise HTTPException(400, "action은 approve 또는 reject여야 합니다")
 
 
 # =========================

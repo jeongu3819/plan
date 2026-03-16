@@ -41,11 +41,28 @@ class SpaceMember(Base):
     id = Column(Integer, primary_key=True, index=True)
     space_id = Column(Integer, ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    role = Column(String(30), nullable=False, default="member")  # owner / member
+    role = Column(String(30), nullable=False, default="member")  # owner / admin / member
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("space_id", "user_id", name="uq_space_member"),
+    )
+
+
+class SpaceJoinRequest(Base):
+    __tablename__ = "space_join_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    space_id = Column(Integer, ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="pending")  # pending / approved / rejected
+    message = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("space_id", "user_id", "status", name="uq_space_join_request"),
     )
 
 

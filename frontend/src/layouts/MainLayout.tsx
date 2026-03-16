@@ -51,6 +51,7 @@ import GroupsIcon from '@mui/icons-material/Groups';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import TemplateLibraryDialog from '../components/TemplateLibraryDialog';
 import ImportUploadDialog from '../components/ImportUploadDialog';
+import SpaceAccessDenied from '../components/SpaceAccessDenied';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, Project, User, MemberGroup } from '../api/client';
 import {
@@ -202,18 +203,32 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     enabled: !!me && effectiveUserId > 0,
   });
 
+  // Check space access when user navigates to a space URL
+  const { data: spaceAccess } = useQuery({
+    queryKey: ['spaceAccess', urlSpaceSlug, effectiveUserId],
+    queryFn: () => api.getSpaceBySlug(urlSpaceSlug!, effectiveUserId),
+    enabled: !!urlSpaceSlug && effectiveUserId > 0,
+  });
+
+  // Pending join requests for current space (for owner/admin badge)
+  const { data: joinRequests = [] } = useQuery<any[]>({
+    queryKey: ['spaceJoinRequests', currentSpaceId, effectiveUserId],
+    queryFn: () => api.getSpaceJoinRequests(currentSpaceId!, effectiveUserId),
+    enabled: !!currentSpaceId && effectiveUserId > 0,
+    retry: false,
+  });
+
   // Sync space from URL or auto-select first space
   React.useEffect(() => {
-    if (spaces.length === 0) return;
-    if (urlSpaceSlug) {
+    if (urlSpaceSlug && spaceAccess?.is_member) {
       const s = spaces.find((sp: any) => sp.slug === urlSpaceSlug);
       if (s && s.id !== currentSpaceId) {
         setCurrentSpace(s.id, s.name, s.slug);
       }
-    } else if (!currentSpaceId) {
+    } else if (!urlSpaceSlug && spaces.length > 0 && !currentSpaceId) {
       setCurrentSpace(spaces[0].id, spaces[0].name, spaces[0].slug);
     }
-  }, [spaces, urlSpaceSlug, currentSpaceId, setCurrentSpace]);
+  }, [spaces, urlSpaceSlug, spaceAccess, currentSpaceId, setCurrentSpace]);
 
   // projects (filtered by current space)
   const { data: allProjects = [] } = useQuery<Project[]>({
@@ -493,9 +508,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               <AddIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Tooltip>
-          {/* Manage current space (gear icon) */}
+          {/* Manage current space (gear icon + join request badge) */}
           {currentSpaceId && (
-            <Tooltip title="현재 공간 관리">
+            <Tooltip title={joinRequests.length > 0 ? `공간 관리 (${joinRequests.length}건 접근 신청)` : '현재 공간 관리'}>
               <IconButton
                 size="small"
                 onClick={() => {
@@ -514,9 +529,21 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                   bgcolor: 'rgba(255,255,255,0.06)',
                   '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', color: '#F59E0B' },
                   width: 30, height: 30,
+                  position: 'relative',
                 }}
               >
                 <SettingsIcon sx={{ fontSize: 14 }} />
+                {joinRequests.length > 0 && (
+                  <Box sx={{
+                    position: 'absolute', top: -2, right: -2,
+                    width: 14, height: 14, borderRadius: '50%',
+                    bgcolor: '#EF4444', color: '#fff',
+                    fontSize: '0.5rem', fontWeight: 800,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {joinRequests.length}
+                  </Box>
+                )}
               </IconButton>
             </Tooltip>
           )}
@@ -903,7 +930,10 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           transition: 'background-color 0.3s ease',
         }}
       >
-        {children}
+        {/* Space access check */}
+        {urlSpaceSlug && spaceAccess && !spaceAccess.is_member ? (
+          <SpaceAccessDenied spaceId={spaceAccess.id} spaceName={spaceAccess.name} hasPendingRequest={spaceAccess.pending_request} />
+        ) : children}
       </Box>
 
       {/* ─── Project Context Menu ─── */}
@@ -1547,6 +1577,50 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 </Box>
               ))}
           </Box>
+
+          {/* Pending join requests (manage mode only) */}
+          {spaceManageMode === 'manage' && joinRequests.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: '#EF4444', mb: 0.5, display: 'block' }}>
+                접근 신청 대기 ({joinRequests.length}건)
+              </Typography>
+              <Box sx={{ border: '1px solid #FECACA', borderRadius: 2, p: 0.5, bgcolor: '#FEF2F2' }}>
+                {joinRequests.map((req: any) => (
+                  <Box key={req.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.6, px: 1 }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                        {req.username}
+                        <Typography component="span" sx={{ fontSize: '0.68rem', color: '#9CA3AF', ml: 0.5 }}>
+                          ({req.loginid})
+                        </Typography>
+                      </Typography>
+                    </Box>
+                    <Button
+                      size="small"
+                      onClick={async () => {
+                        await api.approveSpaceJoinRequest(currentSpaceId!, req.id, 'approve', effectiveUserId);
+                        queryClient.invalidateQueries({ queryKey: ['spaceJoinRequests'] });
+                        queryClient.invalidateQueries({ queryKey: ['spaces'] });
+                      }}
+                      sx={{ minWidth: 0, fontSize: '0.68rem', color: '#22C55E', fontWeight: 700 }}
+                    >
+                      승인
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={async () => {
+                        await api.approveSpaceJoinRequest(currentSpaceId!, req.id, 'reject', effectiveUserId);
+                        queryClient.invalidateQueries({ queryKey: ['spaceJoinRequests'] });
+                      }}
+                      sx={{ minWidth: 0, fontSize: '0.68rem', color: '#EF4444', fontWeight: 700 }}
+                    >
+                      거절
+                    </Button>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setSpaceDialogOpen(false)} sx={{ color: '#6B7280' }}>취소</Button>

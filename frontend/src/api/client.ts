@@ -998,6 +998,28 @@ export const api = {
     const res = await client.delete(`/spaces/${spaceId}/members/${targetUserId}`, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
+  updateSpaceMemberRole: async (spaceId: number, targetUserId: number, role: string, userId: number): Promise<any> => {
+    const res = await client.patch(`/spaces/${spaceId}/members/${targetUserId}/role`, null, { params: { user_id: requireUserId(userId), role } });
+    return res.data;
+  },
+  getSpaceBySlug: async (slug: string, userId?: number): Promise<any> => {
+    const params: Record<string, any> = {};
+    if (userId) params.user_id = userId;
+    const res = await client.get(`/spaces/by-slug/${encodeURIComponent(slug)}`, { params });
+    return res.data;
+  },
+  requestJoinSpace: async (spaceId: number, userId: number, message?: string): Promise<any> => {
+    const res = await client.post(`/spaces/${spaceId}/join-request`, null, { params: { user_id: requireUserId(userId), message } });
+    return res.data;
+  },
+  getSpaceJoinRequests: async (spaceId: number, userId: number): Promise<any[]> => {
+    const res = await client.get(`/spaces/${spaceId}/join-requests`, { params: { user_id: requireUserId(userId) } });
+    return res.data.requests || [];
+  },
+  approveSpaceJoinRequest: async (spaceId: number, requestId: number, action: string, userId: number): Promise<any> => {
+    const res = await client.post(`/spaces/${spaceId}/join-requests/${requestId}/approve`, null, { params: { user_id: requireUserId(userId), action } });
+    return res.data;
+  },
 };
 
 export { client, API_URL };
