@@ -17,7 +17,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import DownloadIcon from '@mui/icons-material/Download';
 import { useAppStore } from '../stores/useAppStore';
-import { Task, Attachment, TaskActivity } from '../types';
+import { Task, Attachment, TaskActivity, SubProject } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, User, API_URL } from '../api/client';
 import WorkNoteModal from './WorkNoteModal';
@@ -55,6 +55,13 @@ const TaskDrawer: React.FC = () => {
     const { data: projectMembers = [] } = useQuery<any[]>({
         queryKey: ['projectMembers', activeProjectId],
         queryFn: () => api.getProjectMembers(activeProjectId!),
+        enabled: !!activeProjectId,
+    });
+
+    // Fetch subprojects for the project
+    const { data: subProjects = [] } = useQuery<SubProject[]>({
+        queryKey: ['subProjects', activeProjectId],
+        queryFn: () => api.getSubProjects(activeProjectId!),
         enabled: !!activeProjectId,
     });
 
@@ -236,6 +243,7 @@ const TaskDrawer: React.FC = () => {
                 assignee_ids: assigneeIds,
                 tags: formData.tags || [],
                 progress: formData.progress || 0,
+                sub_project_id: formData.sub_project_id || null,
             };
             createMutation.mutate(newTask);
         }
@@ -504,6 +512,33 @@ const TaskDrawer: React.FC = () => {
                             />
                         </Box>
                     </Box>
+
+                    {/* SubProject */}
+                    {subProjects.length > 0 && (
+                    <Box>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
+                            Sub Project
+                        </Typography>
+                        <TextField
+                            select
+                            fullWidth
+                            size="small"
+                            value={formData.sub_project_id || ''}
+                            onChange={(e) => handleChange('sub_project_id', e.target.value ? Number(e.target.value) : null)}
+                            disabled={!canEdit}
+                            SelectProps={{ displayEmpty: true }}
+                        >
+                            <MenuItem value="">
+                                <Typography sx={{ color: '#9CA3AF', fontSize: '0.85rem' }}>선택 안 함</Typography>
+                            </MenuItem>
+                            {subProjects.map(sp => (
+                                <MenuItem key={sp.id} value={sp.id}>
+                                    {sp.name}
+                                </MenuItem>
+                            ))}
+                        </TextField>
+                    </Box>
+                    )}
 
                     {/* Description */}
                     <Box>
