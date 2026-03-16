@@ -20,7 +20,7 @@ import WeeklyProgressView from './WeeklyProgressView';
 import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../stores/useAppStore';
-import QuickAdd from '../../components/QuickAdd';
+import MagicInput from '../../components/MagicInput';
 import TaskCard from '../task/TaskCard';
 import {
   DndContext,
@@ -531,7 +531,7 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
                 {/* Quick Add (only for todo and in_progress) */}
                 {(col.id === 'todo' || col.id === 'in_progress') && (
                   <Box sx={{ px: 1, pb: 1 }}>
-                    <QuickAdd projectId={projectId} defaultStatus={col.status} />
+                    <MagicInput projectId={projectId} defaultStatus={col.status} />
                   </Box>
                 )}
               </Box>

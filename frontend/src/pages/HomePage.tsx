@@ -43,11 +43,14 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DashboardStats, ProjectStats, Shortcut, UserShortcut } from '../api/client';
 import { Task } from '../types';
 import { useAppStore } from '../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
+import { useDensityScores } from '../hooks/useDensityScores';
+import ZeroStateDashboard from '../components/ZeroStateDashboard';
 import {
   format,
   differenceInDays,
@@ -241,6 +244,13 @@ const HomePage: React.FC = () => {
     queryKey: ['stats', currentUserId],
     queryFn: () => api.getStats(currentUserId),
   });
+
+  // Density Scores for My Tasks widget
+  const myTasksForDensity = stats?.my_tasks || [];
+  const densityScores = useDensityScores(myTasksForDensity);
+
+  // Zero State: no projects at all
+  const hasProjects = (stats?.project_stats || []).length > 0;
 
   const { data: savedLayout } = useQuery({
     queryKey: ['layout', currentUserId],
@@ -640,15 +650,162 @@ const HomePage: React.FC = () => {
         const sortedMyTasks = [...(stats?.my_tasks || [])]
           .filter(t => !(hideDoneTasks && t.status === 'done'))
           .sort((a, b) => {
+            // Hot tasks float to top within same status
+            const da = densityScores.get(a.id);
+            const db = densityScores.get(b.id);
             const sa = statusOrder[a.status] ?? 2;
             const sb = statusOrder[b.status] ?? 2;
             if (sa !== sb) return sa - sb;
+            // Within same status, hot tasks come first
+            const scoreA = da?.score ?? 0;
+            const scoreB = db?.score ?? 0;
+            if (scoreA !== scoreB) return scoreB - scoreA;
             if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
             if (a.due_date) return -1;
             if (b.due_date) return 1;
             return 0;
           });
         const doneCount = (stats?.my_tasks || []).filter(t => t.status === 'done').length;
+
+        const renderMyTaskList = (tasks: Task[]) => {
+          if (tasks.length === 0) {
+            return (
+              <Box sx={{ textAlign: 'center', py: 3 }}>
+                <Typography variant="body2" color="textSecondary" sx={{ fontSize: '0.8rem' }}>
+                  No tasks assigned to you
+                </Typography>
+              </Box>
+            );
+          }
+          return (
+            <Box sx={{ maxHeight: 400, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
+              {tasks.map(task => {
+                const density = densityScores.get(task.id);
+                const isHot = density?.level === 'hot';
+                const isWarm = density?.level === 'warm';
+                return (
+                  <Box
+                    key={task.id}
+                    onClick={() => openDrawer(task)}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1.5,
+                      py: 1,
+                      px: 1.5,
+                      borderRadius: 1.5,
+                      cursor: 'pointer',
+                      position: 'relative',
+                      borderLeft: isHot
+                        ? '3px solid #EF4444'
+                        : isWarm
+                          ? '3px solid #F59E0B'
+                          : '3px solid transparent',
+                      bgcolor: isHot ? 'rgba(239, 68, 68, 0.04)' : 'transparent',
+                      '&:hover': { bgcolor: isHot ? 'rgba(239, 68, 68, 0.08)' : 'rgba(0,0,0,0.04)' },
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {task.status === 'done' ? (
+                      <Box
+                        sx={{
+                          width: 16,
+                          height: 16,
+                          borderRadius: '50%',
+                          bgcolor: '#22C55E',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <CheckIcon sx={{ fontSize: 11, color: '#fff' }} />
+                      </Box>
+                    ) : (
+                      <Box
+                        sx={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          bgcolor: statusColors[task.status] || '#6B7280',
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: '0.82rem',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {task.title}
+                      </Typography>
+                      {task.due_date && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color:
+                              differenceInDays(new Date(task.due_date), new Date()) < 0 ? '#EF4444' : '#9CA3AF',
+                            fontSize: '0.7rem',
+                          }}
+                        >
+                          Due {format(new Date(task.due_date), 'MMM dd')}
+                        </Typography>
+                      )}
+                    </Box>
+                    {/* Density badge */}
+                    {isHot && (
+                      <Tooltip title={`Activity Score: ${density?.score}`}>
+                        <Chip
+                          icon={<LocalFireDepartmentIcon sx={{ fontSize: '0.7rem !important' }} />}
+                          label="Hot"
+                          size="small"
+                          sx={{
+                            height: 18,
+                            fontSize: '0.58rem',
+                            fontWeight: 700,
+                            bgcolor: '#FEF2F2',
+                            color: '#EF4444',
+                            border: '1px solid #FECACA',
+                            '& .MuiChip-icon': { color: '#EF4444', ml: 0.3 },
+                            '& .MuiChip-label': { px: 0.4 },
+                          }}
+                        />
+                      </Tooltip>
+                    )}
+                    <Chip
+                      label={task.priority || 'medium'}
+                      size="small"
+                      sx={{
+                        height: 18,
+                        fontSize: '0.6rem',
+                        fontWeight: 600,
+                        bgcolor:
+                          task.priority === 'high'
+                            ? '#FEF2F2'
+                            : task.priority === 'low'
+                              ? '#F3F4F6'
+                              : '#EFF6FF',
+                        color:
+                          task.priority === 'high'
+                            ? '#EF4444'
+                            : task.priority === 'low'
+                              ? '#6B7280'
+                              : '#3B82F6',
+                      }}
+                    />
+                  </Box>
+                );
+              })}
+            </Box>
+          );
+        };
+
         return (
           <>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, px: 0.5 }}>
@@ -670,7 +827,7 @@ const HomePage: React.FC = () => {
                 </Tooltip>
               )}
             </Box>
-            {renderTaskList(sortedMyTasks, 'No tasks assigned to you')}
+            {renderMyTaskList(sortedMyTasks)}
           </>
         );
       }
@@ -1195,27 +1352,40 @@ const HomePage: React.FC = () => {
         </Box>
       </Box>
 
-      {/* ── Sortable Widget Grid ── */}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={displayOrder} strategy={rectSortingStrategy}>
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' },
-              gap: 2,
-              opacity: introPhase === 'done' ? 1 : 0,
-              transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
-              transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
-            }}
-          >
-            {displayOrder.map(wId => (
-              <SortableWidget key={wId} id={wId}>
-                {renderWidget(wId)}
-              </SortableWidget>
-            ))}
-          </Box>
-        </SortableContext>
-      </DndContext>
+      {/* ── Zero State or Active Dashboard ── */}
+      {!statsLoading && !hasProjects ? (
+        <Box
+          sx={{
+            opacity: introPhase === 'done' ? 1 : 0,
+            transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
+            transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
+          }}
+        >
+          <ZeroStateDashboard currentUserId={currentUserId} />
+        </Box>
+      ) : (
+        /* ── Sortable Widget Grid ── */
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={displayOrder} strategy={rectSortingStrategy}>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' },
+                gap: 2,
+                opacity: introPhase === 'done' ? 1 : 0,
+                transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
+                transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
+              }}
+            >
+              {displayOrder.map(wId => (
+                <SortableWidget key={wId} id={wId}>
+                  {renderWidget(wId)}
+                </SortableWidget>
+              ))}
+            </Box>
+          </SortableContext>
+        </DndContext>
+      )}
 
       {/* ── Widget Palette Drawer ── */}
       <Drawer

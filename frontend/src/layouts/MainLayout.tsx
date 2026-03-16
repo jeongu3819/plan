@@ -48,6 +48,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import GroupsIcon from '@mui/icons-material/Groups';
 
 import { useNavigate, useLocation } from 'react-router-dom';
+import TemplateLibraryDialog from '../components/TemplateLibraryDialog';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, Project, User, MemberGroup } from '../api/client';
 import {
@@ -236,6 +237,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
 
   // Dialogs & menus
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [templateLibraryOpen, setTemplateLibraryOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectVisibility, setNewProjectVisibility] = useState<'private' | 'public'>('private');
@@ -1273,20 +1275,38 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           </>}
         </DialogContent>
 
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setProjectDialogOpen(false)} sx={{ color: '#6B7280' }}>
-            취소
-          </Button>
+        <DialogActions sx={{ px: 3, pb: 2, justifyContent: 'space-between' }}>
           <Button
-            variant="contained"
-            onClick={() => createProjectMutation.mutate()}
-            disabled={!newProjectName.trim()}
-            sx={{ bgcolor: '#2955FF' }}
+            onClick={() => {
+              setProjectDialogOpen(false);
+              setTemplateLibraryOpen(true);
+            }}
+            sx={{ color: '#7C3AED', textTransform: 'none', fontWeight: 600, fontSize: '0.8rem' }}
           >
-            생성
+            템플릿에서 만들기
           </Button>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button onClick={() => setProjectDialogOpen(false)} sx={{ color: '#6B7280' }}>
+              취소
+            </Button>
+            <Button
+              variant="contained"
+              onClick={() => createProjectMutation.mutate()}
+              disabled={!newProjectName.trim()}
+              sx={{ bgcolor: '#2955FF' }}
+            >
+              생성
+            </Button>
+          </Box>
         </DialogActions>
       </Dialog>
+
+      {/* ─── Template Library Dialog ─── */}
+      <TemplateLibraryDialog
+        open={templateLibraryOpen}
+        onClose={() => setTemplateLibraryOpen(false)}
+        currentUserId={effectiveUserId}
+      />
 
       {/* ✅ New User Dialog (Add Member) */}
       <Dialog
