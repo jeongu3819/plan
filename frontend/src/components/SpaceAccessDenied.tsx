@@ -1,6 +1,7 @@
 /**
- * SpaceAccessDenied — Shown when a user accesses a space URL without permission.
- * Provides: request access, go to space list page, create new space.
+ * SpaceAccessDenied — Shown when:
+ * 1. User accesses a space URL without permission (specific space mode)
+ * 2. User has no spaces at all (noSpaceMode — neutral empty state)
  */
 
 import React, { useState } from 'react';
@@ -17,10 +18,13 @@ interface SpaceAccessDeniedProps {
   spaceId: number;
   spaceName: string;
   hasPendingRequest: boolean;
+  noSpaceMode?: boolean;
   onCreateSpace?: () => void;
 }
 
-const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceName, hasPendingRequest, onCreateSpace }) => {
+const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({
+  spaceId, spaceName, hasPendingRequest, noSpaceMode, onCreateSpace,
+}) => {
   const currentUserId = useAppStore(state => state.currentUserId);
   const currentSpaceSlug = useAppStore(state => state.currentSpaceSlug);
   const [requested, setRequested] = useState(hasPendingRequest);
@@ -28,6 +32,7 @@ const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceNam
   const navigate = useNavigate();
 
   const handleRequest = async () => {
+    if (!spaceId) return;
     setLoading(true);
     try {
       await api.requestJoinSpace(spaceId, currentUserId);
@@ -43,6 +48,52 @@ const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceNam
     navigate(path);
   };
 
+  // ── 공간 미소속 사용자를 위한 중립 안내 ──
+  if (noSpaceMode) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+        <Paper
+          sx={{
+            p: 5, textAlign: 'center', borderRadius: 3, maxWidth: 440,
+            border: '1px solid rgba(0,0,0,0.06)', bgcolor: 'rgba(255,255,255,0.8)',
+            backdropFilter: 'blur(12px)',
+          }}
+          elevation={0}
+        >
+          <WorkspacesIcon sx={{ fontSize: 48, color: '#2955FF', mb: 2, opacity: 0.6 }} />
+          <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>
+            프로젝트를 생성하려면 공간이 필요합니다
+          </Typography>
+          <Typography variant="body2" sx={{ color: '#6B7280', mb: 3 }}>
+            공간 소유자 또는 관리자에게 접근 권한을 신청하거나, 새 공간을 만들어 보세요.
+          </Typography>
+
+          <Box sx={{ display: 'flex', gap: 1.5, justifyContent: 'center' }}>
+            <Button
+              variant="outlined"
+              startIcon={<WorkspacesIcon sx={{ fontSize: 16 }} />}
+              onClick={goToSpaceList}
+              sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', borderColor: '#D1D5DB', color: '#374151', borderRadius: 2 }}
+            >
+              공간 목록으로
+            </Button>
+            {onCreateSpace && (
+              <Button
+                variant="contained"
+                startIcon={<AddIcon sx={{ fontSize: 16 }} />}
+                onClick={onCreateSpace}
+                sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', bgcolor: '#2955FF', borderRadius: 2 }}
+              >
+                새 공간 만들기
+              </Button>
+            )}
+          </Box>
+        </Paper>
+      </Box>
+    );
+  }
+
+  // ── 특정 공간 접근 권한 없음 ──
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
       <Paper

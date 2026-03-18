@@ -28,6 +28,7 @@ const TemplateLibraryDialog: React.FC<TemplateLibraryDialogProps> = ({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const spaceSlug = useAppStore(state => state.currentSpaceSlug);
+  const currentSpaceId = useAppStore(state => state.currentSpaceId);
   const sp = (path: string) => spaceSlug ? `/space/${spaceSlug}${path}` : path;
   const [selected, setSelected] = useState<ProjectTemplate | null>(null);
   const [customName, setCustomName] = useState('');
@@ -35,7 +36,7 @@ const TemplateLibraryDialog: React.FC<TemplateLibraryDialogProps> = ({
   const createMutation = useMutation({
     mutationFn: async (template: ProjectTemplate) => {
       const name = customName.trim() || template.name;
-      return createProjectFromTemplate(template, name, currentUserId);
+      return createProjectFromTemplate(template, name, currentUserId, currentSpaceId);
     },
     onSuccess: (project) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });

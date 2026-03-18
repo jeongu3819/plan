@@ -558,12 +558,14 @@ export async function createProjectFromTemplate(
   template: ProjectTemplate,
   projectName: string,
   currentUserId: number,
+  spaceId?: number | null,
 ): Promise<{ id: number; name: string }> {
-  // 1) Create project
+  // 1) Create project (with space_id if available)
   const project = await api.createProject({
     name: projectName,
     description: template.description,
     owner_id: currentUserId,
+    space_id: spaceId || undefined,
   });
 
   // 2) Create subprojects and build name→id map
@@ -612,6 +614,7 @@ const ZeroStateDashboard: React.FC<ZeroStateDashboardProps> = ({ currentUserId }
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const spaceSlug = useAppStore(state => state.currentSpaceSlug);
+  const currentSpaceId = useAppStore(state => state.currentSpaceId);
   const sp = (path: string) => spaceSlug ? `/space/${spaceSlug}${path}` : path;
   const [selectedTemplate, setSelectedTemplate] = useState<ProjectTemplate | null>(null);
   const [customName, setCustomName] = useState('');
@@ -619,7 +622,7 @@ const ZeroStateDashboard: React.FC<ZeroStateDashboardProps> = ({ currentUserId }
   const createProjectMutation = useMutation({
     mutationFn: async (template: ProjectTemplate) => {
       const name = customName.trim() || template.name;
-      return createProjectFromTemplate(template, name, currentUserId);
+      return createProjectFromTemplate(template, name, currentUserId, currentSpaceId);
     },
     onSuccess: (project) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });

@@ -1061,19 +1061,42 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           transition: 'background-color 0.3s ease',
         }}
       >
-        {/* Space access check */}
-        {urlSpaceSlug && spaceAccess && !spaceAccess.is_member ? (
-          <SpaceAccessDenied
-            spaceId={spaceAccess.id}
-            spaceName={spaceAccess.name}
-            hasPendingRequest={spaceAccess.pending_request}
-            onCreateSpace={() => {
-              setSpaceManageMode('create');
-              setNewSpaceName(''); setNewSpaceDesc(''); setSpaceSelectedUserIds([]);
-              setSpaceDialogOpen(true);
-            }}
-          />
-        ) : children}
+        {/* Space access check — 3 cases */}
+        {(() => {
+          const noSpaces = spaces.length === 0 && !currentSpaceId;
+          const accessDenied = urlSpaceSlug && spaceAccess && !spaceAccess.is_member;
+          const openCreateSpaceDialog = () => {
+            setSpaceManageMode('create');
+            setNewSpaceName(''); setNewSpaceDesc(''); setSpaceSelectedUserIds([]);
+            setSpaceDialogOpen(true);
+          };
+
+          if (noSpaces) {
+            // Case 1: 공간 미소속 사용자 — 중립 안내
+            return (
+              <SpaceAccessDenied
+                spaceId={0}
+                spaceName=""
+                hasPendingRequest={false}
+                noSpaceMode
+                onCreateSpace={openCreateSpaceDialog}
+              />
+            );
+          }
+          if (accessDenied) {
+            // Case 2: 특정 공간 접근 권한 없음
+            return (
+              <SpaceAccessDenied
+                spaceId={spaceAccess.id}
+                spaceName={spaceAccess.name}
+                hasPendingRequest={spaceAccess.pending_request}
+                onCreateSpace={openCreateSpaceDialog}
+              />
+            );
+          }
+          // Case 3: 정상 접근
+          return children;
+        })()}
       </Box>
 
       {/* ─── Project Context Menu ─── */}

@@ -76,23 +76,16 @@ def _run_migrations():
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE projects ADD COLUMN space_id INTEGER'))
 
-    # Create default "General" space and backfill existing projects
+    # (General/기본공간 자동 생성 제거 — 사용자가 만든 공간만 존재)
+    # 기존 General 공간이 있으면 비활성화하고 소속 프로젝트의 space_id를 NULL로 복원
     if "spaces" in insp.get_table_names():
         with engine.begin() as conn:
-            row = conn.execute(text("SELECT id FROM spaces WHERE slug = 'general' LIMIT 1")).fetchone()
-            if not row:
-                conn.execute(text("INSERT INTO spaces (name, slug, description, is_active) VALUES ('General', 'general', '기본 공간', 1)"))
-                gid = conn.execute(text("SELECT id FROM spaces WHERE slug = 'general' LIMIT 1")).fetchone()
-                if gid:
-                    general_id = gid[0]
-                    conn.execute(text(f"UPDATE projects SET space_id = {general_id} WHERE space_id IS NULL"))
-                    # Add all active users as members of General space
-                    users = conn.execute(text("SELECT id FROM users WHERE is_active = 1")).fetchall()
-                    for u in users:
-                        try:
-                            conn.execute(text(f"INSERT OR IGNORE INTO space_members (space_id, user_id, role) VALUES ({general_id}, {u[0]}, 'member')"))
-                        except Exception:
-                            pass
+            row = conn.execute(text("SELECT id FROM spaces WHERE slug = 'general' AND is_active = 1 LIMIT 1")).fetchone()
+            if row:
+                general_id = row[0]
+                conn.execute(text(f"UPDATE projects SET space_id = NULL WHERE space_id = {general_id}"))
+                conn.execute(text(f"UPDATE spaces SET is_active = 0 WHERE id = {general_id}"))
+                conn.execute(text(f"DELETE FROM space_members WHERE space_id = {general_id}"))
 
 _run_migrations()
 
@@ -4730,13 +4723,11 @@ def delete_space(space_id: int, user_id: int = Query(...), db: Session = Depends
 
 @app.get("/api/projects/unassigned")
 def get_unassigned_projects(user_id: int = Query(...), db: Session = Depends(get_db)):
-    """Get projects not assigned to any space or in the default 'general' space."""
+    """Get projects not assigned to any active space."""
     state = load_state()
-    general = db.query(Space).filter(Space.slug == "general").first()
-    general_id = general.id if general else None
     rows = db.query(Project).filter(
         Project.archived_at.is_(None),
-        ((Project.space_id.is_(None)) | (Project.space_id == general_id)) if general_id else Project.space_id.is_(None),
+        Project.space_id.is_(None),
     ).all()
     projects = [project_dict(p, state) for p in rows]
     if user_id:
