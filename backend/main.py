@@ -1067,13 +1067,16 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
     if exists:
         raise HTTPException(status_code=400, detail="Login ID already exists")
 
+    # mail이 없으면 loginid@samsung.com으로 자동 생성
+    mail = user.mail or f"{user.loginid}@samsung.com"
+
     u = User(
         loginid=user.loginid,
         username=user.username,
         role=user.role or "member",
         avatar_color=user.avatar_color or "#2955FF",
         deptname=user.deptname,
-        mail=user.mail,
+        mail=mail,
         is_active=True,
     )
     db.add(u)
