@@ -1063,7 +1063,16 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       >
         {/* Space access check */}
         {urlSpaceSlug && spaceAccess && !spaceAccess.is_member ? (
-          <SpaceAccessDenied spaceId={spaceAccess.id} spaceName={spaceAccess.name} hasPendingRequest={spaceAccess.pending_request} />
+          <SpaceAccessDenied
+            spaceId={spaceAccess.id}
+            spaceName={spaceAccess.name}
+            hasPendingRequest={spaceAccess.pending_request}
+            onCreateSpace={() => {
+              setSpaceManageMode('create');
+              setNewSpaceName(''); setNewSpaceDesc(''); setSpaceSelectedUserIds([]);
+              setSpaceDialogOpen(true);
+            }}
+          />
         ) : children}
       </Box>
 
@@ -1662,17 +1671,18 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             sx={{ mb: 2 }}
           />
 
-          {/* Member selection */}
+          {/* Member selection — 검색 기반 */}
           <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', mb: 0.5, display: 'block' }}>
-            멤버 선택 ({spaceSelectedUserIds.length}명)
+            멤버 추가 (이름 또는 ID로 검색)
           </Typography>
           <TextField
             size="small"
             fullWidth
-            placeholder="이름, ID로 검색"
+            placeholder="2글자 이상 입력하여 검색..."
             value={spaceUserSearch}
             onChange={e => setSpaceUserSearch(e.target.value)}
-            sx={{ mb: 1 }}
+            InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 16, color: '#9CA3AF', mr: 0.5 }} /> }}
+            sx={{ mb: 1, '& .MuiOutlinedInput-root': { fontSize: '0.82rem', borderRadius: 1.5 } }}
           />
           {/* Group quick-apply */}
           {memberGroups.length > 0 && (
@@ -1699,40 +1709,65 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               ))}
             </Box>
           )}
-          <Box sx={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #E5E7EB', borderRadius: 2, p: 0.5 }}>
-            {(users || [])
-              .filter(u => {
-                if (!spaceUserSearch.trim()) return true;
-                const q = spaceUserSearch.toLowerCase();
-                return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
-              })
-              .map(user => (
-                <Box
-                  key={user.id}
-                  onClick={() =>
-                    setSpaceSelectedUserIds(prev =>
-                      prev.includes(user.id) ? prev.filter(id => id !== user.id) : [...prev, user.id]
-                    )
-                  }
-                  sx={{
-                    display: 'flex', alignItems: 'center', gap: 1,
-                    py: 0.6, px: 1.5, borderRadius: 1.5, cursor: 'pointer',
-                    '&:hover': { bgcolor: '#F3F4F6' },
-                    bgcolor: spaceSelectedUserIds.includes(user.id) ? '#EEF2FF' : 'transparent',
-                  }}
-                >
-                  <Checkbox size="small" checked={spaceSelectedUserIds.includes(user.id)} sx={{ p: 0.3 }} />
-                  <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
-                      {user.username}
-                      <Typography component="span" sx={{ fontSize: '0.68rem', color: '#9CA3AF', ml: 0.5 }}>
-                        ({user.loginid})
+          {/* Search results — only show when search has 2+ chars */}
+          {spaceUserSearch.trim().length >= 2 && (
+            <Box sx={{ maxHeight: 160, overflowY: 'auto', border: '1px solid #E5E7EB', borderRadius: 2, p: 0.5, mb: 1 }}>
+              {(users || [])
+                .filter(u => {
+                  const q = spaceUserSearch.toLowerCase();
+                  return ((u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q))
+                    && !spaceSelectedUserIds.includes(u.id);
+                })
+                .map(user => (
+                  <Box
+                    key={user.id}
+                    onClick={() =>
+                      setSpaceSelectedUserIds(prev => [...prev, user.id])
+                    }
+                    sx={{
+                      display: 'flex', alignItems: 'center', gap: 1,
+                      py: 0.6, px: 1.5, borderRadius: 1.5, cursor: 'pointer',
+                      '&:hover': { bgcolor: '#F3F4F6' },
+                    }}
+                  >
+                    <PersonAddIcon sx={{ fontSize: 16, color: '#22C55E' }} />
+                    <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                        {user.username}
+                        <Typography component="span" sx={{ fontSize: '0.68rem', color: '#9CA3AF', ml: 0.5 }}>
+                          ({user.loginid})
+                        </Typography>
                       </Typography>
-                    </Typography>
+                    </Box>
                   </Box>
-                </Box>
-              ))}
-          </Box>
+                ))}
+              {(users || []).filter(u => {
+                const q = spaceUserSearch.toLowerCase();
+                return ((u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q))
+                  && !spaceSelectedUserIds.includes(u.id);
+              }).length === 0 && (
+                <Typography sx={{ fontSize: '0.75rem', color: '#9CA3AF', textAlign: 'center', py: 1 }}>검색 결과가 없습니다</Typography>
+              )}
+            </Box>
+          )}
+          {/* Selected members chips */}
+          {spaceSelectedUserIds.length > 0 && (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+              {spaceSelectedUserIds.map(uid => {
+                const u = (users || []).find((u: any) => u.id === uid);
+                if (!u) return null;
+                return (
+                  <Chip
+                    key={uid}
+                    label={`${u.username} (${u.loginid})`}
+                    size="small"
+                    onDelete={() => setSpaceSelectedUserIds(prev => prev.filter(id => id !== uid))}
+                    sx={{ height: 24, fontSize: '0.68rem', fontWeight: 600 }}
+                  />
+                );
+              })}
+            </Box>
+          )}
 
           {/* Pending join requests (manage mode only) */}
           {spaceManageMode === 'manage' && joinRequests.length > 0 && (
@@ -1786,14 +1821,20 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               disabled={!newSpaceName.trim()}
               onClick={async () => {
                 try {
+                  const isFirstSpace = spaces.length === 0;
                   const created = await api.createSpace(
                     { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined, member_user_ids: spaceSelectedUserIds },
                     effectiveUserId
                   );
                   queryClient.invalidateQueries({ queryKey: ['spaces'] });
+                  queryClient.invalidateQueries({ queryKey: ['allSpaces'] });
                   setSpaceDialogOpen(false);
                   setCurrentSpace(created.id, created.name, created.slug);
                   navigate(`/space/${created.slug}`);
+                  // 신규 사용자의 첫 공간 생성 시 템플릿 라이브러리 표시
+                  if (isFirstSpace) {
+                    setTimeout(() => setTemplateLibraryOpen(true), 300);
+                  }
                 } catch (e) { console.error(e); }
               }}
               sx={{ bgcolor: '#2955FF' }}
@@ -1807,7 +1848,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               onClick={async () => {
                 try {
                   if (managingSpace) {
-                    await api.updateSpace(managingSpace.id, { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined }, effectiveUserId);
+                    const updated = await api.updateSpace(managingSpace.id, { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined }, effectiveUserId);
                     // Sync members: add new, remove old
                     const currentMembers = new Set((managingSpace.members || []).map((m: any) => m.user_id));
                     const targetMembers = new Set(spaceSelectedUserIds);
@@ -1822,6 +1863,12 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                       }
                     }
                     queryClient.invalidateQueries({ queryKey: ['spaces'] });
+                    queryClient.invalidateQueries({ queryKey: ['allSpaces'] });
+                    // Slug 동기화: 이름 변경 시 URL도 업데이트
+                    if (currentSpaceId === managingSpace.id && updated?.slug) {
+                      setCurrentSpace(updated.id, updated.name, updated.slug);
+                      navigate(`/space/${updated.slug}`, { replace: true });
+                    }
                     setSpaceDialogOpen(false);
                   }
                 } catch (e) { console.error(e); }

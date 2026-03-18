@@ -982,6 +982,14 @@ export const api = {
     const res = await client.get('/spaces', { params: { user_id: requireUserId(userId) } });
     return res.data.spaces || [];
   },
+  getAllSpaces: async (userId: number): Promise<any[]> => {
+    const res = await client.get('/spaces/all', { params: { user_id: requireUserId(userId) } });
+    return res.data.spaces || [];
+  },
+  searchUsers: async (query: string, userId: number): Promise<any[]> => {
+    const res = await client.get('/users/search', { params: { q: query, user_id: requireUserId(userId) } });
+    return res.data.users || [];
+  },
   createSpace: async (data: { name: string; slug?: string; description?: string; member_user_ids?: number[] }, userId: number): Promise<any> => {
     const res = await client.post('/spaces', data, { params: { user_id: requireUserId(userId) } });
     return res.data;

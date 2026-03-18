@@ -4625,6 +4625,34 @@ def get_spaces(user_id: int = Query(...), db: Session = Depends(get_db)):
     spaces = db.query(Space).filter(Space.id.in_(member_space_ids), Space.is_active == True).order_by(Space.created_at).all()
     return {"spaces": [_space_dict(s, db) for s in spaces]}
 
+@app.get("/api/spaces/all")
+def get_all_spaces(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """List ALL active spaces with is_member flag for the user."""
+    all_spaces = db.query(Space).filter(Space.is_active == True).order_by(Space.created_at).all()
+    member_space_ids = set(sm.space_id for sm in db.query(SpaceMember).filter(SpaceMember.user_id == user_id).all())
+    # Get user's role in each space
+    user_memberships = {sm.space_id: sm.role for sm in db.query(SpaceMember).filter(SpaceMember.user_id == user_id).all()}
+    result = []
+    for s in all_spaces:
+        d = _space_dict(s, db)
+        d["is_member"] = s.id in member_space_ids
+        d["my_role"] = user_memberships.get(s.id)
+        result.append(d)
+    return {"spaces": result}
+
+@app.get("/api/users/search")
+def search_users(q: str = Query(..., min_length=1), user_id: int = Query(...), db: Session = Depends(get_db)):
+    """Search users by name or loginid (for space member addition)."""
+    search_q = f"%{q}%"
+    users_found = db.query(User).filter(
+        User.is_active == True,
+        (User.username.ilike(search_q) | User.loginid.ilike(search_q))
+    ).limit(20).all()
+    return {"users": [
+        {"id": u.id, "username": u.username, "loginid": u.loginid, "avatar_color": u.avatar_color, "deptname": u.deptname, "role": u.role}
+        for u in users_found
+    ]}
+
 @app.post("/api/spaces")
 def create_space(body: SpaceCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
     # Use name as slug directly (supports Korean), or custom slug if provided
@@ -4658,11 +4686,11 @@ def get_space(space_id: int, user_id: int = Query(...), db: Session = Depends(ge
     return _space_dict(space, db)
 
 def _require_space_admin(db: Session, space_id: int, user_id: int):
-    """Check that user is owner or admin of the space."""
+    """Check that user is owner, admin, or operator of the space."""
     m = db.query(SpaceMember).filter(
         SpaceMember.space_id == space_id,
         SpaceMember.user_id == user_id,
-        SpaceMember.role.in_(["owner", "admin"]),
+        SpaceMember.role.in_(["owner", "admin", "operator"]),
     ).first()
     if not m:
         raise HTTPException(403, "공간 소유자 또는 관리자만 이 작업을 수행할 수 있습니다")
@@ -4676,6 +4704,12 @@ def update_space(space_id: int, body: SpaceUpdate, user_id: int = Query(...), db
     _require_space_admin(db, space_id, user_id)
     if body.name is not None:
         space.name = body.name
+        # Sync slug with name change
+        new_slug = _re_slug.sub(r'\s+', '-', body.name.strip())[:100]
+        existing = db.query(Space).filter(Space.slug == new_slug, Space.id != space_id).first()
+        if existing:
+            new_slug = f"{new_slug}-{int(datetime.utcnow().timestamp()) % 10000}"
+        space.slug = new_slug
     if body.description is not None:
         space.description = body.description
     db.commit()
@@ -4729,15 +4763,19 @@ def remove_space_member(space_id: int, target_user_id: int, user_id: int = Query
 
 @app.patch("/api/spaces/{space_id}/members/{target_user_id}/role")
 def update_space_member_role(space_id: int, target_user_id: int, role: str = Query(...), user_id: int = Query(...), db: Session = Depends(get_db)):
-    """Change a member's role. Only owner can promote to admin; owner/admin can set member."""
+    """Change a member's role. Only owner can promote to admin/operator; owner/admin/operator can set member."""
     caller = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
-    if not caller or caller.role not in ("owner", "admin"):
+    if not caller or caller.role not in ("owner", "admin", "operator"):
         raise HTTPException(403, "권한이 없습니다")
-    if role == "admin" and caller.role != "owner":
-        raise HTTPException(403, "관리자 지정은 소유자만 가능합니다")
+    if role in ("admin", "operator") and caller.role != "owner":
+        raise HTTPException(403, "관리자/공간운영 지정은 소유자만 가능합니다")
+    if role not in ("owner", "admin", "operator", "member"):
+        raise HTTPException(400, "유효하지 않은 역할입니다")
     target = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == target_user_id).first()
     if not target:
         raise HTTPException(404, "해당 멤버를 찾을 수 없습니다")
+    if target.role == "owner":
+        raise HTTPException(403, "소유자의 역할은 변경할 수 없습니다")
     target.role = role
     db.commit()
     return {"message": f"역할이 {role}로 변경되었습니다"}

@@ -1,25 +1,31 @@
 /**
  * SpaceAccessDenied — Shown when a user accesses a space URL without permission.
- * Allows requesting access, shows pending status.
+ * Provides: request access, go to space list page, create new space.
  */
 
 import React, { useState } from 'react';
 import { Box, Typography, Button, Paper, Chip } from '@mui/material';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import WorkspacesIcon from '@mui/icons-material/Workspaces';
+import AddIcon from '@mui/icons-material/Add';
 import { api } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
+import { useNavigate } from 'react-router-dom';
 
 interface SpaceAccessDeniedProps {
   spaceId: number;
   spaceName: string;
   hasPendingRequest: boolean;
+  onCreateSpace?: () => void;
 }
 
-const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceName, hasPendingRequest }) => {
+const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceName, hasPendingRequest, onCreateSpace }) => {
   const currentUserId = useAppStore(state => state.currentUserId);
+  const currentSpaceSlug = useAppStore(state => state.currentSpaceSlug);
   const [requested, setRequested] = useState(hasPendingRequest);
   const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
   const handleRequest = async () => {
     setLoading(true);
@@ -32,11 +38,16 @@ const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceNam
     setLoading(false);
   };
 
+  const goToSpaceList = () => {
+    const path = currentSpaceSlug ? `/space/${currentSpaceSlug}/spaces` : '/spaces';
+    navigate(path);
+  };
+
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
       <Paper
         sx={{
-          p: 5, textAlign: 'center', borderRadius: 3, maxWidth: 420,
+          p: 5, textAlign: 'center', borderRadius: 3, maxWidth: 440,
           border: '1px solid rgba(0,0,0,0.06)', bgcolor: 'rgba(255,255,255,0.8)',
           backdropFilter: 'blur(12px)',
         }}
@@ -50,7 +61,7 @@ const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceNam
           <strong>{spaceName}</strong> 공간에 접근하려면 권한이 필요합니다.
         </Typography>
         <Typography variant="caption" sx={{ color: '#9CA3AF', display: 'block', mb: 3 }}>
-          공간 소유자 또는 관리자에게 접근 권한을 신청해주세요.
+          공간 소유자 또는 관리자에게 접근 권한을 신청하거나, 새 공간을 만들어 보세요.
         </Typography>
 
         {requested ? (
@@ -61,6 +72,7 @@ const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceNam
               height: 32, fontSize: '0.8rem', fontWeight: 600,
               bgcolor: '#F0FDF4', color: '#16A34A', border: '1px solid #BBF7D0',
               '& .MuiChip-icon': { color: '#16A34A' },
+              mb: 2,
             }}
           />
         ) : (
@@ -68,11 +80,34 @@ const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({ spaceId, spaceNam
             variant="contained"
             onClick={handleRequest}
             disabled={loading}
-            sx={{ bgcolor: '#2955FF', textTransform: 'none', fontWeight: 700, px: 4 }}
+            sx={{ bgcolor: '#2955FF', textTransform: 'none', fontWeight: 700, px: 4, mb: 2 }}
           >
             {loading ? '신청 중...' : '접속 권한 신청하기'}
           </Button>
         )}
+
+        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center', mt: 1 }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<WorkspacesIcon sx={{ fontSize: 14 }} />}
+            onClick={goToSpaceList}
+            sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.78rem', borderColor: '#D1D5DB', color: '#374151' }}
+          >
+            공간 목록으로
+          </Button>
+          {onCreateSpace && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<AddIcon sx={{ fontSize: 14 }} />}
+              onClick={onCreateSpace}
+              sx={{ textTransform: 'none', fontWeight: 600, fontSize: '0.78rem', borderColor: '#2955FF', color: '#2955FF' }}
+            >
+              새 공간 만들기
+            </Button>
+          )}
+        </Box>
       </Paper>
     </Box>
   );
