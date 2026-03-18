@@ -114,6 +114,7 @@ const SortableGlobalRow: React.FC<{
 
 const GlobalRoadmapPage: React.FC = () => {
   const currentUserId = useAppStore(state => state.currentUserId);
+  const currentSpaceId = useAppStore(state => state.currentSpaceId);
   const queryClient = useQueryClient();
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
@@ -160,8 +161,8 @@ const GlobalRoadmapPage: React.FC = () => {
   );
 
   const { data: roadmapData, isLoading } = useQuery({
-    queryKey: ['globalRoadmap', currentUserId, viewMode],
-    queryFn: () => api.getGlobalRoadmap(currentUserId, viewMode),
+    queryKey: ['globalRoadmap', currentUserId, viewMode, currentSpaceId],
+    queryFn: () => api.getGlobalRoadmap(currentUserId, viewMode, currentSpaceId),
   });
 
   // Sync local items when API data changes — skip if we just did a local drag

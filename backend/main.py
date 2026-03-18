@@ -2597,23 +2597,24 @@ def get_roadmap(
 def get_global_roadmap(
     user_id: int = Query(...),
     view: str = Query(default="month"),
+    space_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
 ):
     state = load_state()
     today_str = date.today().isoformat()
 
-    role = get_user_role(db, user_id)
-
-    rows = db.query(Project).filter(Project.archived_at.is_(None)).all()
+    # 현재 공간 기준으로 프로젝트 필터링
+    pq = db.query(Project).filter(Project.archived_at.is_(None))
+    if space_id:
+        pq = pq.filter(Project.space_id == space_id)
+    rows = pq.all()
     all_projects = [project_dict(p, state) for p in rows]
 
-    if is_admin_role(role):
-        projects = all_projects
-    else:
-        authorized_pids = get_user_project_ids(db, state, user_id)
-        public_pids = {p["id"] for p in all_projects if p.get("visibility") == "public"}
-        accessible = authorized_pids | public_pids
-        projects = [p for p in all_projects if p["id"] in accessible]
+    # 사용자가 멤버인 프로젝트만 표시 (admin이어도 멤버 기준)
+    authorized_pids = get_user_project_ids(db, state, user_id)
+    public_pids = {p["id"] for p in all_projects if p.get("visibility") == "public"}
+    accessible = authorized_pids | public_pids
+    projects = [p for p in all_projects if p["id"] in accessible]
 
     task_rows = db.query(Task).filter(Task.archived_at.is_(None)).all()
     all_tasks = [task_dict(t, state) for t in task_rows]

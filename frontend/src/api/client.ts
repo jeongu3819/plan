@@ -597,11 +597,12 @@ export const api = {
   // =========================
   getGlobalRoadmap: async (
     userId: number,
-    view: string = 'month'
+    view: string = 'month',
+    spaceId?: number | null
   ): Promise<{ view: string; items: RoadmapItem[] }> => {
-    const res = await client.get('/roadmap/global', {
-      params: { user_id: requireUserId(userId), view },
-    });
+    const params: Record<string, any> = { user_id: requireUserId(userId), view };
+    if (spaceId) params.space_id = spaceId;
+    const res = await client.get('/roadmap/global', { params });
     return res.data;
   },
 
