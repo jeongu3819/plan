@@ -66,6 +66,10 @@ const SpaceManagePage: React.FC = () => {
   const [editingSpace, setEditingSpace] = useState<any>(null);
   const [spaceName, setSpaceName] = useState('');
   const [spaceDesc, setSpaceDesc] = useState('');
+  const [createMemberSearch, setCreateMemberSearch] = useState('');
+  const [createMemberResults, setCreateMemberResults] = useState<any[]>([]);
+  const [createSelectedUserIds, setCreateSelectedUserIds] = useState<number[]>([]);
+  const [createSearchTimer, setCreateSearchTimer] = useState<any>(null);
 
   // Member management dialog
   const [memberDialogOpen, setMemberDialogOpen] = useState(false);
@@ -177,11 +181,29 @@ const SpaceManagePage: React.FC = () => {
     navigate(`/space/${s.slug}`);
   };
 
+  const debouncedCreateMemberSearch = (query: string) => {
+    setCreateMemberSearch(query);
+    if (createSearchTimer) clearTimeout(createSearchTimer);
+    if (query.trim().length < 2) {
+      setCreateMemberResults([]);
+      return;
+    }
+    setCreateSearchTimer(setTimeout(async () => {
+      try {
+        const results = await api.searchUsers(query.trim(), currentUserId);
+        setCreateMemberResults(results);
+      } catch { setCreateMemberResults([]); }
+    }, 300));
+  };
+
   const openCreateDialog = () => {
     setDialogMode('create');
     setEditingSpace(null);
     setSpaceName('');
     setSpaceDesc('');
+    setCreateMemberSearch('');
+    setCreateMemberResults([]);
+    setCreateSelectedUserIds([]);
     setSpaceDialogOpen(true);
   };
 
@@ -204,7 +226,7 @@ const SpaceManagePage: React.FC = () => {
     if (!spaceName.trim()) return;
     try {
       const created = await api.createSpace(
-        { name: spaceName.trim(), description: spaceDesc.trim() || undefined },
+        { name: spaceName.trim(), description: spaceDesc.trim() || undefined, member_user_ids: createSelectedUserIds },
         currentUserId
       );
       queryClient.invalidateQueries({ queryKey: ['allSpaces'] });
@@ -534,7 +556,7 @@ const SpaceManagePage: React.FC = () => {
       </Box>
 
       {/* ── 공간 생성/수정 Dialog ── */}
-      <Dialog open={spaceDialogOpen} onClose={() => setSpaceDialogOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <Dialog open={spaceDialogOpen} onClose={() => setSpaceDialogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
         <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem', pb: 1 }}>
           {dialogMode === 'create' ? '새 공간 만들기' : `공간 수정: ${editingSpace?.name || ''}`}
         </DialogTitle>
@@ -552,8 +574,73 @@ const SpaceManagePage: React.FC = () => {
             fullWidth label="설명 (선택)"
             placeholder="공간에 대한 간단한 설명"
             value={spaceDesc} onChange={e => setSpaceDesc(e.target.value)}
-            sx={{ mb: 1 }}
+            sx={{ mb: 2 }}
           />
+
+          {/* 멤버 추가 — 생성 모드에서만 */}
+          {dialogMode === 'create' && (
+            <>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', mb: 0.5, display: 'block' }}>
+                멤버 추가 (이름 또는 ID로 검색)
+              </Typography>
+              <TextField
+                size="small" fullWidth
+                placeholder="2글자 이상 입력하여 검색..."
+                value={createMemberSearch}
+                onChange={e => debouncedCreateMemberSearch(e.target.value)}
+                InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 16, color: '#9CA3AF', mr: 0.5 }} /> }}
+                sx={{ mb: 1, '& .MuiOutlinedInput-root': { fontSize: '0.82rem', borderRadius: 1.5 } }}
+              />
+              {/* 검색 결과 */}
+              {createMemberSearch.trim().length >= 2 && (
+                <Box sx={{ maxHeight: 160, overflowY: 'auto', border: '1px solid #E5E7EB', borderRadius: 2, p: 0.5, mb: 1 }}>
+                  {createMemberResults
+                    .filter(u => !createSelectedUserIds.includes(u.id))
+                    .map(user => (
+                      <Box
+                        key={user.id}
+                        onClick={() => setCreateSelectedUserIds(prev => [...prev, user.id])}
+                        sx={{
+                          display: 'flex', alignItems: 'center', gap: 1,
+                          py: 0.6, px: 1.5, borderRadius: 1.5, cursor: 'pointer',
+                          '&:hover': { bgcolor: '#F3F4F6' },
+                        }}
+                      >
+                        <PersonAddIcon sx={{ fontSize: 16, color: '#22C55E' }} />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                            {user.username}
+                            <Typography component="span" sx={{ fontSize: '0.68rem', color: '#9CA3AF', ml: 0.5 }}>
+                              ({user.loginid})
+                            </Typography>
+                          </Typography>
+                        </Box>
+                      </Box>
+                    ))}
+                  {createMemberResults.filter(u => !createSelectedUserIds.includes(u.id)).length === 0 && (
+                    <Typography sx={{ fontSize: '0.75rem', color: '#9CA3AF', textAlign: 'center', py: 1 }}>검색 결과가 없습니다</Typography>
+                  )}
+                </Box>
+              )}
+              {/* 선택된 멤버 */}
+              {createSelectedUserIds.length > 0 && (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+                  {createSelectedUserIds.map(uid => {
+                    const u = createMemberResults.find(r => r.id === uid);
+                    return (
+                      <Chip
+                        key={uid}
+                        label={u ? `${u.username} (${u.loginid})` : `ID: ${uid}`}
+                        size="small"
+                        onDelete={() => setCreateSelectedUserIds(prev => prev.filter(id => id !== uid))}
+                        sx={{ height: 24, fontSize: '0.68rem', fontWeight: 600 }}
+                      />
+                    );
+                  })}
+                </Box>
+              )}
+            </>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setSpaceDialogOpen(false)} sx={{ color: '#6B7280' }}>취소</Button>
