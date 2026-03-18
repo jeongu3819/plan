@@ -313,6 +313,15 @@ const SpaceManagePage: React.FC = () => {
         elevation={0}
         onClick={() => isMember && selectSpace(s)}
       >
+        {/* Deletion warning */}
+        {s.warned_at && s.project_count === 0 && (
+          <Box sx={{ bgcolor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 1.5, px: 1.5, py: 0.8 }}>
+            <Typography sx={{ fontSize: '0.7rem', color: '#DC2626', fontWeight: 600 }}>
+              프로젝트를 생성하지 않으면 해당 공간은 곧 삭제됩니다
+            </Typography>
+          </Box>
+        )}
+
         {/* Top row: name + fav */}
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>

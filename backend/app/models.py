@@ -33,6 +33,7 @@ class Space(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, server_default=func.now())
+    warned_at = Column(DateTime, nullable=True)  # 빈 공간 경고 발송 시점
 
 
 class SpaceMember(Base):

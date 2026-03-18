@@ -87,6 +87,13 @@ def _run_migrations():
                 conn.execute(text(f"UPDATE spaces SET is_active = 0 WHERE id = {general_id}"))
                 conn.execute(text(f"DELETE FROM space_members WHERE space_id = {general_id}"))
 
+    # warned_at 컬럼 추가 (빈 공간 경고/삭제용)
+    if "spaces" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("spaces")]
+        if "warned_at" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE spaces ADD COLUMN warned_at DATETIME'))
+
 _run_migrations()
 
 app = FastAPI(title="Antigravity Schedule Platform API")
@@ -180,6 +187,8 @@ def startup_ensure_super_admin():
         _backfill_team_nodes(db)
         # 3일 지난 삭제 항목 영구 제거
         _purge_expired_trash(db)
+        # 빈 공간 경고 및 자동 삭제
+        _cleanup_empty_spaces(db)
     finally:
         db.close()
 
@@ -1457,6 +1466,42 @@ def _purge_expired_trash(db: Session):
     db.commit()
     if changed:
         save_state(state)
+
+
+def _cleanup_empty_spaces(db: Session):
+    """빈 공간(프로젝트 0개) 경고 및 자동 삭제.
+    - 생성 후 7일 경과 + 프로젝트 0개 → warned_at 기록
+    - warned_at 기록 후 7일(생성 후 총 14일) 경과 + 여전히 프로젝트 0개 → 삭제
+    """
+    now = datetime.utcnow()
+    warn_cutoff = now - timedelta(days=7)   # 7일 전 생성된 공간
+    delete_cutoff = now - timedelta(days=7)  # warned_at 기준 7일 경과
+
+    active_spaces = db.query(Space).filter(Space.is_active == True, Space.slug != "general").all()
+    for space in active_spaces:
+        # 해당 공간에 속한 프로젝트 수 확인
+        project_count = db.query(Project).filter(
+            Project.space_id == space.id,
+            Project.archived_at.is_(None),
+        ).count()
+
+        if project_count > 0:
+            # 프로젝트가 있으면 경고 해제
+            if space.warned_at is not None:
+                space.warned_at = None
+            continue
+
+        # 프로젝트가 0개인 공간
+        if space.created_at and space.created_at < warn_cutoff:
+            if space.warned_at is None:
+                # 7일 경과, 아직 경고 안 함 → 경고 기록
+                space.warned_at = now
+            elif space.warned_at < delete_cutoff:
+                # 경고 후 7일 경과 → 삭제
+                space.is_active = False
+                db.query(SpaceMember).filter(SpaceMember.space_id == space.id).delete()
+
+    db.commit()
 
 # =========================
 # Project Members / Join Requests (C-3: DB + sidecar fallback)
@@ -4594,6 +4639,7 @@ class SpaceUpdate(BaseModel):
 
 def _space_dict(s, db: Session) -> dict:
     members = db.query(SpaceMember, User).join(User, SpaceMember.user_id == User.id).filter(SpaceMember.space_id == s.id).all()
+    project_count = db.query(Project).filter(Project.space_id == s.id, Project.archived_at.is_(None)).count()
     return {
         "id": s.id,
         "name": s.name,
@@ -4602,6 +4648,8 @@ def _space_dict(s, db: Session) -> dict:
         "created_by": s.created_by,
         "is_active": s.is_active,
         "created_at": iso(s.created_at) if s.created_at else None,
+        "warned_at": iso(s.warned_at) if s.warned_at else None,
+        "project_count": project_count,
         "member_count": len(members),
         "members": [
             {"user_id": m.user_id, "role": m.role, "username": u.username, "loginid": u.loginid, "avatar_color": u.avatar_color}
