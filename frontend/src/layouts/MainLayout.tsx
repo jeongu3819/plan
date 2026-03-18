@@ -505,65 +505,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             </Typography>
             <ExpandMoreIcon2 sx={{ fontSize: 16, color: theme.sidebarMuted }} />
           </Box>
-          <Tooltip title="공간 생성 / 관리">
-            <IconButton
-              size="small"
-              onClick={() => {
-                setSpaceManageMode('create');
-                setNewSpaceName('');
-                setNewSpaceDesc('');
-                setSpaceSelectedUserIds([]);
-                setSpaceDialogOpen(true);
-              }}
-              sx={{
-                color: theme.sidebarMuted,
-                bgcolor: 'rgba(255,255,255,0.06)',
-                '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', color: '#2955FF' },
-                width: 30, height: 30,
-              }}
-            >
-              <AddIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Tooltip>
-          {/* Manage current space (gear icon + join request badge) */}
-          {currentSpaceId && (
-            <Tooltip title={joinRequests.length > 0 ? `공간 관리 (${joinRequests.length}건 접근 신청)` : '현재 공간 관리'}>
-              <IconButton
-                size="small"
-                onClick={() => {
-                  const s = spaces.find((sp: any) => sp.id === currentSpaceId);
-                  if (s) {
-                    setManagingSpace(s);
-                    setNewSpaceName(s.name);
-                    setNewSpaceDesc(s.description || '');
-                    setSpaceSelectedUserIds(s.members?.map((m: any) => m.user_id) || []);
-                    setSpaceManageMode('manage');
-                    setSpaceDialogOpen(true);
-                  }
-                }}
-                sx={{
-                  color: theme.sidebarMuted,
-                  bgcolor: 'rgba(255,255,255,0.06)',
-                  '&:hover': { bgcolor: 'rgba(255,255,255,0.15)', color: '#F59E0B' },
-                  width: 30, height: 30,
-                  position: 'relative',
-                }}
-              >
-                <SettingsIcon sx={{ fontSize: 14 }} />
-                {joinRequests.length > 0 && (
-                  <Box sx={{
-                    position: 'absolute', top: -2, right: -2,
-                    width: 14, height: 14, borderRadius: '50%',
-                    bgcolor: '#EF4444', color: '#fff',
-                    fontSize: '0.5rem', fontWeight: 800,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    {joinRequests.length}
-                  </Box>
-                )}
-              </IconButton>
-            </Tooltip>
-          )}
+          {/* + 버튼, 설정 버튼 제거 — 공간 관리 페이지에서 제공 */}
         </Box>
 
         {/* Space Picker Popover */}
