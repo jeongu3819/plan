@@ -234,6 +234,14 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     } else if (!urlSpaceSlug && spaces.length > 0 && !currentSpaceId) {
       setCurrentSpace(spaces[0].id, spaces[0].name, spaces[0].slug);
     }
+    // 현재 선택된 공간이 삭제되었으면 정리
+    if (currentSpaceId && spaces.length > 0 && !spaces.find((s: any) => s.id === currentSpaceId)) {
+      setCurrentSpace(spaces[0].id, spaces[0].name, spaces[0].slug);
+    }
+    // 공간이 하나도 없으면 currentSpaceId 초기화
+    if (spaces.length === 0 && currentSpaceId) {
+      setCurrentSpace(null, null, null);
+    }
   }, [spaces, urlSpaceSlug, spaceAccess, currentSpaceId, setCurrentSpace]);
 
   // projects (filtered by current space)
@@ -727,17 +735,21 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                   />
                 </Tooltip>
               )}
-              <Tooltip title="New Project">
+              <Tooltip title={spaces.length === 0 ? '공간을 먼저 생성해야 프로젝트를 만들 수 있습니다' : 'New Project'}>
                 <AddIcon
                   onClick={e => {
                     e.stopPropagation();
+                    if (spaces.length === 0) {
+                      alert('프로젝트를 생성하려면 먼저 공간이 필요합니다.');
+                      return;
+                    }
                     setProjectDialogOpen(true);
                   }}
                   sx={{
                     fontSize: 16,
-                    color: theme.sidebarMuted,
-                    cursor: 'pointer',
-                    '&:hover': { color: theme.sidebarText },
+                    color: spaces.length === 0 ? 'rgba(255,255,255,0.2)' : theme.sidebarMuted,
+                    cursor: spaces.length === 0 ? 'not-allowed' : 'pointer',
+                    '&:hover': { color: spaces.length === 0 ? 'rgba(255,255,255,0.2)' : theme.sidebarText },
                     transition: 'color 0.15s',
                   }}
                 />
@@ -1005,7 +1017,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       >
         {/* Space access check — 3 cases */}
         {(() => {
-          const noSpaces = spaces.length === 0 && !currentSpaceId;
+          const noSpaces = spaces.length === 0;
           const accessDenied = urlSpaceSlug && spaceAccess && !spaceAccess.is_member;
           const openCreateSpaceDialog = () => {
             setSpaceManageMode('create');
@@ -1013,7 +1025,9 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             setSpaceDialogOpen(true);
           };
 
-          if (noSpaces) {
+          // 공간 관리 페이지(/spaces)는 공간이 없어도 항상 접근 가능
+          const isSpacesPage = location.pathname === '/spaces' || location.pathname.endsWith('/spaces');
+          if (noSpaces && !isSpacesPage) {
             // Case 1: 공간 미소속 사용자 — 중립 안내
             return (
               <SpaceAccessDenied
@@ -1582,11 +1596,14 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
           <Button
             variant="contained"
             onClick={() => createProjectMutation.mutate()}
-            disabled={!newProjectName.trim()}
+            disabled={!newProjectName.trim() || spaces.length === 0 || !currentSpaceId}
             sx={{ bgcolor: '#2955FF' }}
           >
             생성
           </Button>
+          {(spaces.length === 0 || !currentSpaceId) && (
+            <Typography sx={{ fontSize: '0.7rem', color: '#EF4444', ml: 1 }}>공간을 먼저 생성해야 합니다</Typography>
+          )}
         </DialogActions>
       </Dialog>
 

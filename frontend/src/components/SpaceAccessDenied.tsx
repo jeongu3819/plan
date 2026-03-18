@@ -44,7 +44,9 @@ const SpaceAccessDenied: React.FC<SpaceAccessDeniedProps> = ({
   };
 
   const goToSpaceList = () => {
-    const path = currentSpaceSlug ? `/space/${currentSpaceSlug}/spaces` : '/spaces';
+    // 공간이 없는 상태(noSpaceMode)에서는 항상 /spaces로 이동
+    // 공간이 있으면 현재 공간 컨텍스트 유지
+    const path = noSpaceMode ? '/spaces' : (currentSpaceSlug ? `/space/${currentSpaceSlug}/spaces` : '/spaces');
     navigate(path);
   };
 

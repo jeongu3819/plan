@@ -1245,6 +1245,13 @@ def get_projects(user_id: Optional[int] = None, space_id: Optional[int] = None, 
 def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     state = load_state()
 
+    # 프로젝트는 반드시 유효한 공간에 소속되어야 함
+    if not project.space_id:
+        raise HTTPException(400, "프로젝트를 생성하려면 먼저 공간이 필요합니다.")
+    space = db.query(Space).filter(Space.id == project.space_id, Space.is_active == True).first()
+    if not space:
+        raise HTTPException(400, "유효하지 않은 공간입니다. 프로젝트를 생성하려면 먼저 공간이 필요합니다.")
+
     # C-4: Calculate owner before creating project
     default_owner_id = project.owner_id
     if not default_owner_id:
