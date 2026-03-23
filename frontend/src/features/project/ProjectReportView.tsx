@@ -445,20 +445,44 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
     return <NumberedListBlock text={text} />;
   }
 
-  // "작업노트" 하위에 "완료 항목"/"미완료 항목"/"주의사항"을 묶기
-  const workNoteSubLabels = new Set(['완료 항목', '미완료 항목', '주의사항']);
-  const mergedSections: typeof sections = [];
-  let workNoteIdx = -1;
+  // 과제 단위로 그룹핑: "과제"부터 다음 "과제" 전까지가 한 블록
+  // 같은 블록 안에서 동일 라벨(완료 항목 등)은 합침
+  type TaskGroup = { label: string; content: string[] }[];
+  const taskGroups: TaskGroup[] = [];
+  let currentGroup: TaskGroup = [];
+
+  const workNoteSubLabels = new Set(['작업노트', '완료 항목', '미완료 항목', '주의사항']);
 
   for (const section of sections) {
-    if (section.label === '작업노트') {
-      mergedSections.push({ ...section, content: [...section.content] });
-      workNoteIdx = mergedSections.length - 1;
-    } else if (workNoteSubLabels.has(section.label) && workNoteIdx >= 0) {
-      // 작업노트 안에 하위 그룹으로 흡수 — 나중에 렌더링에서 처리
-      mergedSections.push({ ...section, label: `_sub_${section.label}` });
+    if (section.label === '과제' && currentGroup.length > 0) {
+      taskGroups.push(currentGroup);
+      currentGroup = [];
+    }
+    // 같은 그룹 안에서 동일 라벨이면 내용만 합침
+    const existing = currentGroup.find(s => s.label === section.label);
+    if (existing && workNoteSubLabels.has(section.label)) {
+      existing.content.push(...section.content);
     } else {
-      mergedSections.push(section);
+      currentGroup.push({ label: section.label, content: [...section.content] });
+    }
+  }
+  if (currentGroup.length > 0) taskGroups.push(currentGroup);
+
+  // 그룹들을 flat하게 펼치되, 과제 경계에 구분 마커 삽입
+  const mergedSections: (typeof sections[0] & { isGroupStart?: boolean })[] = [];
+  for (let gi = 0; gi < taskGroups.length; gi++) {
+    const group = taskGroups[gi];
+    for (let si = 0; si < group.length; si++) {
+      const section = group[si];
+      // 작업노트/완료항목/미완료항목/주의사항은 작업노트 하위 서브로 표시
+      if (workNoteSubLabels.has(section.label) && section.label !== '작업노트') {
+        mergedSections.push({ ...section, label: `_sub_${section.label}` });
+      } else {
+        mergedSections.push({
+          ...section,
+          isGroupStart: si === 0 && gi > 0, // 과제 그룹 경계
+        } as any);
+      }
     }
   }
 
@@ -533,7 +557,7 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
         const numberedSections = ['과제', '작업노트', '완료 항목', '미완료 항목', '참고자료', '주의사항'];
 
         return (
-          <Box key={idx} sx={{ borderTop: idx > 0 && !mergedSections[idx - 1]?.label.startsWith('_sub_') ? '1px solid #F3F4F6' : 'none' }}>
+          <Box key={idx} sx={{ borderTop: (section as any).isGroupStart ? '2px solid #E5E7EB' : 'none' }}>
             {isLabeled && (
               <Box sx={{ px: 1.5, pt: 0.8, pb: 0.2 }}>
                 <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color, letterSpacing: '0.02em' }}>
