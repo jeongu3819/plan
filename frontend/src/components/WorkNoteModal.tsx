@@ -409,6 +409,10 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     const invalidate = useCallback(() => {
         queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
         queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        // 체크박스 변경으로 progress가 바뀌므로 로드맵/통계도 갱신
+        queryClient.invalidateQueries({ queryKey: ['roadmap'] });
+        queryClient.invalidateQueries({ queryKey: ['globalRoadmap'] });
+        queryClient.invalidateQueries({ queryKey: ['stats'] });
     }, [queryClient, taskId]);
 
     const createMut = useMutation({
