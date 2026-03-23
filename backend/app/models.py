@@ -243,6 +243,19 @@ class NoteMention(Base):
     )
 
 
+class TaskActivityMention(Base):
+    __tablename__ = "task_activity_mentions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    activity_id = Column(Integer, ForeignKey("task_activities.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("activity_id", "user_id", name="uq_activity_mention"),
+    )
+
+
 class Attachment(Base):
     __tablename__ = "attachments"
 

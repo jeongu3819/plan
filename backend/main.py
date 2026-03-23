@@ -30,7 +30,7 @@ from app.db_connections.sqlalchemy import SessionLocal, engine, Base
 from app.models import (
     Project, User, Task, UserPreference, VisitLog, GroupMembership, Group,
     ProjectAiReport, ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
-    NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
+    NoteMention, TaskActivityMention, ProjectMember as ProjectMemberModel, UserShortcut,
     MemberGroup, MemberGroupUser,
     TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
     Space, SpaceMember, SpaceJoinRequest,
@@ -68,6 +68,10 @@ def _run_migrations():
         ])
     if "space_join_requests" not in insp.get_table_names():
         t = Base.metadata.tables.get("space_join_requests")
+        if t is not None:
+            Base.metadata.create_all(bind=engine, tables=[t])
+    if "task_activity_mentions" not in insp.get_table_names():
+        t = Base.metadata.tables.get("task_activity_mentions")
         if t is not None:
             Base.metadata.create_all(bind=engine, tables=[t])
     if "projects" in insp.get_table_names():
@@ -2460,6 +2464,37 @@ def get_mentions(user_id: int = Query(...), db: Session = Depends(get_db)):
                 "project_name": project.name if project else "Unknown",
             })
 
+    # ── TaskActivity 멘션 추가 ──
+    activity_mentions = db.query(TaskActivityMention).filter(TaskActivityMention.user_id == user_id).all()
+    for am in activity_mentions:
+        activity = db.query(TaskActivityModel).filter(TaskActivityModel.id == am.activity_id).first()
+        if not activity:
+            continue
+        task = db.query(Task).filter(Task.id == activity.task_id, Task.archived_at.is_(None)).first()
+        if not task:
+            continue
+        project = projects_map.get(task.project_id)
+        if not project:
+            continue
+        # Strip HTML for display
+        import re as _re_html
+        plain_content = _re_html.sub(r'<[^>]+>', '', activity.content or '')
+        author_id = task.project_id  # 작업노트는 author가 없으므로 task 정보로 대체
+        result.append({
+            "id": f"activity-{activity.id}",
+            "project_id": task.project_id,
+            "author_id": 0,
+            "content": plain_content,
+            "created_at": activity.created_at.isoformat() if activity.created_at else "",
+            "author_name": f"작업노트 [{task.title}]",
+            "author_color": "#7C3AED",
+            "project_name": project.name if project else "Unknown",
+            "mentioned_user_ids": [user_id],
+            "source": "activity",
+            "task_id": task.id,
+            "task_title": task.title,
+        })
+
     result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return {"mentions": result}
 
@@ -2833,6 +2868,32 @@ def get_task_activities(task_id: int, db: Session = Depends(get_db)):
         for a in activities
     ]}
 
+def _sync_activity_mentions(db: Session, activity_id: int, content: str):
+    """Parse @mentions from activity content (strip HTML) and sync TaskActivityMention records."""
+    import re as _re
+    # Strip HTML tags to get plain text
+    plain = _re.sub(r'<[^>]+>', ' ', content or '')
+    mention_texts = _re.findall(r'@(\S+)', plain)
+    if not mention_texts:
+        db.query(TaskActivityMention).filter(TaskActivityMention.activity_id == activity_id).delete()
+        return
+    # Find matching users
+    matched_user_ids = set()
+    for mt in mention_texts:
+        mt_lower = mt.lower()
+        user = db.query(User).filter(
+            User.is_active == True,
+            (func.lower(User.loginid) == mt_lower) | (func.lower(User.username) == mt_lower)
+        ).first()
+        if user:
+            matched_user_ids.add(user.id)
+    # Sync: remove old, add new
+    existing = {m.user_id for m in db.query(TaskActivityMention).filter(TaskActivityMention.activity_id == activity_id).all()}
+    for uid in matched_user_ids - existing:
+        db.add(TaskActivityMention(activity_id=activity_id, user_id=uid))
+    for uid in existing - matched_user_ids:
+        db.query(TaskActivityMention).filter(TaskActivityMention.activity_id == activity_id, TaskActivityMention.user_id == uid).delete()
+
 @app.post("/api/tasks/{task_id}/activities")
 def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -2861,6 +2922,8 @@ def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Dep
     db.commit()
     db.refresh(activity)
     _sync_task_progress(db, task_id)
+    _sync_activity_mentions(db, activity.id, activity.content)
+    db.commit()
     return {
         "id": activity.id,
         "task_id": activity.task_id,
@@ -2895,6 +2958,9 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
     db.commit()
     db.refresh(activity)
     _sync_task_progress(db, activity.task_id)
+    if "content" in body:
+        _sync_activity_mentions(db, activity.id, activity.content)
+        db.commit()
     return {
         "id": activity.id,
         "task_id": activity.task_id,

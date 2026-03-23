@@ -116,6 +116,19 @@ const MentionsPage: React.FC = () => {
                         color: '#2955FF',
                       }}
                     />
+                    {(note as any).source === 'activity' && (
+                      <Chip
+                        label="작업노트"
+                        size="small"
+                        sx={{
+                          height: 20,
+                          fontSize: '0.6rem',
+                          fontWeight: 600,
+                          bgcolor: '#F3E8FF',
+                          color: '#7C3AED',
+                        }}
+                      />
+                    )}
                     <Typography
                       variant="caption"
                       sx={{ color: '#9CA3AF', fontSize: '0.7rem', ml: 'auto' }}
