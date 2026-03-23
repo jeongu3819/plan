@@ -69,6 +69,19 @@ const ProjectPage: React.FC = () => {
         }
     }, [tabParam]);
 
+    // Open task drawer + work note from @mention link
+    const openTaskParam = searchParams.get('openTask');
+    const openWorkNoteParam = searchParams.get('openWorkNote');
+    useEffect(() => {
+        if (openTaskParam && tasks.length > 0) {
+            const taskId = parseInt(openTaskParam, 10);
+            const task = tasks.find(t => t.id === taskId);
+            if (task) {
+                openDrawer(task, projectId);
+            }
+        }
+    }, [openTaskParam, tasks, projectId, openDrawer]);
+
     const { data: projects = [] } = useQuery<Project[]>({
         queryKey: ['projects', currentUserId],
         queryFn: () => api.getProjects(currentUserId),

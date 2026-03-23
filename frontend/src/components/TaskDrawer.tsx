@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     Drawer, Box, Typography, TextField, Button, MenuItem,
     Stack, IconButton, Divider, Chip, Avatar, Autocomplete,
@@ -185,6 +186,19 @@ const TaskDrawer: React.FC = () => {
     });
 
     const [workNoteOpen, setWorkNoteOpen] = useState(false);
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    // @멘션 링크에서 작업노트 자동 열기
+    useEffect(() => {
+        if (searchParams.get('openWorkNote') === '1' && selectedTask && isDrawerOpen) {
+            setWorkNoteOpen(true);
+            // 파라미터 정리
+            const newParams = new URLSearchParams(searchParams);
+            newParams.delete('openWorkNote');
+            newParams.delete('openTask');
+            setSearchParams(newParams, { replace: true });
+        }
+    }, [selectedTask, isDrawerOpen, searchParams, setSearchParams]);
 
     const checkboxActivities = activities.filter(a => (a.block_type || 'checkbox') === 'checkbox');
     const activityProgress = checkboxActivities.length > 0
