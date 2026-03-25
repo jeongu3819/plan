@@ -196,6 +196,22 @@ def startup_ensure_super_admin():
     finally:
         db.close()
 
+    # S3 백업 스케줄러 시작
+    try:
+        from app.services.backup_scheduler import start_backup_scheduler
+        start_backup_scheduler()
+    except Exception as e:
+        import logging
+        logging.getLogger("main").warning(f"백업 스케줄러 시작 실패 (무시): {e}")
+
+@app.on_event("shutdown")
+def shutdown_backup_scheduler():
+    try:
+        from app.services.backup_scheduler import stop_backup_scheduler
+        stop_backup_scheduler()
+    except Exception:
+        pass
+
 def _backfill_team_nodes(db: Session):
     """deptname 값을 기반으로 groups 테이블에 TEAM 타입 노드를 자동 생성하고 users.primary_team_id를 매핑"""
     try:
@@ -286,7 +302,19 @@ def _parse_time_window_from_query(q: str, today: date) -> tuple[date, date] | No
     if not q:
         return None
 
-    # 상대 표현
+    # ── 주 단위 상대 표현 ──
+    if re.search(r"(이번\s*주|이번주|금주)", q):
+        # 이번주: 월요일~일요일
+        monday = today - timedelta(days=today.weekday())
+        return monday, monday + timedelta(days=7)
+    if re.search(r"(다음\s*주|다음주|차주)", q):
+        monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        return monday, monday + timedelta(days=7)
+    if re.search(r"(지난\s*주|지난주|저번\s*주|저번주)", q):
+        monday = today - timedelta(days=today.weekday()) - timedelta(days=7)
+        return monday, monday + timedelta(days=7)
+
+    # ── 월 단위 상대 표현 ──
     if re.search(r"(이번\s*달|이번달)", q):
         return _month_window(today.year, today.month)
     if re.search(r"(다음\s*달|다음달)", q):
@@ -295,6 +323,16 @@ def _parse_time_window_from_query(q: str, today: date) -> tuple[date, date] | No
     if re.search(r"(지난\s*달|지난달|저번\s*달|저번달)", q):
         d = _add_months(date(today.year, today.month, 1), -1)
         return _month_window(d.year, d.month)
+
+    # ── "오늘", "내일", "모레" ──
+    if re.search(r"(오늘)", q):
+        return today, today + timedelta(days=1)
+    if re.search(r"(내일)", q):
+        t = today + timedelta(days=1)
+        return t, t + timedelta(days=1)
+    if re.search(r"(모레)", q):
+        t = today + timedelta(days=2)
+        return t, t + timedelta(days=1)
 
     # "2026년 2월"
     m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월", q)
@@ -1922,11 +1960,25 @@ def create_attachment(task_id: int, attachment: AttachmentCreate, db: Session = 
 
 @app.delete("/api/attachments/{attachment_id}")
 def delete_attachment(attachment_id: int):
+    """첨부파일 삭제. S3 + 로컬 모두에서 삭제."""
+    from app.services.s3_service import delete_from_s3, is_s3_configured, get_attachment_s3_key
+
     state = load_state()
-    # If it's a file attachment, delete the physical file too
     att = next((a for a in state.get("attachments", []) if int(a.get("id")) == attachment_id), None)
     if att and att.get("type") == "file" and att.get("stored_name"):
         task_id = att.get("task_id")
+
+        # S3 삭제
+        if is_s3_configured():
+            s3_key = att.get("s3_key", "")
+            if not s3_key and task_id:
+                s3_key = get_attachment_s3_key(
+                    att.get("filename", ""), att["stored_name"], "task", int(task_id)
+                )
+            if s3_key:
+                delete_from_s3(s3_key)
+
+        # 로컬 파일도 있으면 삭제 (기존 파일 정리)
         if task_id:
             file_path = os.path.join(UPLOAD_DIR, f"tasks/{task_id}", att["stored_name"])
             if os.path.exists(file_path):
@@ -1934,6 +1986,7 @@ def delete_attachment(attachment_id: int):
                     os.remove(file_path)
                 except Exception:
                     pass
+
     state["attachments"] = [a for a in state.get("attachments", []) if int(a.get("id")) != attachment_id]
     save_state(state)
     return {"message": "Attachment deleted"}
@@ -1947,7 +2000,10 @@ async def upload_task_file(
     request: Request = None,
     db: Session = Depends(get_db),
 ):
-    """Upload a file attachment to a task."""
+    """Upload a file attachment to a task. S3 우선, S3 실패 시 로컬 저장."""
+    from app.services.s3_service import upload_attachment_bytes_to_s3, is_s3_configured
+    import logging as _logging
+
     state = load_state()
     t = db.query(Task).filter(Task.id == task_id).first()
     if not t:
@@ -1957,27 +2013,52 @@ async def upload_task_file(
     if user_id and user_id > 0:
         check_task_edit_permission(db, state, t.project_id, user_id)
 
-    task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
-    os.makedirs(task_dir, exist_ok=True)
-
     ext = os.path.splitext(file.filename or "")[1]
     stored_name = f"{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(task_dir, stored_name)
+    original_filename = file.filename or stored_name
 
     contents = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    s3_key = ""
+    saved_to_local = False
+
+    if is_s3_configured():
+        # S3 업로드 시도
+        s3_result = upload_attachment_bytes_to_s3(
+            data=contents,
+            original_filename=original_filename,
+            stored_name=stored_name,
+            context_type="task",
+            context_id=task_id,
+        )
+        if s3_result["success"]:
+            s3_key = s3_result["s3_key"]
+        else:
+            # S3 실패 → 로컬에 저장 (데이터 유실 방지)
+            _logging.getLogger("main").warning(f"S3 업로드 실패, 로컬 저장으로 전환: {s3_result['error']}")
+            task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, stored_name), "wb") as f:
+                f.write(contents)
+            saved_to_local = True
+    else:
+        # S3 미설정 → 로컬 저장
+        task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
+        os.makedirs(task_dir, exist_ok=True)
+        with open(os.path.join(task_dir, stored_name), "wb") as f:
+            f.write(contents)
+        saved_to_local = True
 
     attachments = state.get("attachments", [])
     new_att = {
         "id": next_id(attachments),
         "task_id": task_id,
         "url": f"/api/tasks/{task_id}/files/{stored_name}/download",
-        "filename": file.filename or stored_name,
+        "filename": original_filename,
         "stored_name": stored_name,
         "type": "file",
         "size": len(contents),
         "created_at": datetime.now().isoformat(),
+        "s3_key": s3_key,
     }
     attachments.append(new_att)
     state["attachments"] = attachments
@@ -1987,7 +2068,10 @@ async def upload_task_file(
 
 @app.get("/api/tasks/{task_id}/files/{stored_name}/download")
 def download_task_file(task_id: int, stored_name: str):
-    """Download a file attachment from a task."""
+    """Download a file attachment from a task. S3 우선, 없으면 로컬 fallback."""
+    from fastapi.responses import Response
+    from app.services.s3_service import download_from_s3, is_s3_configured
+
     state = load_state()
     att = next(
         (a for a in state.get("attachments", [])
@@ -1997,15 +2081,52 @@ def download_task_file(task_id: int, stored_name: str):
     if not att:
         raise HTTPException(status_code=404, detail="File not found")
 
-    file_path = os.path.join(UPLOAD_DIR, "tasks", str(task_id), stored_name)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found on disk")
+    filename = att.get("filename", stored_name)
+    s3_key = att.get("s3_key", "")
 
-    return FileResponse(
-        path=file_path,
-        filename=att.get("filename", stored_name),
-        media_type="application/octet-stream",
-    )
+    # 1) S3에서 다운로드 시도
+    if s3_key and is_s3_configured():
+        data = download_from_s3(s3_key)
+        if data is not None:
+            # RFC 5987 인코딩으로 한글 파일명 지원
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 2) s3_key가 없지만 S3 설정 + 메타데이터로 key 재구성 시도
+    if not s3_key and is_s3_configured():
+        from app.services.s3_service import get_attachment_s3_key
+        reconstructed_key = get_attachment_s3_key(filename, stored_name, "task", task_id)
+        data = download_from_s3(reconstructed_key)
+        if data is not None:
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 3) 로컬 fallback
+    file_path = os.path.join(UPLOAD_DIR, "tasks", str(task_id), stored_name)
+    if os.path.exists(file_path):
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="application/octet-stream",
+        )
+
+    raise HTTPException(status_code=404, detail="File not found")
 
 # =========================
 # Project Files (실파일 업로드 / sidecar metadata)
@@ -2032,32 +2153,61 @@ async def upload_project_file(
     user_id: int = Query(default=1),
     db: Session = Depends(get_db),
 ):
+    """프로젝트 파일 업로드. S3 우선, S3 실패 시 로컬 저장."""
+    from app.services.s3_service import upload_attachment_bytes_to_s3, is_s3_configured
+    import logging as _logging
+
     state = load_state()
 
     p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    project_dir = os.path.join(UPLOAD_DIR, str(project_id))
-    os.makedirs(project_dir, exist_ok=True)
-
     ext = os.path.splitext(file.filename or "")[1]
     stored_name = f"{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(project_dir, stored_name)
+    original_filename = file.filename or stored_name
 
     contents = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    s3_key = ""
+    saved_to_local = False
+
+    if is_s3_configured():
+        # S3 업로드 시도
+        s3_result = upload_attachment_bytes_to_s3(
+            data=contents,
+            original_filename=original_filename,
+            stored_name=stored_name,
+            context_type="project",
+            context_id=project_id,
+        )
+        if s3_result["success"]:
+            s3_key = s3_result["s3_key"]
+        else:
+            # S3 실패 → 로컬에 저장 (데이터 유실 방지)
+            _logging.getLogger("main").warning(f"S3 업로드 실패, 로컬 저장으로 전환: {s3_result['error']}")
+            project_dir = os.path.join(UPLOAD_DIR, str(project_id))
+            os.makedirs(project_dir, exist_ok=True)
+            with open(os.path.join(project_dir, stored_name), "wb") as f:
+                f.write(contents)
+            saved_to_local = True
+    else:
+        # S3 미설정 → 로컬 저장
+        project_dir = os.path.join(UPLOAD_DIR, str(project_id))
+        os.makedirs(project_dir, exist_ok=True)
+        with open(os.path.join(project_dir, stored_name), "wb") as f:
+            f.write(contents)
+        saved_to_local = True
 
     project_files = state.get("project_files", [])
     new_file = {
         "id": next_id(project_files),
         "project_id": project_id,
-        "filename": file.filename or stored_name,
+        "filename": original_filename,
         "stored_name": stored_name,
         "size": len(contents),
         "uploader_id": user_id,
         "created_at": datetime.now().isoformat(),
+        "s3_key": s3_key,
     }
     project_files.append(new_file)
     state["project_files"] = project_files
@@ -2067,6 +2217,10 @@ async def upload_project_file(
 
 @app.get("/api/projects/{project_id}/files/{file_id}/download")
 def download_project_file(project_id: int, file_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """프로젝트 파일 다운로드. S3 우선, 없으면 로컬 fallback."""
+    from fastapi.responses import Response
+    from app.services.s3_service import download_from_s3, is_s3_configured, get_attachment_s3_key
+
     state = load_state()
 
     if user_id:
@@ -2079,18 +2233,57 @@ def download_project_file(project_id: int, file_id: int, user_id: Optional[int] 
     if not pf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    file_path = os.path.join(UPLOAD_DIR, str(project_id), pf["stored_name"])
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found on disk")
+    filename = pf["filename"]
+    stored_name = pf["stored_name"]
+    s3_key = pf.get("s3_key", "")
 
-    return FileResponse(
-        path=file_path,
-        filename=pf["filename"],
-        media_type="application/octet-stream",
-    )
+    # 1) S3에서 다운로드 시도
+    if s3_key and is_s3_configured():
+        data = download_from_s3(s3_key)
+        if data is not None:
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 2) s3_key 없지만 S3 설정 시 key 재구성
+    if not s3_key and is_s3_configured():
+        reconstructed_key = get_attachment_s3_key(filename, stored_name, "project", project_id)
+        data = download_from_s3(reconstructed_key)
+        if data is not None:
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 3) 로컬 fallback
+    file_path = os.path.join(UPLOAD_DIR, str(project_id), stored_name)
+    if os.path.exists(file_path):
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="application/octet-stream",
+        )
+
+    raise HTTPException(status_code=404, detail="File not found")
 
 @app.delete("/api/projects/{project_id}/files/{file_id}")
 def delete_project_file(project_id: int, file_id: int):
+    """프로젝트 파일 삭제. S3 + 로컬 모두에서 삭제."""
+    from app.services.s3_service import delete_from_s3, is_s3_configured, get_attachment_s3_key
+
     state = load_state()
     project_files = state.get("project_files", [])
 
@@ -2098,6 +2291,15 @@ def delete_project_file(project_id: int, file_id: int):
     if not pf:
         raise HTTPException(status_code=404, detail="File not found")
 
+    # S3 삭제
+    if is_s3_configured():
+        s3_key = pf.get("s3_key", "")
+        if not s3_key:
+            s3_key = get_attachment_s3_key(pf["filename"], pf["stored_name"], "project", project_id)
+        if s3_key:
+            delete_from_s3(s3_key)
+
+    # 로컬 파일도 있으면 삭제 (기존 파일 정리)
     file_path = os.path.join(UPLOAD_DIR, str(project_id), pf["stored_name"])
     if os.path.exists(file_path):
         try:
@@ -2464,11 +2666,14 @@ def get_mentions(user_id: int = Query(...), db: Session = Depends(get_db)):
                 "project_name": project.name if project else "Unknown",
             })
 
-    # ── TaskActivity 멘션 추가 ──
+    # ── TaskActivity 멘션 추가 (체크 완료된 항목은 제외) ──
     activity_mentions = db.query(TaskActivityMention).filter(TaskActivityMention.user_id == user_id).all()
     for am in activity_mentions:
         activity = db.query(TaskActivityModel).filter(TaskActivityModel.id == am.activity_id).first()
         if not activity:
+            continue
+        # 체크박스 타입이고 완료된 항목은 멘션에서 제외
+        if (activity.block_type or "checkbox") == "checkbox" and activity.checked:
             continue
         task = db.query(Task).filter(Task.id == activity.task_id, Task.archived_at.is_(None)).first()
         if not task:
@@ -3532,6 +3737,16 @@ def _resolve_question_scope(query: str, task_details: list, today) -> dict:
     # 2) 기간 매칭
     window = _parse_time_window_from_query(query, today)
 
+    # 2-1) 기간 키워드가 있으면 window가 없어도 schedule로 처리 시도
+    schedule_keywords = ["일정", "마감", "스케줄", "schedule", "deadline", "기한"]
+    has_schedule_keyword = any(kw in query_lower for kw in schedule_keywords)
+
+    # "마감 일정" 같은 경우 이번달로 기본 설정
+    if has_schedule_keyword and not window and not query_matched_tasks:
+        # "다음주 마감" 같은 경우는 이미 window가 잡히므로 여기는 fallback
+        # 기간 키워드만 있고 시간 표현이 없으면 이번달로 기본 설정
+        window = _month_window(today.year, today.month)
+
     # 3) 전체 현황 키워드
     is_full_overview = any(kw in query_lower for kw in [
         "전체 현황", "프로젝트 현황", "전체 요약", "전체 상태", "전체 진행",
@@ -3745,26 +3960,47 @@ def _build_ai_free_question_context(
 
     elif scope_type == "schedule" and window:
         ws, we = window
+        # 기간에 겹치는 task + 날짜 미설정이지만 진행 중인 task도 포함
         filtered_by_time = [t for t in task_details if _task_overlaps_window(t, ws, we)]
+        no_date_active = [
+            t for t in task_details
+            if not t.get("start_date") and not t.get("due_date")
+            and t.get("status") in ("in_progress", "todo")
+        ]
         prompt_tasks = filtered_by_time
         scope_hint = (
             f"\n[기간 제약]\n"
             f"사용자 질문이 요청한 기간은 {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()} 입니다.\n"
-            f"이 기간에 해당하는 Task만 관련 Task로 다루고, 기간 밖 Task는 절대 언급하지 마세요.\n"
+            f"이 기간에 해당하는 Task를 중심으로 답변하세요.\n"
             f"각 Task의 설명/작업노트/일정/담당자를 상세하게 답변하세요.\n"
+            f"날짜가 설정되지 않았지만 진행 중/대기 상태인 Task가 있다면 별도로 안내하세요.\n"
+            f"\n[중요] 아래 컨텍스트에 있는 모든 Task를 빠짐없이 답변에 포함하세요.\n"
+            f"일정이 있으면 날짜순으로 정렬해서 보여주세요.\n"
         )
         # 기간 질문: project members
         context_members = _get_project_member_names(members, users_map)
 
         task_ctx_lines = []
-        for t in filtered_by_time[:30]:
+        for t in filtered_by_time[:50]:
             task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=True))
+
+        # 날짜 미설정 활성 task도 별도 섹션으로 추가
+        no_date_lines = []
+        for t in no_date_active[:20]:
+            no_date_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=False))
 
         proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
         context_str = f"""{proj_ctx}
 
 [기간 내 Task 상세 정보 ({ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()})]
+총 {len(filtered_by_time)}개 Task가 이 기간에 해당합니다.
 {chr(10).join(task_ctx_lines) if task_ctx_lines else "해당 기간에 Task 없음"}
+"""
+        if no_date_lines:
+            context_str += f"""
+[날짜 미설정 활성 Task ({len(no_date_active)}개)]
+아래 Task들은 일정이 미설정이지만 진행 중/대기 상태입니다.
+{chr(10).join(no_date_lines)}
 """
 
     elif scope_type == "project" or is_full_overview:
@@ -3823,7 +4059,7 @@ def _build_ai_free_question_context(
         proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
 
         task_ctx_lines = []
-        for t in task_details[:40]:
+        for t in task_details[:50]:
             task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=True))
 
         context_str = f"""{proj_ctx}
@@ -3978,15 +4214,27 @@ def generate_project_ai_query(
             "제목만 나열하지 말고, 관련 상세 내용을 함께 설명하세요.\n"
         )
 
+    # 기간 질문인 경우 조회 범위 명시 추가
+    date_range_note = ""
+    if scope["scope_type"] == "schedule" and ws and we:
+        date_range_note = (
+            f"\n[조회 기준]\n"
+            f"오늘 날짜: {today.isoformat()}\n"
+            f"조회 기간: {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()}\n"
+            f"컨텍스트에 포함된 Task 수: {len(prompt_tasks)}개\n"
+        )
+
     prompt = f"""당신은 전문 프로젝트 매니저 보조 AI입니다.
 아래 컨텍스트를 바탕으로 사용자의 질문에 답변해주세요.
-{scope_hint}
+{scope_hint}{date_range_note}
 [핵심 원칙]
 - 질문 범위를 먼저 파악하고, 그 범위 안에서만 답변하세요.
-- 전체 Task 나열은 금지입니다. 질문과 관련된 Task만 선별하세요.
+- 기간 관련 질문이면 컨텍스트에 있는 모든 Task를 빠짐없이 포함하세요. 절대 임의로 생략하지 마세요.
+- 일정 정리 요청이면 날짜순(시작일 또는 마감일 기준)으로 정렬하세요.
 - {detail_instruction}
 - 특정 Task 질문이면 해당 Task의 상태/일정/담당자/작업노트/설명/첨부자료를 중심으로 답변하세요.
 - Task 질문일 때 담당자는 해당 Task의 assignee만 언급하세요. 프로젝트 전체 팀원을 보여주지 마세요.
+- 답변 시작 부분에 "조회 기간" 또는 "기준"을 간단히 명시하세요.
 
 [컨텍스트]
 {context_str}
@@ -5144,6 +5392,95 @@ def delete_user_shortcut(shortcut_id: int, user_id: int = Query(...), db: Sessio
     db.delete(s)
     db.commit()
     return {"message": "Shortcut deleted"}
+
+
+# =========================
+# S3 Backup APIs
+# =========================
+@app.post("/api/admin/backup/db")
+def manual_backup_db(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """수동 DB 백업 실행 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from app.services.backup_scheduler import backup_database
+    result = backup_database()
+    return result
+
+@app.post("/api/admin/backup/files")
+def manual_backup_files(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """수동 첨부파일 S3 동기화 실행 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from app.services.backup_scheduler import sync_uploads_to_s3
+    result = sync_uploads_to_s3()
+    return result
+
+@app.get("/api/admin/backup/status")
+def get_backup_status(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """백업 상태/로그 조회 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from app.services.s3_service import is_s3_configured, list_s3_files
+    from app.services.backup_scheduler import BACKUP_LOG_DIR, BACKUP_HOUR, BACKUP_MINUTE
+
+    # 최근 로그 파일 읽기
+    recent_logs = []
+    log_dir = BACKUP_LOG_DIR
+    if os.path.exists(log_dir):
+        log_files = sorted(
+            [f for f in os.listdir(log_dir) if f.startswith("backup_") and f.endswith(".log")],
+            reverse=True
+        )[:3]
+        for lf in log_files:
+            try:
+                with open(os.path.join(log_dir, lf), "r", encoding="utf-8") as f:
+                    lines = f.readlines()[-20:]  # 최근 20줄
+                    recent_logs.extend([l.strip() for l in lines])
+            except Exception:
+                pass
+
+    # S3 백업 파일 목록
+    s3_db_files = []
+    s3_attachment_count = 0
+    if is_s3_configured():
+        try:
+            s3_db_files = list_s3_files("db/")[:20]
+            s3_attachments = list_s3_files("files/")
+            s3_attachment_count = len(s3_attachments)
+        except Exception:
+            pass
+
+    return {
+        "s3_configured": is_s3_configured(),
+        "schedule": f"{BACKUP_HOUR:02d}:{BACKUP_MINUTE:02d} KST daily",
+        "recent_logs": recent_logs,
+        "s3_db_backups": s3_db_files,
+        "s3_attachment_count": s3_attachment_count,
+    }
+
+@app.get("/api/admin/s3/files")
+def list_s3_storage(
+    prefix: str = Query(default=""),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """S3 파일 목록 조회 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from app.services.s3_service import list_s3_files, is_s3_configured
+    if not is_s3_configured():
+        return {"files": [], "message": "S3 not configured"}
+
+    files = list_s3_files(prefix)
+    return {"files": files, "total": len(files)}
 
 
 # =========================

@@ -9,3 +9,5 @@ pymysql
 requests
 PyJWT
 tzdata
+boto3>=1.34.0
+apscheduler>=3.10.0
