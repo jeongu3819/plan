@@ -100,6 +100,50 @@ def _run_migrations():
 
 _run_migrations()
 
+# ── 서버 시작 시 기존 task progress/status 일괄 동기화 ──
+def _sync_all_task_progress():
+    """기존 task들의 checkbox progress 기반 status를 일괄 보정."""
+    db = SessionLocal()
+    try:
+        # checkbox activity가 있는 task만 조회
+        task_ids_with_cb = (
+            db.query(TaskActivityModel.task_id)
+            .filter(TaskActivityModel.block_type.in_(["checkbox", None]))
+            .distinct()
+            .all()
+        )
+        task_ids = {r[0] for r in task_ids_with_cb}
+        if not task_ids:
+            return
+        state = load_state()
+        fixed = 0
+        for tid in task_ids:
+            task = db.query(Task).filter(Task.id == tid, Task.archived_at.is_(None)).first()
+            if not task or task.status == "hold":
+                continue
+            activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == tid).all()
+            checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
+            if not checkboxes:
+                continue
+            total = len(checkboxes)
+            checked = sum(1 for a in checkboxes if a.checked)
+            progress = round(checked / total * 100) if total > 0 else 0
+            expected_status = "todo" if progress == 0 else ("done" if progress >= 100 else "in_progress")
+            meta = get_task_meta(state, tid)
+            if task.status != expected_status or meta.get("progress", 0) != progress:
+                task.status = expected_status
+                task.progress = progress
+                set_task_meta(state, tid, {"progress": progress})
+                fixed += 1
+        if fixed > 0:
+            db.commit()
+            save_state(state)
+            print(f"[startup] Synced {fixed} task(s) progress/status")
+    finally:
+        db.close()
+
+_sync_all_task_progress()
+
 app = FastAPI(title="Antigravity Schedule Platform API")
 
 # SSO 라우터 (/api/auth/*)
@@ -1903,6 +1947,10 @@ def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: 
 
     db.commit()
     db.refresh(t)
+    # 체크박스 activity가 있으면 progress 기반으로 status 재동기화
+    _sync_task_progress(db, task_id)
+    db.refresh(t)  # bulk update 후 ORM 객체에 최신 status 반영
+    state = load_state()  # _sync_task_progress가 sidecar를 갱신했을 수 있으므로 재로드
     return task_dict(t, state)
 
 @app.delete("/api/tasks/{task_id}")
