@@ -2761,7 +2761,7 @@ def get_roadmap(
         "name": project.get("name", ""),
         "start_date": min(start_dates) if start_dates else None,
         "due_date": max(due_dates) if due_dates else None,
-        "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
+        "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if project_progress > 0 else "todo"),
         "progress": project_progress,
         "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
         "children": [],
@@ -2789,7 +2789,7 @@ def get_roadmap(
             "name": sp.get("name", ""),
             "start_date": min(sp_starts) if sp_starts else None,
             "due_date": max(sp_dues) if sp_dues else None,
-            "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
+            "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_progress > 0 else "todo"),
             "progress": sp_progress,
             "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_progress < 100),
             "children": [],
@@ -2888,7 +2888,7 @@ def get_global_roadmap(
             "name": project.get("name", ""),
             "start_date": min(start_dates) if start_dates else None,
             "due_date": max(due_dates) if due_dates else None,
-            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
+            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if project_progress > 0 else "todo"),
             "progress": project_progress,
             "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
             "children": [],
@@ -2916,7 +2916,7 @@ def get_global_roadmap(
                 "name": sp.get("name", ""),
                 "start_date": min(sp_starts) if sp_starts else None,
                 "due_date": max(sp_dues) if sp_dues else None,
-                "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
+                "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_progress > 0 else "todo"),
                 "progress": sp_progress,
                 "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_progress < 100),
                 "children": [],
@@ -3200,7 +3200,7 @@ def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 def _sync_task_progress(db: Session, task_id: int):
-    """Recalculate task progress from checkbox activities only."""
+    """Recalculate task progress from checkbox activities and auto-sync status."""
     activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
     checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
     if not checkboxes:
@@ -3208,7 +3208,20 @@ def _sync_task_progress(db: Session, task_id: int):
     total = len(checkboxes)
     checked = sum(1 for a in checkboxes if a.checked)
     progress = round(checked / total * 100) if total > 0 else 0
-    db.query(Task).filter(Task.id == task_id).update({"progress": progress})
+
+    # Auto-sync status based on progress (hold 상태는 수동 지정이므로 유지)
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        return
+    updates: dict = {"progress": progress}
+    if task.status != "hold":
+        if progress == 0:
+            updates["status"] = "todo"
+        elif progress >= 100:
+            updates["status"] = "done"
+        else:
+            updates["status"] = "in_progress"
+    db.query(Task).filter(Task.id == task_id).update(updates)
     db.commit()
     # Also sync to sidecar task_meta
     state = load_state()
