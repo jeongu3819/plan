@@ -54,19 +54,45 @@ const STEPS: OnboardingStep[] = [
     icon: '📋',
     action: 'closeDrawer',
   },
-  // ── Task Drawer: Status & Priority ──
+  // ── Task Drawer 열기 ──
   {
     tabIndex: 0,
-    title: 'Task 상세 - Status & Priority',
+    title: 'Task 상세 패널',
     description: 'Task를 클릭하면 상세 패널이 열립니다. 지금 열어볼게요!',
     icon: '📝',
     action: 'openFirstTask',
     highlightSelector: 'status-priority-section',
     tips: [
-      'Status: To Do / In Progress / Done / Hold',
-      'Priority: High / Medium / Low',
       'Sub Project: Graph에서 생성한 하위 프로젝트 연결',
-      'Assignees / Schedule / Due Date 설정 가능',
+      'Assignees / Schedule / Due Date / Description 설정 가능',
+      'URL 첨부 / 파일 업로드 지원',
+    ],
+  },
+  // ── Status 드롭다운 열기 ──
+  {
+    tabIndex: 0,
+    title: 'Status 종류 확인',
+    description: 'Status 필드를 열어 어떤 상태가 있는지 확인합니다.',
+    icon: '🔵',
+    action: 'openStatusDropdown',
+    tips: [
+      'To Do: 아직 시작하지 않은 작업',
+      'In Progress: 진행 중인 작업',
+      'Done: 완료된 작업',
+      'Hold: 보류 중인 작업',
+    ],
+  },
+  // ── Priority 드롭다운 열기 ──
+  {
+    tabIndex: 0,
+    title: 'Priority 종류 확인',
+    description: 'Priority 필드를 열어 우선순위 옵션을 확인합니다.',
+    icon: '🔴',
+    action: 'openPriorityDropdown',
+    tips: [
+      'High: 긴급 / 중요 작업',
+      'Medium: 일반 작업 (기본값)',
+      'Low: 낮은 우선순위',
     ],
   },
   // ── Work Note 열기 ──

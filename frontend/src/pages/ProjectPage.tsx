@@ -247,6 +247,25 @@ const ProjectPage: React.FC = () => {
                             case 'closeDrawer':
                                 cd();
                                 break;
+                            case 'openStatusDropdown':
+                                // Status select 드롭다운 열기
+                                setTimeout(() => {
+                                    const sel = document.querySelector('[data-tour="status-select"]');
+                                    const input = sel?.querySelector('.MuiSelect-select, .MuiInputBase-input') as HTMLElement;
+                                    if (input) input.click();
+                                    // 2.5초 후 자동으로 닫기 (바깥 클릭)
+                                    setTimeout(() => document.body.click(), 2500);
+                                }, 600);
+                                break;
+                            case 'openPriorityDropdown':
+                                // Priority select 드롭다운 열기
+                                setTimeout(() => {
+                                    const sel = document.querySelector('[data-tour="priority-select"]');
+                                    const input = sel?.querySelector('.MuiSelect-select, .MuiInputBase-input') as HTMLElement;
+                                    if (input) input.click();
+                                    setTimeout(() => document.body.click(), 2500);
+                                }, 600);
+                                break;
                             case 'openWorkNote':
                                 click('work-note-btn', 600);
                                 break;

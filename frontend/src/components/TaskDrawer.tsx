@@ -346,6 +346,7 @@ const TaskDrawer: React.FC = () => {
                         </Typography>
                         <Box sx={{ display: 'flex', gap: 2 }}>
                             <TextField
+                                data-tour="status-select"
                                 select label="Status" fullWidth size="small"
                                 value={formData.status || 'todo'}
                                 onChange={(e) => handleChange('status', e.target.value)}
@@ -361,6 +362,7 @@ const TaskDrawer: React.FC = () => {
                                 ))}
                             </TextField>
                             <TextField
+                                data-tour="priority-select"
                                 select label="Priority" fullWidth size="small"
                                 value={formData.priority || 'medium'}
                                 onChange={(e) => handleChange('priority', e.target.value)}
