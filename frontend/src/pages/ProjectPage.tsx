@@ -249,25 +249,27 @@ const ProjectPage: React.FC = () => {
                                 cd();
                                 break;
                             case 'openSelectsSequence': {
-                                // Status → Priority → Sub Project 순차: 열기 → 같은 요소 다시 눌러 닫기
-                                const openThenClose = (tourAttr: string, openAt: number, closeAt: number) => {
-                                    // 열기
+                                // Status → Priority → Sub Project 순차: 열기 → backdrop 클릭으로 자연스럽게 닫기
+                                const openSelect = (tourAttr: string, delay: number) => {
                                     setTimeout(() => {
                                         const sel = document.querySelector(`[data-tour="${tourAttr}"]`);
                                         const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
                                         if (trigger) trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                                    }, openAt);
-                                    // 다시 눌러서 닫기
-                                    setTimeout(() => {
-                                        const sel = document.querySelector(`[data-tour="${tourAttr}"]`);
-                                        const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
-                                        if (trigger) trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                                    }, closeAt);
+                                    }, delay);
                                 };
-                                //          열기    닫기
-                                openThenClose('status-select',     600,  2000);  // Status
-                                openThenClose('priority-select',   2500, 3900);  // Priority
-                                openThenClose('subproject-select', 4400, 5800);  // Sub Project
+                                const closeSelect = (delay: number) => {
+                                    setTimeout(() => {
+                                        // MUI Select가 열리면 Backdrop이 생김 → 클릭하면 자연스럽게 닫힘
+                                        const backdrop = document.querySelector('.MuiPopover-root .MuiBackdrop-root, .MuiModal-backdrop') as HTMLElement;
+                                        if (backdrop) backdrop.click();
+                                    }, delay);
+                                };
+                                openSelect('status-select', 600);       // Status 열기
+                                closeSelect(2100);                       // Status 닫기
+                                openSelect('priority-select', 2600);    // Priority 열기
+                                closeSelect(4100);                       // Priority 닫기
+                                openSelect('subproject-select', 4600);  // Sub Project 열기
+                                closeSelect(6100);                       // Sub Project 닫기
                                 break;
                             }
                             case 'demoUrlAttach':
