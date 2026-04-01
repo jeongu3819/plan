@@ -266,6 +266,29 @@ const ProjectPage: React.FC = () => {
                                     setTimeout(() => document.body.click(), 2500);
                                 }, 600);
                                 break;
+                            case 'demoUrlAttach':
+                                // 1) "+" 버튼 클릭 → 폼 열기
+                                setTimeout(() => {
+                                    const addBtn = document.querySelector('[data-tour="url-add-btn"]') as HTMLElement;
+                                    if (addBtn) addBtn.click();
+                                }, 400);
+                                // 2) URL 입력
+                                setTimeout(() => {
+                                    const urlInput = document.querySelector('[data-tour="url-input"] input') as HTMLInputElement;
+                                    const nameInput = document.querySelector('[data-tour="url-name-input"] input') as HTMLInputElement;
+                                    const setVal = (el: HTMLInputElement, val: string) => {
+                                        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                                        if (setter) { setter.call(el, val); el.dispatchEvent(new Event('input', { bubbles: true })); }
+                                    };
+                                    if (urlInput) setVal(urlInput, 'www.naver.com');
+                                    if (nameInput) setTimeout(() => setVal(nameInput, '네이버'), 300);
+                                }, 1200);
+                                // 3) Add 버튼 클릭
+                                setTimeout(() => {
+                                    const submitBtn = document.querySelector('[data-tour="url-add-submit"]') as HTMLElement;
+                                    if (submitBtn) submitBtn.click();
+                                }, 2800);
+                                break;
                             case 'openWorkNote':
                                 click('work-note-btn', 600);
                                 break;
@@ -321,10 +344,31 @@ const ProjectPage: React.FC = () => {
                                     }
                                 }, 800);
                                 break;
-                            // ── Graph: Sub Project 생성 다이얼로그 열기 ──
-                            case 'graphOpenSubProjectDialog':
-                                click('graph-add-subproject', 800);
+                            // ── Graph: Sub Project 생성 (다이얼로그 열기 + 입력 + Create) ──
+                            case 'graphCreateSubProject': {
+                                // 1) 다이얼로그 열기
+                                click('graph-add-subproject', 600);
+                                const setInput = (sel: string, val: string, delay: number) => {
+                                    setTimeout(() => {
+                                        const el = document.querySelector(`[data-tour="${sel}"] input, [data-tour="${sel}"] textarea`) as HTMLInputElement;
+                                        if (!el) return;
+                                        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+                                            || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+                                        if (setter) { setter.call(el, val); el.dispatchEvent(new Event('input', { bubbles: true })); }
+                                        el.focus();
+                                    }, delay);
+                                };
+                                // 2) Name 입력
+                                setInput('graph-sp-name', '데모 서브프로젝트', 1200);
+                                // 3) Description 입력
+                                setInput('graph-sp-desc', '온보딩 투어에서 생성한 예시입니다', 1800);
+                                // 4) Create 버튼 클릭
+                                setTimeout(() => {
+                                    const btn = document.querySelector('[data-tour="graph-sp-create-btn"]') as HTMLElement;
+                                    if (btn) btn.click();
+                                }, 3200);
                                 break;
+                            }
                         }
                     }}
                 />

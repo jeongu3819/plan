@@ -590,7 +590,7 @@ const TaskDrawer: React.FC = () => {
                                     URL 첨부 ({urlAttachments.length})
                                 </Typography>
                                 {canEdit && (
-                                    <IconButton size="small" onClick={() => setShowAttachmentForm(!showAttachmentForm)} sx={{ color: '#2955FF' }}>
+                                    <IconButton data-tour="url-add-btn" size="small" onClick={() => setShowAttachmentForm(!showAttachmentForm)} sx={{ color: '#2955FF' }}>
                                         <AddIcon sx={{ fontSize: '1rem' }} />
                                     </IconButton>
                                 )}
@@ -600,6 +600,7 @@ const TaskDrawer: React.FC = () => {
                             {showAttachmentForm && canEdit && (
                                 <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1.5, bgcolor: '#F8F9FF', borderRadius: 1.5, border: '1px solid #E8EDFF' }}>
                                     <TextField
+                                        data-tour="url-input"
                                         size="small" placeholder="URL..." fullWidth
                                         value={newAttachmentUrl}
                                         onChange={e => setNewAttachmentUrl(e.target.value)}
@@ -607,11 +608,12 @@ const TaskDrawer: React.FC = () => {
                                         sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
                                     />
                                     <TextField
+                                        data-tour="url-name-input"
                                         size="small" placeholder="Name..." sx={{ minWidth: 120, '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
                                         value={newAttachmentName}
                                         onChange={e => setNewAttachmentName(e.target.value)}
                                     />
-                                    <Button size="small" variant="contained"
+                                    <Button data-tour="url-add-submit" size="small" variant="contained"
                                         disabled={!newAttachmentUrl.trim()}
                                         onClick={() => addAttachmentMutation.mutate({ url: newAttachmentUrl.trim(), filename: newAttachmentName.trim() || undefined })}
                                         sx={{ bgcolor: '#2955FF', minWidth: 'auto', px: 2 }}

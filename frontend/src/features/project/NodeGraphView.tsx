@@ -928,6 +928,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
           sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}
         >
           <TextField
+            data-tour="graph-sp-name"
             label="Name"
             size="small"
             value={newSubProjectName}
@@ -936,6 +937,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
             autoFocus
           />
           <TextField
+            data-tour="graph-sp-desc"
             label="Description"
             size="small"
             value={newSubProjectDesc}
@@ -973,6 +975,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
             Cancel
           </Button>
           <Button
+            data-tour="graph-sp-create-btn"
             variant="contained"
             disabled={!newSubProjectName.trim() || createSubProjectMutation.isPending}
             onClick={() => {

@@ -95,6 +95,14 @@ const STEPS: OnboardingStep[] = [
       'Low: 낮은 우선순위',
     ],
   },
+  // ── URL 첨부 시연 ──
+  {
+    tabIndex: 0,
+    title: 'URL 첨부 방법',
+    description: 'URL 첨부 "+" 버튼을 누르고, 주소와 이름을 입력한 뒤 Add를 누르면 첨부됩니다. 지금 해볼게요!',
+    icon: '🔗',
+    action: 'demoUrlAttach',
+  },
   // ── Work Note 열기 ──
   {
     tabIndex: 0,
@@ -202,17 +210,24 @@ const STEPS: OnboardingStep[] = [
       '멘션된 메시지는 "@나를 언급" 페이지에 모아서 표시',
     ],
   },
-  // ── Graph: Sub Project 생성 ──
+  // ── Graph: Sub Project 생성 (다이얼로그 열기 + 입력 + Create) ──
   {
     tabIndex: 5,
     title: 'Graph - Sub Project 생성',
-    description: '좌측 패널의 "Sub Project" 생성 버튼을 확인하세요. 지금 눌러볼게요!',
+    description: 'Sub Project 생성 버튼을 누르고, 이름/설명을 입력한 뒤 Create를 눌러 생성합니다. 지금 해볼게요!',
     icon: '🔗',
-    action: 'graphOpenSubProjectDialog',
+    action: 'graphCreateSubProject',
     highlightSelector: 'graph-add-subproject',
+  },
+  // ── Graph: Task 드래그 연결 안내 ──
+  {
+    tabIndex: 5,
+    title: 'Graph - Task를 Sub Project에 연결',
+    description: '생성된 Sub Project가 그래프에 나타났습니다! Task 노드를 Sub Project 노드로 드래그하면 하위에 연결됩니다.',
+    icon: '🔗',
     tips: [
-      'Sub Project는 Graph에서만 생성 가능합니다',
-      '생성 후 Task를 Sub Project 노드로 드래그하여 연결하세요',
+      'Task 노드를 드래그하여 Sub Project 노드 위에 놓으세요',
+      'Task Details에서 Sub Project 드롭다운으로도 연결 가능',
     ],
   },
 ];
