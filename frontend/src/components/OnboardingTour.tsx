@@ -23,6 +23,7 @@ interface OnboardingStep {
   action?: string;
   tips?: string[];
   highlightSelector?: string;
+  duration?: number;  // step별 커스텀 duration (ms)
 }
 
 const clickEl = (attr: string) => {
@@ -68,31 +69,18 @@ const STEPS: OnboardingStep[] = [
       'URL 첨부 / 파일 업로드 지원',
     ],
   },
-  // ── Status 드롭다운 열기 ──
+  // ── Status → Priority → Sub Project 순차 시연 ──
   {
     tabIndex: 0,
-    title: 'Status 종류 확인',
-    description: 'Status 필드를 열어 어떤 상태가 있는지 확인합니다.',
+    title: 'Status / Priority / Sub Project',
+    description: '각 필드를 순서대로 열어서 어떤 옵션이 있는지 보여드립니다.',
     icon: '🔵',
-    action: 'openStatusDropdown',
+    action: 'openSelectsSequence',
+    duration: 7000,
     tips: [
-      'To Do: 아직 시작하지 않은 작업',
-      'In Progress: 진행 중인 작업',
-      'Done: 완료된 작업',
-      'Hold: 보류 중인 작업',
-    ],
-  },
-  // ── Priority 드롭다운 열기 ──
-  {
-    tabIndex: 0,
-    title: 'Priority 종류 확인',
-    description: 'Priority 필드를 열어 우선순위 옵션을 확인합니다.',
-    icon: '🔴',
-    action: 'openPriorityDropdown',
-    tips: [
-      'High: 긴급 / 중요 작업',
-      'Medium: 일반 작업 (기본값)',
-      'Low: 낮은 우선순위',
+      'Status: To Do / In Progress / Done / Hold',
+      'Priority: High / Medium / Low',
+      'Sub Project: Graph에서 생성한 하위 프로젝트에 연결',
     ],
   },
   // ── URL 첨부 시연 ──
@@ -276,14 +264,15 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
     executeStep(currentStep);
     if (autoPaused) return;
 
+    const dur = step.duration || STEP_DURATION;
     setProgress(0);
     const pi = setInterval(() => {
-      setProgress(prev => prev >= 100 ? 100 : prev + (100 / (STEP_DURATION / 50)));
+      setProgress(prev => prev >= 100 ? 100 : prev + (100 / (dur / 50)));
     }, 50);
     const timer = setTimeout(() => {
       if (currentStep < totalSteps - 1) setCurrentStep(prev => prev + 1);
       else handleComplete();
-    }, STEP_DURATION);
+    }, dur);
 
     return () => { clearTimeout(timer); clearInterval(pi); };
   }, [currentStep, isActive, autoPaused]);

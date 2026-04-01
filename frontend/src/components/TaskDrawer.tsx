@@ -387,6 +387,7 @@ const TaskDrawer: React.FC = () => {
                             Sub Project
                         </Typography>
                         <TextField
+                            data-tour="subproject-select"
                             select
                             fullWidth
                             size="small"

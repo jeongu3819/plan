@@ -248,32 +248,26 @@ const ProjectPage: React.FC = () => {
                             case 'closeDrawer':
                                 cd();
                                 break;
-                            case 'openStatusDropdown':
-                                // MUI Select는 mouseDown으로 열림
-                                setTimeout(() => {
-                                    const sel = document.querySelector('[data-tour="status-select"]');
-                                    const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
-                                    if (trigger) {
-                                        trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                                    }
-                                    // 3초 후 Escape로 닫기
+                            case 'openSelectsSequence': {
+                                // Status → Priority → Sub Project 순차 열기/닫기
+                                const openAndClose = (tourAttr: string, delay: number) => {
                                     setTimeout(() => {
-                                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-                                    }, 3000);
-                                }, 800);
+                                        const sel = document.querySelector(`[data-tour="${tourAttr}"]`);
+                                        const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
+                                        if (trigger) {
+                                            trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                        }
+                                        // 1.5초 후 닫기
+                                        setTimeout(() => {
+                                            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                                        }, 1500);
+                                    }, delay);
+                                };
+                                openAndClose('status-select', 600);     // 0.6초 후 Status 열기
+                                openAndClose('priority-select', 2800);  // 2.8초 후 Priority 열기
+                                openAndClose('subproject-select', 5000); // 5초 후 Sub Project 열기
                                 break;
-                            case 'openPriorityDropdown':
-                                setTimeout(() => {
-                                    const sel = document.querySelector('[data-tour="priority-select"]');
-                                    const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
-                                    if (trigger) {
-                                        trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                                    }
-                                    setTimeout(() => {
-                                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-                                    }, 3000);
-                                }, 800);
-                                break;
+                            }
                             case 'demoUrlAttach':
                                 // 1) "+" 버튼 클릭 → 폼 열기
                                 setTimeout(() => {
