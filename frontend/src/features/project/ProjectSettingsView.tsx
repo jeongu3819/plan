@@ -928,25 +928,20 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
             </Box>
           )}
 
-          {/* Existing users list */}
-          <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', mb: 0.5, display: 'block' }}>
-            등록된 사용자 ({availableUsers.filter(u => {
-              if (!memberSearch) return true;
-              const q = memberSearch.toLowerCase();
-              return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
-            }).length}명)
-          </Typography>
-          {availableUsers.length === 0 && knoxResults.length === 0 ? (
+          {/* 검색 결과가 없을 때 안내 */}
+          {availableUsers.length === 0 && knoxResults.length === 0 && !memberSearch && (
             <Box sx={{ textAlign: 'center', py: 3 }}>
               <Typography variant="body2" sx={{ color: '#9CA3AF' }}>
-                추가할 수 있는 사용자가 없습니다. Knox 검색을 시도하세요.
+                이름을 검색하여 멤버를 추가하세요.
               </Typography>
             </Box>
-          ) : (
+          )}
+
+          {/* 검색어 입력 시 검색 결과 표시 */}
+          {memberSearch && memberSearch.trim().length > 0 && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 250, overflowY: 'auto' }}>
               {availableUsers
                 .filter(u => {
-                  if (!memberSearch) return true;
                   const q = memberSearch.toLowerCase();
                   return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
                 })
@@ -998,11 +993,16 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
                       {user.loginid}
                     </Typography>
                   </Box>
-                  <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.7rem' }}>
-                    {user.role || 'member'}
-                  </Typography>
                 </Box>
               ))}
+              {availableUsers.filter(u => {
+                const q = memberSearch.toLowerCase();
+                return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+              }).length === 0 && knoxResults.length === 0 && (
+                <Typography variant="caption" sx={{ textAlign: 'center', py: 2, color: '#9CA3AF' }}>
+                  검색 결과가 없습니다. Enter를 눌러 Knox 사내 검색을 시도하세요.
+                </Typography>
+              )}
             </Box>
           )}
         </DialogContent>

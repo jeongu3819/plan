@@ -354,6 +354,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     file_download: 'all',
   });
   const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([]);
+  const [memberSearchQuery, setMemberSearchQuery] = useState('');
 
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
 
@@ -392,6 +393,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       setRequireApproval(false);
       setAdvancedOpen(false);
       setSelectedMemberIds([]);
+      setMemberSearchQuery('');
       setPermissions({
         post_write: 'all',
         post_edit: 'all',
@@ -1343,6 +1345,14 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               </Box>
             )}
 
+            <TextField
+              size="small"
+              fullWidth
+              placeholder="이름 또는 아이디로 검색"
+              value={memberSearchQuery}
+              onChange={e => setMemberSearchQuery(e.target.value)}
+              sx={{ mb: 1, '& .MuiOutlinedInput-root': { fontSize: '0.85rem', borderRadius: 2 } }}
+            />
             <Box
               sx={{
                 maxHeight: 160,
@@ -1352,7 +1362,13 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 p: 0.5,
               }}
             >
-              {usersForMemberSelection.map(user => (
+              {usersForMemberSelection
+                .filter(u => {
+                  if (!memberSearchQuery.trim()) return true;
+                  const q = memberSearchQuery.trim().toLowerCase();
+                  return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+                })
+                .map(user => (
                 <Box
                   key={user.id}
                   onClick={() =>
@@ -1620,6 +1636,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         open={importDialogOpen}
         onClose={() => setImportDialogOpen(false)}
         currentUserId={effectiveUserId}
+        spaceId={currentSpaceId}
       />
 
       {/* ─── Space Create/Manage Dialog ─── */}

@@ -121,7 +121,7 @@ const SpaceManagePage: React.FC = () => {
   const pageSpaces = filtered.slice(page * SPACES_PER_PAGE, (page + 1) * SPACES_PER_PAGE);
 
   const favSpaces = allSpaces.filter((s: any) => favoriteIds.includes(s.id));
-  const recentSpaces = recentIds.map(id => allSpaces.find((s: any) => s.id === id)).filter(Boolean).slice(0, 8);
+  const recentSpaces = recentIds.map(id => allSpaces.find((s: any) => s.id === id)).filter((s: any) => s && s.is_member).slice(0, 8);
 
   // Search users for member addition
   const handleMemberSearch = useCallback(async (query: string) => {
