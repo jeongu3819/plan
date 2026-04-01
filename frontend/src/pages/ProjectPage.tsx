@@ -249,27 +249,32 @@ const ProjectPage: React.FC = () => {
                                 cd();
                                 break;
                             case 'openSelectsSequence': {
-                                // Status → Priority → Sub Project 순차: 열기 → backdrop 클릭으로 자연스럽게 닫기
-                                const openSelect = (tourAttr: string, delay: number) => {
+                                // Status → Priority → Sub Project 순차: 열기 → 닫기
+                                const openMuiSelect = (tourAttr: string, delay: number) => {
                                     setTimeout(() => {
                                         const sel = document.querySelector(`[data-tour="${tourAttr}"]`);
                                         const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
                                         if (trigger) trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
                                     }, delay);
                                 };
-                                const closeSelect = (delay: number) => {
+                                const closeMuiSelect = (delay: number) => {
                                     setTimeout(() => {
-                                        // MUI Select가 열리면 Backdrop이 생김 → 클릭하면 자연스럽게 닫힘
-                                        const backdrop = document.querySelector('.MuiPopover-root .MuiBackdrop-root, .MuiModal-backdrop') as HTMLElement;
-                                        if (backdrop) backdrop.click();
+                                        // MUI Popover/Menu backdrop에 mousedown → click 시뮬레이션
+                                        const backdrop = document.querySelector('.MuiPopover-root .MuiBackdrop-root') as HTMLElement
+                                            || document.querySelector('.MuiModal-backdrop') as HTMLElement;
+                                        if (backdrop) {
+                                            backdrop.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                            backdrop.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                                            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                        }
                                     }, delay);
                                 };
-                                openSelect('status-select', 600);       // Status 열기
-                                closeSelect(2100);                       // Status 닫기
-                                openSelect('priority-select', 2600);    // Priority 열기
-                                closeSelect(4100);                       // Priority 닫기
-                                openSelect('subproject-select', 4600);  // Sub Project 열기
-                                closeSelect(6100);                       // Sub Project 닫기
+                                openMuiSelect('status-select', 600);
+                                closeMuiSelect(2100);
+                                openMuiSelect('priority-select', 2600);
+                                closeMuiSelect(4100);
+                                openMuiSelect('subproject-select', 4600);
+                                closeMuiSelect(6100);
                                 break;
                             }
                             case 'demoUrlAttach':
