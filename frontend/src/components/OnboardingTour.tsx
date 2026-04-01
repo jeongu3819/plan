@@ -2,10 +2,10 @@
  * OnboardingTour — Interactive guided walkthrough for template-created projects.
  *
  * Each step switches tabs AND triggers real UI actions:
- * - Opens Task Drawer, clicks Work Note button, highlights sections
- * - Clicks "주차별 진척사항" button
- * - Switches Roadmap views
- *
+ * - Opens Task Drawer, clicks Work Note, checks checkboxes
+ * - Clicks Roadmap Week/Month/Quarter buttons, hide-done toggle
+ * - Opens Graph subproject dialog
+ * - Types @mention in Messenger
  * Uses data-tour attributes on target elements for programmatic clicks.
  */
 
@@ -22,17 +22,15 @@ interface OnboardingStep {
   icon: string;
   action?: string;
   tips?: string[];
-  highlightSelector?: string;  // data-tour selector to highlight
+  highlightSelector?: string;
 }
 
-/** Click a DOM element by data-tour attribute */
-const clickTourElement = (attr: string) => {
+const clickEl = (attr: string) => {
   const el = document.querySelector(`[data-tour="${attr}"]`) as HTMLElement;
   if (el) el.click();
 };
 
-/** Add/remove pulsing highlight to a DOM element */
-const highlightElement = (attr: string, on: boolean) => {
+const highlightEl = (attr: string, on: boolean) => {
   const el = document.querySelector(`[data-tour="${attr}"]`) as HTMLElement;
   if (!el) return;
   if (on) {
@@ -48,124 +46,152 @@ const highlightElement = (attr: string, on: boolean) => {
 };
 
 const STEPS: OnboardingStep[] = [
-  // 1. Board 개요
+  // ── Board ──
   {
     tabIndex: 0,
     title: 'Board - 칸반 보드',
-    description: 'Task를 드래그하여 상태를 변경하세요. 각 컬럼이 상태를 나타냅니다.',
+    description: 'Task를 드래그하여 To Do → In Progress → Done으로 상태를 변경하세요.',
     icon: '📋',
     action: 'closeDrawer',
   },
-  // 2. Task 열기 → Status & Priority 보여주기
+  // ── Task Drawer: Status & Priority ──
   {
     tabIndex: 0,
     title: 'Task 상세 - Status & Priority',
-    description: 'Task를 클릭하면 상세 패널이 열립니다. Status와 Priority를 확인하세요.',
+    description: 'Task를 클릭하면 상세 패널이 열립니다. 지금 열어볼게요!',
     icon: '📝',
     action: 'openFirstTask',
     highlightSelector: 'status-priority-section',
     tips: [
       'Status: To Do / In Progress / Done / Hold',
       'Priority: High / Medium / Low',
+      'Sub Project: Graph에서 생성한 하위 프로젝트 연결',
+      'Assignees / Schedule / Due Date 설정 가능',
     ],
   },
-  // 3. 작업노트 버튼 강조 + 클릭
+  // ── Work Note 열기 ──
   {
     tabIndex: 0,
-    title: 'Task 상세 - 작업노트',
-    description: '작업노트 버튼을 눌러 체크리스트를 확인하세요. 지금 열어볼게요!',
+    title: '작업노트 열기',
+    description: '작업노트 버튼을 눌러 체크리스트를 확인합니다. 지금 열어볼게요!',
     icon: '✅',
     action: 'openWorkNote',
     tips: [
-      '체크리스트를 체크하면 진행률이 자동으로 계산됩니다',
+      '체크리스트를 체크하면 진행률이 자동 계산됩니다',
       '진행률이 Board 컬럼 배치에 직접 반영됩니다',
     ],
   },
-  // 4. 작업노트 체크 → 50% 시연
+  // ── Work Note 체크 → 50% 시연 ──
   {
     tabIndex: 0,
-    title: '작업노트 체크 → 진행률 자동 반영',
-    description: '체크박스를 체크하면 진행률이 올라갑니다. 50% 이상이면 Board에서 "In Progress (50% 이상 진행)" 컬럼으로 자동 이동됩니다.',
+    title: '체크박스 체크 → 50% 이상 진행',
+    description: '체크박스 절반을 체크하여 진행률을 50% 이상으로 만들어 보겠습니다.',
     icon: '📊',
-    action: 'checkWorkNoteItems',
+    action: 'checkHalfItems',
     tips: [
-      '0% → To Do 컬럼',
-      '1~49% → In Progress 컬럼',
-      '50% 이상 → In Progress (50% 이상 진행) 컬럼',
-      '100% → Done 컬럼',
+      '50% 이상 → Board "In Progress (50% 이상 진행)" 컬럼으로 자동 이동',
+      '100% → Done 컬럼으로 자동 이동',
     ],
   },
-  // 5. Board로 돌아와서 변경된 결과 확인
+  // ── Board 변화 확인 ──
   {
     tabIndex: 0,
     title: 'Board - 자동 이동 확인',
-    description: '작업노트 체크 결과가 Board에 바로 반영됩니다. 진행률에 따라 Task가 적절한 컬럼에 위치합니다.',
+    description: '작업노트 체크 결과가 Board에 즉시 반영됩니다. "In Progress (50% 이상 진행)" 컬럼을 확인하세요!',
     icon: '🔄',
     action: 'closeAllAndShowBoard',
   },
-  // 6. 주차별 진척사항
+  // ── 주차별 진척사항 ──
   {
     tabIndex: 0,
     title: '주차별 진척사항',
-    description: '"주차별 진척사항" 버튼을 눌러 주차 단위 진행 현황을 확인합니다. 지금 열어볼게요!',
+    description: '"주차별 진척사항" 버튼을 눌러 주차 단위 진행 현황을 봅니다. 지금 열어볼게요!',
     icon: '📈',
     action: 'showWeeklyProgress',
   },
-  // 7. Board로 복귀
+  // ── Board 복귀 ──
   {
     tabIndex: 0,
-    title: '보드로 돌아가기',
-    description: '보드 뷰로 돌아왔습니다. 이어서 다른 뷰를 살펴보겠습니다.',
+    title: '보드로 복귀',
+    description: '보드 뷰로 돌아왔습니다.',
     icon: '📋',
     action: 'backToBoard',
   },
-  // 8. List
+  // ── List ──
   {
     tabIndex: 1,
     title: 'List - 테이블 뷰',
     description: '전체 Task를 테이블로 확인하세요. 컬럼 헤더를 클릭해 정렬할 수 있습니다.',
     icon: '📊',
   },
-  // 9. Calendar
+  // ── Calendar ──
   {
     tabIndex: 2,
     title: 'Calendar - 달력 뷰',
     description: '마감일 기준으로 Task를 달력에서 확인합니다.',
     icon: '📅',
   },
-  // 10. Roadmap
+  // ── Roadmap: Week ──
   {
     tabIndex: 3,
-    title: 'Roadmap - 타임라인',
-    description: 'Week / Month / Quarter 버튼으로 보기 단위를 전환하세요. "완료된 항목 숨기기"도 가능합니다.',
+    title: 'Roadmap - Week 보기',
+    description: 'Roadmap의 Week 보기입니다. 주 단위 상세 일정을 확인하세요.',
     icon: '🗺️',
-    tips: [
-      'Week: 주 단위 상세 일정',
-      'Month: 월 단위 전체 일정',
-      'Quarter: 분기 단위 장기 일정',
-    ],
+    action: 'roadmapWeek',
   },
-  // 11. Messenger
+  // ── Roadmap: Month ──
+  {
+    tabIndex: 3,
+    title: 'Roadmap - Month 보기',
+    description: 'Month 보기로 전환합니다. 월 단위 전체 일정을 파악할 수 있습니다.',
+    icon: '🗺️',
+    action: 'roadmapMonth',
+  },
+  // ── Roadmap: Quarter ──
+  {
+    tabIndex: 3,
+    title: 'Roadmap - Quarter 보기',
+    description: 'Quarter 보기로 전환합니다. 분기 단위 장기 일정에 적합합니다.',
+    icon: '🗺️',
+    action: 'roadmapQuarter',
+  },
+  // ── Roadmap: 완료 숨기기 ──
+  {
+    tabIndex: 3,
+    title: 'Roadmap - 완료된 항목 숨기기',
+    description: '"완료된 항목 숨기기" 버튼을 눌러봅니다. 진행 중인 항목에 집중할 수 있습니다.',
+    icon: '👁️',
+    action: 'roadmapToggleHideDone',
+    highlightSelector: 'roadmap-hide-done',
+  },
+  // ── Messenger + @멘션 ──
   {
     tabIndex: 4,
-    title: 'Messenger - 팀 협업',
-    description: '@이름으로 팀원에게 멘션 알림을 보내세요. "@나를 언급" 페이지에서 모아 볼 수 있습니다.',
+    title: 'Messenger - @멘션 기능',
+    description: '@이름으로 팀원을 멘션하면 왼쪽 사이드바 "@나를 언급" 페이지에서 확인할 수 있습니다.',
     icon: '💬',
+    action: 'messengerMentionDemo',
+    tips: [
+      '"@개발자1" 처럼 입력하면 해당 멤버에게 알림',
+      '멘션된 메시지는 "@나를 언급" 페이지에 모아서 표시',
+    ],
   },
-  // 12. Graph
+  // ── Graph: Sub Project 생성 ──
   {
     tabIndex: 5,
-    title: 'Graph - Sub Project 관리',
-    description: 'Sub Project를 생성하고 Task를 드래그하여 연결하세요. 좌측 패널의 "서브프로젝트 추가"를 확인하세요.',
+    title: 'Graph - Sub Project 생성',
+    description: '좌측 패널의 "Sub Project" 생성 버튼을 확인하세요. 지금 눌러볼게요!',
     icon: '🔗',
+    action: 'graphOpenSubProjectDialog',
+    highlightSelector: 'graph-add-subproject',
     tips: [
-      'Sub Project는 여기서만 생성 가능',
-      'Task 노드를 Sub Project 노드로 드래그하면 연결됩니다',
+      'Sub Project는 Graph에서만 생성 가능합니다',
+      '생성 후 Task를 Sub Project 노드로 드래그하여 연결하세요',
     ],
   },
 ];
 
-const STEP_DURATION = 5500;
+const STEP_DURATION = 5000;
 
 export interface OnboardingTourProps {
   onComplete: () => void;
@@ -185,180 +211,131 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
 
   const executeStep = useCallback((stepIdx: number) => {
     const s = STEPS[stepIdx];
+    if (prevHighlight) highlightEl(prevHighlight, false);
 
-    // Clear previous highlight
-    if (prevHighlight) highlightElement(prevHighlight, false);
-
-    // Switch tab
     onTabChange(s.tabIndex);
 
-    // Execute action after tab renders
     if (s.action && onAction) {
       setTimeout(() => onAction(s.action!), 400);
     }
 
-    // Highlight target element
     if (s.highlightSelector) {
       setTimeout(() => {
-        highlightElement(s.highlightSelector!, true);
+        highlightEl(s.highlightSelector!, true);
         setPrevHighlight(s.highlightSelector!);
-      }, 800);
+      }, 900);
     } else {
       setPrevHighlight(null);
     }
   }, [onTabChange, onAction, prevHighlight]);
 
-  // Auto-advance timer
   useEffect(() => {
     if (!isActive) return;
-
     executeStep(currentStep);
-
     if (autoPaused) return;
 
     setProgress(0);
-    const progressInterval = setInterval(() => {
+    const pi = setInterval(() => {
       setProgress(prev => prev >= 100 ? 100 : prev + (100 / (STEP_DURATION / 50)));
     }, 50);
-
     const timer = setTimeout(() => {
-      if (currentStep < totalSteps - 1) {
-        setCurrentStep(prev => prev + 1);
-      } else {
-        handleComplete();
-      }
+      if (currentStep < totalSteps - 1) setCurrentStep(prev => prev + 1);
+      else handleComplete();
     }, STEP_DURATION);
 
-    return () => {
-      clearTimeout(timer);
-      clearInterval(progressInterval);
-    };
+    return () => { clearTimeout(timer); clearInterval(pi); };
   }, [currentStep, isActive, autoPaused]);
 
+  const cleanup = useCallback(() => {
+    if (prevHighlight) highlightEl(prevHighlight, false);
+  }, [prevHighlight]);
+
   const handleComplete = useCallback(() => {
-    if (prevHighlight) highlightElement(prevHighlight, false);
+    cleanup();
     setIsActive(false);
     if (onAction) onAction('closeAllAndShowBoard');
     onTabChange(0);
     onComplete();
-  }, [onComplete, onTabChange, onAction, prevHighlight]);
+  }, [onComplete, onTabChange, onAction, cleanup]);
 
-  const handleDisablePermanently = useCallback(() => {
-    if (prevHighlight) highlightElement(prevHighlight, false);
+  const handleDisable = useCallback(() => {
+    cleanup();
     setIsActive(false);
     localStorage.setItem('plan-a-onboarding-disabled', '1');
     if (onAction) onAction('closeAllAndShowBoard');
     onTabChange(0);
     onComplete();
-  }, [onComplete, onTabChange, onAction, prevHighlight]);
+  }, [onComplete, onTabChange, onAction, cleanup]);
 
   const handleNext = () => {
     setAutoPaused(true);
-    if (currentStep < totalSteps - 1) {
-      setCurrentStep(prev => prev + 1);
-    } else {
-      handleComplete();
-    }
+    if (currentStep < totalSteps - 1) setCurrentStep(prev => prev + 1);
+    else handleComplete();
   };
 
   const handlePrev = () => {
     setAutoPaused(true);
-    if (currentStep > 0) {
-      setCurrentStep(prev => prev - 1);
-    }
+    if (currentStep > 0) setCurrentStep(prev => prev - 1);
   };
 
   if (!isActive) return null;
 
   return (
     <Fade in={isActive}>
-      <Box
-        sx={{
-          position: 'fixed',
-          bottom: 32,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 1300,
-          maxWidth: 500,
-          width: '92%',
-        }}
-      >
-        <Paper
-          elevation={8}
-          sx={{
-            p: 2.5, borderRadius: 3,
-            bgcolor: 'rgba(255,255,255,0.97)',
-            backdropFilter: 'blur(20px)',
-            border: '1px solid rgba(41, 85, 255, 0.15)',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.15)',
-          }}
-        >
-          <LinearProgress
-            variant="determinate"
-            value={autoPaused
-              ? ((currentStep + 1) / totalSteps) * 100
-              : ((currentStep + progress / 100) / totalSteps) * 100
-            }
+      <Box sx={{
+        position: 'fixed', bottom: 32, left: '50%', transform: 'translateX(-50%)',
+        zIndex: 1300, maxWidth: 500, width: '92%',
+      }}>
+        <Paper elevation={8} sx={{
+          p: 2.5, borderRadius: 3,
+          bgcolor: 'rgba(255,255,255,0.97)', backdropFilter: 'blur(20px)',
+          border: '1px solid rgba(41, 85, 255, 0.15)',
+          boxShadow: '0 12px 40px rgba(0,0,0,0.15)',
+        }}>
+          <LinearProgress variant="determinate"
+            value={autoPaused ? ((currentStep + 1) / totalSteps) * 100 : ((currentStep + progress / 100) / totalSteps) * 100}
             sx={{
               height: 3, borderRadius: 2, mb: 2, bgcolor: '#E5E7EB',
-              '& .MuiLinearProgress-bar': {
-                bgcolor: '#2955FF', borderRadius: 2,
-                transition: autoPaused ? 'transform 0.3s ease' : 'transform 0.05s linear',
-              },
+              '& .MuiLinearProgress-bar': { bgcolor: '#2955FF', borderRadius: 2,
+                transition: autoPaused ? 'transform 0.3s ease' : 'transform 0.05s linear' },
             }}
           />
-
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
-            <Box sx={{ fontSize: '1.8rem', lineHeight: 1, flexShrink: 0, mt: 0.3 }}>
-              {step.icon}
-            </Box>
+            <Box sx={{ fontSize: '1.8rem', lineHeight: 1, flexShrink: 0, mt: 0.3 }}>{step.icon}</Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#1A1D29' }}>
                   {step.title}
                 </Typography>
-                <Chip
-                  label={`${currentStep + 1}/${totalSteps}`}
-                  size="small"
-                  sx={{ height: 16, fontSize: '0.55rem', fontWeight: 700, bgcolor: '#EEF2FF', color: '#2955FF' }}
-                />
+                <Chip label={`${currentStep + 1}/${totalSteps}`} size="small"
+                  sx={{ height: 16, fontSize: '0.55rem', fontWeight: 700, bgcolor: '#EEF2FF', color: '#2955FF' }} />
               </Box>
               <Typography variant="body2" sx={{ fontSize: '0.78rem', color: '#6B7280', lineHeight: 1.5, mb: step.tips ? 1 : 0 }}>
                 {step.description}
               </Typography>
-              {step.tips && step.tips.length > 0 && (
+              {step.tips && (
                 <Box sx={{ bgcolor: '#F8FAFC', borderRadius: 1.5, p: 1.2, border: '1px solid #E5E7EB' }}>
                   {step.tips.map((tip, i) => (
                     <Box key={i} sx={{ display: 'flex', gap: 0.8, alignItems: 'flex-start', mb: i < step.tips!.length - 1 ? 0.5 : 0 }}>
                       <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#2955FF', mt: 0.7, flexShrink: 0 }} />
-                      <Typography variant="caption" sx={{ fontSize: '0.7rem', color: '#4B5563', lineHeight: 1.5 }}>
-                        {tip}
-                      </Typography>
+                      <Typography variant="caption" sx={{ fontSize: '0.7rem', color: '#4B5563', lineHeight: 1.5 }}>{tip}</Typography>
                     </Box>
                   ))}
                 </Box>
               )}
             </Box>
           </Box>
-
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2 }}>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               <Button size="small" onClick={() => handleComplete()}
-                sx={{ textTransform: 'none', color: '#9CA3AF', fontSize: '0.72rem', fontWeight: 600, minWidth: 0 }}>
-                닫기
-              </Button>
-              <Button size="small" onClick={handleDisablePermanently}
-                sx={{ textTransform: 'none', color: '#D1D5DB', fontSize: '0.65rem', fontWeight: 500, minWidth: 0 }}>
-                다시 보지 않기
-              </Button>
+                sx={{ textTransform: 'none', color: '#9CA3AF', fontSize: '0.72rem', fontWeight: 600, minWidth: 0 }}>닫기</Button>
+              <Button size="small" onClick={handleDisable}
+                sx={{ textTransform: 'none', color: '#D1D5DB', fontSize: '0.65rem', fontWeight: 500, minWidth: 0 }}>다시 보지 않기</Button>
             </Box>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {currentStep > 0 && (
-                <Button size="small" onClick={handlePrev}
-                  startIcon={<ArrowBackIcon sx={{ fontSize: 14 }} />}
-                  sx={{ textTransform: 'none', fontSize: '0.72rem', fontWeight: 600, color: '#6B7280', minWidth: 0 }}>
-                  이전
-                </Button>
+                <Button size="small" onClick={handlePrev} startIcon={<ArrowBackIcon sx={{ fontSize: 14 }} />}
+                  sx={{ textTransform: 'none', fontSize: '0.72rem', fontWeight: 600, color: '#6B7280', minWidth: 0 }}>이전</Button>
               )}
               <Button size="small" variant="contained" onClick={handleNext}
                 endIcon={currentStep < totalSteps - 1 ? <ArrowForwardIcon sx={{ fontSize: 14 }} /> : <AutoAwesomeIcon sx={{ fontSize: 14 }} />}

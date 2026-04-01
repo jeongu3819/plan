@@ -232,44 +232,80 @@ const ProjectPage: React.FC = () => {
                     onComplete={() => setShowOnboarding(false)}
                     onTabChange={(tabIndex) => setView(tabIndex)}
                     onAction={(action) => {
-                        const { closeDrawer } = useAppStore.getState();
-                        if (action === 'openFirstTask') {
-                            const firstTask = tasks.find(t => t.status !== 'done') || tasks[0];
-                            if (firstTask) openDrawer(firstTask, projectId);
-                        } else if (action === 'closeDrawer') {
-                            closeDrawer();
-                        } else if (action === 'openWorkNote') {
-                            // 작업노트 버튼 클릭 (data-tour="work-note-btn")
-                            setTimeout(() => {
-                                const btn = document.querySelector('[data-tour="work-note-btn"]') as HTMLElement;
-                                if (btn) btn.click();
-                            }, 600);
-                        } else if (action === 'checkWorkNoteItems') {
-                            // WorkNoteModal 안의 체크박스를 체크 (unchecked → checked)
-                            setTimeout(() => {
-                                const unchecked = document.querySelectorAll('.MuiDialog-root [data-testid="RadioButtonUncheckedIcon"]');
-                                // 절반 이상 체크하여 50% 이상 시연
-                                const toCheck = Math.ceil(unchecked.length * 0.6);
-                                for (let i = 0; i < Math.min(toCheck, unchecked.length); i++) {
-                                    const btn = unchecked[i]?.closest('button');
-                                    if (btn) setTimeout(() => (btn as HTMLElement).click(), i * 400);
-                                }
-                            }, 600);
-                        } else if (action === 'closeAllAndShowBoard') {
-                            // WorkNote 닫기 + Drawer 닫기
-                            // WorkNote Dialog 닫기 버튼 클릭
-                            const closeBtn = document.querySelector('.MuiDialog-root .MuiIconButton-root') as HTMLElement;
-                            if (closeBtn) closeBtn.click();
-                            setTimeout(() => closeDrawer(), 300);
-                        } else if (action === 'showWeeklyProgress') {
-                            closeDrawer();
-                            setTimeout(() => {
-                                const btn = document.querySelector('[data-tour="weekly-progress-btn"]') as HTMLElement;
-                                if (btn) btn.click();
-                            }, 500);
-                        } else if (action === 'backToBoard') {
-                            const btn = document.querySelector('[data-tour="board-view-btn"]') as HTMLElement;
-                            if (btn) btn.click();
+                        const { closeDrawer: cd } = useAppStore.getState();
+                        const click = (sel: string, delay = 0) => setTimeout(() => {
+                            const el = document.querySelector(`[data-tour="${sel}"]`) as HTMLElement;
+                            if (el) el.click();
+                        }, delay);
+
+                        switch (action) {
+                            case 'openFirstTask': {
+                                const t = tasks.find(t => t.status !== 'done') || tasks[0];
+                                if (t) openDrawer(t, projectId);
+                                break;
+                            }
+                            case 'closeDrawer':
+                                cd();
+                                break;
+                            case 'openWorkNote':
+                                click('work-note-btn', 600);
+                                break;
+                            case 'checkHalfItems':
+                                // 체크박스 절반만 체크 (50% 이상 시연)
+                                setTimeout(() => {
+                                    const unchecked = document.querySelectorAll('.MuiDialog-root [data-testid="RadioButtonUncheckedIcon"]');
+                                    const half = Math.ceil(unchecked.length / 2);
+                                    for (let i = 0; i < Math.min(half, unchecked.length); i++) {
+                                        const btn = unchecked[i]?.closest('button');
+                                        if (btn) setTimeout(() => (btn as HTMLElement).click(), i * 500);
+                                    }
+                                }, 600);
+                                break;
+                            case 'closeAllAndShowBoard': {
+                                const dlgClose = document.querySelector('.MuiDialog-root .MuiIconButton-root') as HTMLElement;
+                                if (dlgClose) dlgClose.click();
+                                setTimeout(() => cd(), 300);
+                                break;
+                            }
+                            case 'showWeeklyProgress':
+                                cd();
+                                click('weekly-progress-btn', 500);
+                                break;
+                            case 'backToBoard':
+                                click('board-view-btn');
+                                break;
+                            // ── Roadmap actions ──
+                            case 'roadmapWeek':
+                                click('roadmap-week', 500);
+                                break;
+                            case 'roadmapMonth':
+                                click('roadmap-month', 500);
+                                break;
+                            case 'roadmapQuarter':
+                                click('roadmap-quarter', 500);
+                                break;
+                            case 'roadmapToggleHideDone':
+                                click('roadmap-hide-done', 500);
+                                break;
+                            // ── Messenger @멘션 데모 ──
+                            case 'messengerMentionDemo':
+                                setTimeout(() => {
+                                    const input = document.querySelector('[data-tour="messenger-input"] textarea, [data-tour="messenger-input"] input') as HTMLInputElement;
+                                    if (input) {
+                                        const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+                                            || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                                        if (nativeSet) {
+                                            nativeSet.call(input, '@개발자1 이 부분 확인 부탁드립니다!');
+                                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                                        }
+                                        input.focus();
+                                    }
+                                }, 800);
+                                break;
+                            // ── Graph: Sub Project 생성 다이얼로그 열기 ──
+                            case 'graphOpenSubProjectDialog':
+                                click('graph-add-subproject', 800);
+                                break;
                         }
                     }}
                 />

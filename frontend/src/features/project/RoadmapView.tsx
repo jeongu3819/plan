@@ -808,9 +808,9 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
             },
           }}
         >
-          <ToggleButton value="week">Week</ToggleButton>
-          <ToggleButton value="month">Month</ToggleButton>
-          <ToggleButton value="quarter">Quarter</ToggleButton>
+          <ToggleButton data-tour="roadmap-week" value="week">Week</ToggleButton>
+          <ToggleButton data-tour="roadmap-month" value="month">Month</ToggleButton>
+          <ToggleButton data-tour="roadmap-quarter" value="quarter">Quarter</ToggleButton>
         </ToggleButtonGroup>
 
         <Tooltip title="Today">
@@ -821,6 +821,7 @@ const RoadmapView: React.FC<RoadmapViewProps> = ({ projectId }) => {
 
         <Tooltip title={hideDone ? '완료된 항목 보기' : '완료된 항목 숨기기'}>
           <IconButton
+            data-tour="roadmap-hide-done"
             size="small"
             onClick={() => setHideDone(!hideDone)}
             sx={{ color: hideDone ? '#9CA3AF' : '#22C55E' }}

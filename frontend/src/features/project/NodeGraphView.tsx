@@ -622,6 +622,7 @@ const NodeGraphView: React.FC<NodeGraphViewProps> = ({ projectId }) => {
         {/* Creation buttons */}
         <Tooltip title="Create Subproject (drag onto graph to place)">
           <Button
+            data-tour="graph-add-subproject"
             variant="outlined"
             size="small"
             startIcon={<AccountTreeIcon />}
