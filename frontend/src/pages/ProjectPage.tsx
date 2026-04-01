@@ -249,23 +249,30 @@ const ProjectPage: React.FC = () => {
                                 cd();
                                 break;
                             case 'openStatusDropdown':
-                                // Status select 드롭다운 열기
+                                // MUI Select는 mouseDown으로 열림
                                 setTimeout(() => {
                                     const sel = document.querySelector('[data-tour="status-select"]');
-                                    const input = sel?.querySelector('.MuiSelect-select, .MuiInputBase-input') as HTMLElement;
-                                    if (input) input.click();
-                                    // 2.5초 후 자동으로 닫기 (바깥 클릭)
-                                    setTimeout(() => document.body.click(), 2500);
-                                }, 600);
+                                    const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
+                                    if (trigger) {
+                                        trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                    }
+                                    // 3초 후 Escape로 닫기
+                                    setTimeout(() => {
+                                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                                    }, 3000);
+                                }, 800);
                                 break;
                             case 'openPriorityDropdown':
-                                // Priority select 드롭다운 열기
                                 setTimeout(() => {
                                     const sel = document.querySelector('[data-tour="priority-select"]');
-                                    const input = sel?.querySelector('.MuiSelect-select, .MuiInputBase-input') as HTMLElement;
-                                    if (input) input.click();
-                                    setTimeout(() => document.body.click(), 2500);
-                                }, 600);
+                                    const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
+                                    if (trigger) {
+                                        trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                    }
+                                    setTimeout(() => {
+                                        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                                    }, 3000);
+                                }, 800);
                                 break;
                             case 'demoUrlAttach':
                                 // 1) "+" 버튼 클릭 → 폼 열기
