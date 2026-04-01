@@ -1353,78 +1353,95 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               onChange={e => setMemberSearchQuery(e.target.value)}
               sx={{ mb: 1, '& .MuiOutlinedInput-root': { fontSize: '0.85rem', borderRadius: 2 } }}
             />
-            <Box
-              sx={{
-                maxHeight: 160,
-                overflowY: 'auto',
-                border: '1px solid #E5E7EB',
-                borderRadius: 2,
-                p: 0.5,
-              }}
-            >
-              {usersForMemberSelection
-                .filter(u => {
-                  if (!memberSearchQuery.trim()) return true;
-                  const q = memberSearchQuery.trim().toLowerCase();
-                  return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
-                })
-                .map(user => (
-                <Box
-                  key={user.id}
-                  onClick={() =>
-                    setSelectedMemberIds(prev =>
-                      prev.includes(user.id)
-                        ? prev.filter(id => id !== user.id)
-                        : [...prev, user.id]
-                    )
-                  }
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    py: 0.5,
-                    px: 1,
-                    borderRadius: 1.5,
-                    cursor: 'pointer',
-                    '&:hover': { bgcolor: '#F3F4F6' },
-                    bgcolor: selectedMemberIds.includes(user.id) ? '#EEF2FF' : 'transparent',
-                  }}
-                >
-                  <Checkbox
-                    size="small"
-                    checked={selectedMemberIds.includes(user.id)}
-                    sx={{ p: 0.3 }}
-                  />
-                  <Avatar
+            {/* 선택된 멤버 표시 */}
+            {selectedMemberIds.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+                {selectedMemberIds.map(uid => {
+                  const u = usersForMemberSelection.find(x => x.id === uid);
+                  if (!u) return null;
+                  return (
+                    <Chip
+                      key={uid}
+                      label={u.username}
+                      size="small"
+                      onDelete={() => setSelectedMemberIds(prev => prev.filter(id => id !== uid))}
+                      sx={{ height: 24, fontSize: '0.72rem', fontWeight: 600, bgcolor: '#EEF2FF', color: '#2955FF' }}
+                    />
+                  );
+                })}
+              </Box>
+            )}
+            {/* 검색어 입력 시에만 결과 표시 */}
+            {memberSearchQuery.trim() && (
+              <Box
+                sx={{
+                  maxHeight: 160,
+                  overflowY: 'auto',
+                  border: '1px solid #E5E7EB',
+                  borderRadius: 2,
+                  p: 0.5,
+                }}
+              >
+                {usersForMemberSelection
+                  .filter(u => {
+                    const q = memberSearchQuery.trim().toLowerCase();
+                    return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+                  })
+                  .map(user => (
+                  <Box
+                    key={user.id}
+                    onClick={() =>
+                      setSelectedMemberIds(prev =>
+                        prev.includes(user.id)
+                          ? prev.filter(id => id !== user.id)
+                          : [...prev, user.id]
+                      )
+                    }
                     sx={{
-                      width: 22,
-                      height: 22,
-                      fontSize: '0.55rem',
-                      bgcolor: user.avatar_color || '#2955FF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      py: 0.5,
+                      px: 1,
+                      borderRadius: 1.5,
+                      cursor: 'pointer',
+                      '&:hover': { bgcolor: '#F3F4F6' },
+                      bgcolor: selectedMemberIds.includes(user.id) ? '#EEF2FF' : 'transparent',
                     }}
                   >
-                    {user.username.charAt(0).toUpperCase()}
-                  </Avatar>
-                  <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
-                    {user.username}
-                  </Typography>
+                    <Checkbox
+                      size="small"
+                      checked={selectedMemberIds.includes(user.id)}
+                      sx={{ p: 0.3 }}
+                    />
+                    <Avatar
+                      sx={{
+                        width: 22,
+                        height: 22,
+                        fontSize: '0.55rem',
+                        bgcolor: user.avatar_color || '#2955FF',
+                      }}
+                    >
+                      {user.username.charAt(0).toUpperCase()}
+                    </Avatar>
+                    <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                      {user.username}
+                    </Typography>
+                  </Box>
+                ))}
+                {usersForMemberSelection.filter(u => {
+                  const q = memberSearchQuery.trim().toLowerCase();
+                  return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+                }).length === 0 && (
                   <Typography
-                    variant="caption"
-                    sx={{ color: '#9CA3AF', fontSize: '0.65rem', ml: 'auto' }}
+                    variant="body2"
+                    sx={{ color: '#9CA3AF', fontSize: '0.8rem', textAlign: 'center', py: 2 }}
                   >
-                    {user.role || 'member'}
+                    검색 결과가 없습니다
                   </Typography>
-                </Box>
-              ))}
-              {usersForMemberSelection.length === 0 && (
-                <Typography
-                  variant="body2"
-                  sx={{ color: '#9CA3AF', fontSize: '0.8rem', textAlign: 'center', py: 2 }}
-                >
-                  추가할 수 있는 사용자가 없습니다
-                </Typography>
-              )}
-            </Box>
+                )}
+              </Box>
+            )}
           </Box>}
 
           {isAdminLike && <>

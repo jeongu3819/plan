@@ -231,6 +231,15 @@ const ProjectPage: React.FC = () => {
                 <OnboardingTour
                     onComplete={() => setShowOnboarding(false)}
                     onTabChange={(tabIndex) => setView(tabIndex)}
+                    onAction={(action) => {
+                        if (action === 'openFirstTask') {
+                            const firstTask = tasks.find(t => t.status !== 'done');
+                            if (firstTask) openDrawer(firstTask, projectId);
+                        } else if (action === 'closeDrawer') {
+                            const { closeDrawer } = useAppStore.getState();
+                            closeDrawer();
+                        }
+                    }}
                 />
             )}
         </Box>
