@@ -249,23 +249,25 @@ const ProjectPage: React.FC = () => {
                                 cd();
                                 break;
                             case 'openSelectsSequence': {
-                                // Status → Priority → Sub Project 순차 열기/닫기
-                                const openAndClose = (tourAttr: string, delay: number) => {
+                                // Status → Priority → Sub Project 순차: 열기 → 같은 요소 다시 눌러 닫기
+                                const openThenClose = (tourAttr: string, openAt: number, closeAt: number) => {
+                                    // 열기
                                     setTimeout(() => {
                                         const sel = document.querySelector(`[data-tour="${tourAttr}"]`);
                                         const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
-                                        if (trigger) {
-                                            trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                                        }
-                                        // 1.5초 후 닫기
-                                        setTimeout(() => {
-                                            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-                                        }, 1500);
-                                    }, delay);
+                                        if (trigger) trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                    }, openAt);
+                                    // 다시 눌러서 닫기
+                                    setTimeout(() => {
+                                        const sel = document.querySelector(`[data-tour="${tourAttr}"]`);
+                                        const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
+                                        if (trigger) trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                    }, closeAt);
                                 };
-                                openAndClose('status-select', 600);     // 0.6초 후 Status 열기
-                                openAndClose('priority-select', 2800);  // 2.8초 후 Priority 열기
-                                openAndClose('subproject-select', 5000); // 5초 후 Sub Project 열기
+                                //          열기    닫기
+                                openThenClose('status-select',     600,  2000);  // Status
+                                openThenClose('priority-select',   2500, 3900);  // Priority
+                                openThenClose('subproject-select', 4400, 5800);  // Sub Project
                                 break;
                             }
                             case 'demoUrlAttach':
