@@ -219,14 +219,15 @@ const STEPS: OnboardingStep[] = [
     action: 'graphCreateSubProject',
     highlightSelector: 'graph-add-subproject',
   },
-  // ── Graph: Task 드래그 연결 안내 ──
+  // ── Graph: Task를 Sub Project에 연결 (실제 API 호출) ──
   {
     tabIndex: 5,
     title: 'Graph - Task를 Sub Project에 연결',
-    description: '생성된 Sub Project가 그래프에 나타났습니다! Task 노드를 Sub Project 노드로 드래그하면 하위에 연결됩니다.',
+    description: '첫 번째 Task를 방금 만든 Sub Project에 연결합니다. 그래프가 업데이트되는 것을 확인하세요!',
     icon: '🔗',
+    action: 'graphAssignTaskToSubProject',
     tips: [
-      'Task 노드를 드래그하여 Sub Project 노드 위에 놓으세요',
+      '실제로는 Task 노드를 드래그하여 Sub Project 위에 놓으면 연결됩니다',
       'Task Details에서 Sub Project 드롭다운으로도 연결 가능',
     ],
   },

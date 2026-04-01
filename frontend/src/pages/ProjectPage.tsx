@@ -14,7 +14,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SettingsIcon from '@mui/icons-material/Settings';
 import AddIcon from '@mui/icons-material/Add';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Project } from '../api/client';
 import { Task } from '../types';
 import { useAppStore } from '../stores/useAppStore';
@@ -51,6 +51,7 @@ const ProjectPage: React.FC = () => {
     const tabParam = searchParams.get('tab');
     const [view, setView] = useState(tabParam ? (TAB_MAP[tabParam] ?? 0) : 0);
     const { openDrawer, filterSearch, setFilterSearch, currentUserId } = useAppStore();
+    const queryClient = useQueryClient();
 
     // Onboarding tour — only for template-created projects (URL has ?onboarding=1)
     const onboardingParam = searchParams.get('onboarding');
@@ -344,6 +345,23 @@ const ProjectPage: React.FC = () => {
                                     }
                                 }, 800);
                                 break;
+                            // ── Graph: Task를 Sub Project에 실제 연결 ──
+                            case 'graphAssignTaskToSubProject': {
+                                // 첫 번째 task를 최신 subproject에 연결
+                                setTimeout(async () => {
+                                    try {
+                                        const subs = await api.getSubProjects(projectId);
+                                        const firstTask = tasks[0];
+                                        if (subs.length > 0 && firstTask) {
+                                            const latestSub = subs[subs.length - 1];
+                                            await api.updateTask(firstTask.id, { sub_project_id: latestSub.id } as any);
+                                            queryClient.invalidateQueries({ queryKey: ['graph', projectId] });
+                                            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+                                        }
+                                    } catch (e) { /* ignore */ }
+                                }, 800);
+                                break;
+                            }
                             // ── Graph: Sub Project 생성 (다이얼로그 열기 + 입력 + Create) ──
                             case 'graphCreateSubProject': {
                                 // 1) 다이얼로그 열기
