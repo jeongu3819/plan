@@ -232,12 +232,44 @@ const ProjectPage: React.FC = () => {
                     onComplete={() => setShowOnboarding(false)}
                     onTabChange={(tabIndex) => setView(tabIndex)}
                     onAction={(action) => {
+                        const { closeDrawer } = useAppStore.getState();
                         if (action === 'openFirstTask') {
-                            const firstTask = tasks.find(t => t.status !== 'done');
+                            const firstTask = tasks.find(t => t.status !== 'done') || tasks[0];
                             if (firstTask) openDrawer(firstTask, projectId);
                         } else if (action === 'closeDrawer') {
-                            const { closeDrawer } = useAppStore.getState();
                             closeDrawer();
+                        } else if (action === 'openWorkNote') {
+                            // 작업노트 버튼 클릭 (data-tour="work-note-btn")
+                            setTimeout(() => {
+                                const btn = document.querySelector('[data-tour="work-note-btn"]') as HTMLElement;
+                                if (btn) btn.click();
+                            }, 600);
+                        } else if (action === 'checkWorkNoteItems') {
+                            // WorkNoteModal 안의 체크박스를 체크 (unchecked → checked)
+                            setTimeout(() => {
+                                const unchecked = document.querySelectorAll('.MuiDialog-root [data-testid="RadioButtonUncheckedIcon"]');
+                                // 절반 이상 체크하여 50% 이상 시연
+                                const toCheck = Math.ceil(unchecked.length * 0.6);
+                                for (let i = 0; i < Math.min(toCheck, unchecked.length); i++) {
+                                    const btn = unchecked[i]?.closest('button');
+                                    if (btn) setTimeout(() => (btn as HTMLElement).click(), i * 400);
+                                }
+                            }, 600);
+                        } else if (action === 'closeAllAndShowBoard') {
+                            // WorkNote 닫기 + Drawer 닫기
+                            // WorkNote Dialog 닫기 버튼 클릭
+                            const closeBtn = document.querySelector('.MuiDialog-root .MuiIconButton-root') as HTMLElement;
+                            if (closeBtn) closeBtn.click();
+                            setTimeout(() => closeDrawer(), 300);
+                        } else if (action === 'showWeeklyProgress') {
+                            closeDrawer();
+                            setTimeout(() => {
+                                const btn = document.querySelector('[data-tour="weekly-progress-btn"]') as HTMLElement;
+                                if (btn) btn.click();
+                            }, 500);
+                        } else if (action === 'backToBoard') {
+                            const btn = document.querySelector('[data-tour="board-view-btn"]') as HTMLElement;
+                            if (btn) btn.click();
                         }
                     }}
                 />

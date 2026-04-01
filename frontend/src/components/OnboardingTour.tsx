@@ -1,8 +1,12 @@
 /**
  * OnboardingTour — Interactive guided walkthrough for template-created projects.
  *
- * Each step switches tabs AND triggers real UI actions (open task drawer,
- * switch roadmap view, etc.) so users see the actual feature in action.
+ * Each step switches tabs AND triggers real UI actions:
+ * - Opens Task Drawer, clicks Work Note button, highlights sections
+ * - Clicks "주차별 진척사항" button
+ * - Switches Roadmap views
+ *
+ * Uses data-tour attributes on target elements for programmatic clicks.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -16,95 +20,152 @@ interface OnboardingStep {
   title: string;
   description: string;
   icon: string;
-  action?: string;  // Action to trigger on entering this step
+  action?: string;
   tips?: string[];
+  highlightSelector?: string;  // data-tour selector to highlight
 }
 
+/** Click a DOM element by data-tour attribute */
+const clickTourElement = (attr: string) => {
+  const el = document.querySelector(`[data-tour="${attr}"]`) as HTMLElement;
+  if (el) el.click();
+};
+
+/** Add/remove pulsing highlight to a DOM element */
+const highlightElement = (attr: string, on: boolean) => {
+  const el = document.querySelector(`[data-tour="${attr}"]`) as HTMLElement;
+  if (!el) return;
+  if (on) {
+    el.style.outline = '3px solid #2955FF';
+    el.style.outlineOffset = '4px';
+    el.style.borderRadius = '8px';
+    el.style.transition = 'outline 0.3s ease';
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } else {
+    el.style.outline = '';
+    el.style.outlineOffset = '';
+  }
+};
+
 const STEPS: OnboardingStep[] = [
+  // 1. Board 개요
   {
     tabIndex: 0,
     title: 'Board - 칸반 보드',
-    description: 'Task를 드래그하여 To Do → In Progress → Done으로 상태를 변경하세요.',
+    description: 'Task를 드래그하여 상태를 변경하세요. 각 컬럼이 상태를 나타냅니다.',
     icon: '📋',
     action: 'closeDrawer',
-    tips: [
-      '작업노트 체크 진행률 50% 이상 → "In Progress (50% 이상)" 자동 이동',
-      '진행률 100% → Done으로 자동 이동',
-    ],
   },
+  // 2. Task 열기 → Status & Priority 보여주기
   {
     tabIndex: 0,
-    title: 'Task 상세 정보',
-    description: 'Task를 클릭하면 상세 패널이 열립니다. 지금 열어볼게요!',
+    title: 'Task 상세 - Status & Priority',
+    description: 'Task를 클릭하면 상세 패널이 열립니다. Status와 Priority를 확인하세요.',
     icon: '📝',
     action: 'openFirstTask',
+    highlightSelector: 'status-priority-section',
     tips: [
       'Status: To Do / In Progress / Done / Hold',
       'Priority: High / Medium / Low',
-      'Sub Project: Graph 탭에서 생성한 하위 프로젝트 연결',
-      'Assignees: 멤버 중 담당자 지정',
-      'Schedule: 시작일 ~ 마감일 설정',
     ],
   },
+  // 3. 작업노트 버튼 강조 + 클릭
   {
     tabIndex: 0,
-    title: 'Task - 작업노트 / 첨부',
-    description: '상세 패널에서 작업노트, 설명, 첨부파일을 확인하세요.',
-    icon: '📎',
+    title: 'Task 상세 - 작업노트',
+    description: '작업노트 버튼을 눌러 체크리스트를 확인하세요. 지금 열어볼게요!',
+    icon: '✅',
+    action: 'openWorkNote',
     tips: [
-      '작업노트: 체크리스트 체크 → 진행률 자동 계산 → Board 컬럼 이동',
-      'Description: 상세 설명 작성',
-      'URL / 파일 첨부: 참고자료 링크 및 파일 업로드',
+      '체크리스트를 체크하면 진행률이 자동으로 계산됩니다',
+      '진행률이 Board 컬럼 배치에 직접 반영됩니다',
     ],
   },
+  // 4. 작업노트 체크 → 50% 시연
+  {
+    tabIndex: 0,
+    title: '작업노트 체크 → 진행률 자동 반영',
+    description: '체크박스를 체크하면 진행률이 올라갑니다. 50% 이상이면 Board에서 "In Progress (50% 이상 진행)" 컬럼으로 자동 이동됩니다.',
+    icon: '📊',
+    action: 'checkWorkNoteItems',
+    tips: [
+      '0% → To Do 컬럼',
+      '1~49% → In Progress 컬럼',
+      '50% 이상 → In Progress (50% 이상 진행) 컬럼',
+      '100% → Done 컬럼',
+    ],
+  },
+  // 5. Board로 돌아와서 변경된 결과 확인
+  {
+    tabIndex: 0,
+    title: 'Board - 자동 이동 확인',
+    description: '작업노트 체크 결과가 Board에 바로 반영됩니다. 진행률에 따라 Task가 적절한 컬럼에 위치합니다.',
+    icon: '🔄',
+    action: 'closeAllAndShowBoard',
+  },
+  // 6. 주차별 진척사항
   {
     tabIndex: 0,
     title: '주차별 진척사항',
-    description: '보드 우상단 "주차별 진척사항" 버튼을 확인하세요. 주차 단위 진행 현황을 볼 수 있습니다.',
+    description: '"주차별 진척사항" 버튼을 눌러 주차 단위 진행 현황을 확인합니다. 지금 열어볼게요!',
     icon: '📈',
-    action: 'closeDrawer',
+    action: 'showWeeklyProgress',
   },
+  // 7. Board로 복귀
+  {
+    tabIndex: 0,
+    title: '보드로 돌아가기',
+    description: '보드 뷰로 돌아왔습니다. 이어서 다른 뷰를 살펴보겠습니다.',
+    icon: '📋',
+    action: 'backToBoard',
+  },
+  // 8. List
   {
     tabIndex: 1,
     title: 'List - 테이블 뷰',
     description: '전체 Task를 테이블로 확인하세요. 컬럼 헤더를 클릭해 정렬할 수 있습니다.',
     icon: '📊',
   },
+  // 9. Calendar
   {
     tabIndex: 2,
     title: 'Calendar - 달력 뷰',
-    description: '마감일 기준으로 Task를 달력에서 확인하세요. 날짜를 클릭하면 해당 일의 Task를 볼 수 있습니다.',
+    description: '마감일 기준으로 Task를 달력에서 확인합니다.',
     icon: '📅',
   },
+  // 10. Roadmap
   {
     tabIndex: 3,
     title: 'Roadmap - 타임라인',
-    description: 'Task의 시작일~마감일을 타임라인으로 봅니다. Week/Month/Quarter 버튼으로 보기를 전환해보세요.',
+    description: 'Week / Month / Quarter 버튼으로 보기 단위를 전환하세요. "완료된 항목 숨기기"도 가능합니다.',
     icon: '🗺️',
     tips: [
-      '"완료된 항목 숨기기"로 진행 중인 항목에 집중',
-      'Week / Month / Quarter 전환 가능',
+      'Week: 주 단위 상세 일정',
+      'Month: 월 단위 전체 일정',
+      'Quarter: 분기 단위 장기 일정',
     ],
   },
+  // 11. Messenger
   {
     tabIndex: 4,
     title: 'Messenger - 팀 협업',
-    description: '프로젝트 팀원과 실시간 대화를 나눌 수 있습니다. @이름으로 멘션 알림을 보내세요.',
+    description: '@이름으로 팀원에게 멘션 알림을 보내세요. "@나를 언급" 페이지에서 모아 볼 수 있습니다.',
     icon: '💬',
   },
+  // 12. Graph
   {
     tabIndex: 5,
-    title: 'Graph - 구조 편집',
-    description: 'Sub Project를 생성하고 Task를 드래그하여 연결하세요. 좌측 패널에서 "서브프로젝트 추가"를 확인하세요.',
+    title: 'Graph - Sub Project 관리',
+    description: 'Sub Project를 생성하고 Task를 드래그하여 연결하세요. 좌측 패널의 "서브프로젝트 추가"를 확인하세요.',
     icon: '🔗',
     tips: [
-      'Sub Project는 여기서만 생성 가능 (좌측 패널)',
-      'Task를 Sub Project 노드로 드래그하여 연결',
+      'Sub Project는 여기서만 생성 가능',
+      'Task 노드를 Sub Project 노드로 드래그하면 연결됩니다',
     ],
   },
 ];
 
-const STEP_DURATION = 5000;
+const STEP_DURATION = 5500;
 
 export interface OnboardingTourProps {
   onComplete: () => void;
@@ -117,18 +178,35 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
   const [progress, setProgress] = useState(0);
   const [isActive, setIsActive] = useState(true);
   const [autoPaused, setAutoPaused] = useState(false);
+  const [prevHighlight, setPrevHighlight] = useState<string | null>(null);
 
   const step = STEPS[currentStep];
   const totalSteps = STEPS.length;
 
-  // Execute step action + switch tab
   const executeStep = useCallback((stepIdx: number) => {
     const s = STEPS[stepIdx];
+
+    // Clear previous highlight
+    if (prevHighlight) highlightElement(prevHighlight, false);
+
+    // Switch tab
     onTabChange(s.tabIndex);
+
+    // Execute action after tab renders
     if (s.action && onAction) {
-      setTimeout(() => onAction(s.action!), 300); // slight delay for tab to render
+      setTimeout(() => onAction(s.action!), 400);
     }
-  }, [onTabChange, onAction]);
+
+    // Highlight target element
+    if (s.highlightSelector) {
+      setTimeout(() => {
+        highlightElement(s.highlightSelector!, true);
+        setPrevHighlight(s.highlightSelector!);
+      }, 800);
+    } else {
+      setPrevHighlight(null);
+    }
+  }, [onTabChange, onAction, prevHighlight]);
 
   // Auto-advance timer
   useEffect(() => {
@@ -158,26 +236,26 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
   }, [currentStep, isActive, autoPaused]);
 
   const handleComplete = useCallback(() => {
+    if (prevHighlight) highlightElement(prevHighlight, false);
     setIsActive(false);
-    if (onAction) onAction('closeDrawer');
+    if (onAction) onAction('closeAllAndShowBoard');
     onTabChange(0);
     onComplete();
-  }, [onComplete, onTabChange, onAction]);
+  }, [onComplete, onTabChange, onAction, prevHighlight]);
 
   const handleDisablePermanently = useCallback(() => {
+    if (prevHighlight) highlightElement(prevHighlight, false);
     setIsActive(false);
     localStorage.setItem('plan-a-onboarding-disabled', '1');
-    if (onAction) onAction('closeDrawer');
+    if (onAction) onAction('closeAllAndShowBoard');
     onTabChange(0);
     onComplete();
-  }, [onComplete, onTabChange, onAction]);
+  }, [onComplete, onTabChange, onAction, prevHighlight]);
 
   const handleNext = () => {
     setAutoPaused(true);
     if (currentStep < totalSteps - 1) {
-      const next = currentStep + 1;
-      setCurrentStep(next);
-      executeStep(next);
+      setCurrentStep(prev => prev + 1);
     } else {
       handleComplete();
     }
@@ -186,9 +264,7 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
   const handlePrev = () => {
     setAutoPaused(true);
     if (currentStep > 0) {
-      const prev = currentStep - 1;
-      setCurrentStep(prev);
-      executeStep(prev);
+      setCurrentStep(prev => prev - 1);
     }
   };
 
@@ -210,8 +286,7 @@ const OnboardingTour: React.FC<OnboardingTourProps> = ({ onComplete, onTabChange
         <Paper
           elevation={8}
           sx={{
-            p: 2.5,
-            borderRadius: 3,
+            p: 2.5, borderRadius: 3,
             bgcolor: 'rgba(255,255,255,0.97)',
             backdropFilter: 'blur(20px)',
             border: '1px solid rgba(41, 85, 255, 0.15)',

@@ -340,7 +340,7 @@ const TaskDrawer: React.FC = () => {
                     <Divider />
 
                     {/* Status & Priority */}
-                    <Box>
+                    <Box data-tour="status-priority-section">
                         <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
                             Status & Priority
                         </Typography>
@@ -417,6 +417,7 @@ const TaskDrawer: React.FC = () => {
                             {selectedTask?.id && (
                                 <Tooltip title="작업노트 열기" arrow>
                                     <Button
+                                        data-tour="work-note-btn"
                                         size="small"
                                         startIcon={<EditNoteIcon sx={{ fontSize: '0.9rem' }} />}
                                         onClick={() => setWorkNoteOpen(true)}

@@ -318,6 +318,7 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', mb: 1.5, flexShrink: 0 }}>
           <Tooltip title="보드 뷰">
             <Chip
+              data-tour="board-view-btn"
               icon={<ViewKanbanIcon sx={{ fontSize: 16 }} />}
               label="보드"
               size="small"
@@ -381,6 +382,7 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
         <Box sx={{ flex: 1 }} />
         <Tooltip title="주차별 진척사항">
           <Chip
+            data-tour="weekly-progress-btn"
             icon={<CalendarViewWeekIcon sx={{ fontSize: 16 }} />}
             label="주차별 진척사항"
             size="small"
