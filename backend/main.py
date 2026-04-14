@@ -5510,7 +5510,7 @@ def get_backup_status(user_id: int = Query(...), db: Session = Depends(get_db)):
     s3_attachment_count = 0
     if is_s3_configured():
         try:
-            s3_db_files = list_s3_files("db/")[:20]
+            s3_db_files = list_s3_files("db-backups/")[:20]
             s3_attachments = list_s3_files("files/")
             s3_attachment_count = len(s3_attachments)
         except Exception:

@@ -3,6 +3,10 @@ S3/MinIO 호환 스토리지 서비스
 - 첨부파일 업로드/다운로드
 - DB 백업 파일 업로드
 - 파일 타입별 경로 분류 (pdf, ppt, png 등)
+
+⚠️ 환경변수는 실행 시점(함수 호출 시)에 읽어야 합니다.
+   모듈 import 시점에 os.getenv()를 호출하면
+   environment.py가 아직 .env를 로드하지 않았을 때 빈 값이 고정됩니다.
 """
 
 import os
@@ -12,21 +16,22 @@ from typing import Optional
 from pathlib import Path
 
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 logger = logging.getLogger("s3_service")
 
-# ── 환경변수 ──
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")
-S3_REGION_NAME = os.getenv("S3_REGION_NAME", "us-east-1")
-BUCKET_NAME = os.getenv("BUCKET_NAME", "fdc-portal")
-BASE_S3_PATH = os.getenv("BASE_S3_PATH", "s3://fdc-portal/FDC/plan-a")
 
-# BASE_S3_PATH에서 prefix 추출: "s3://bucket/prefix" → "prefix"
+# ── 실행 시점에 환경변수를 안전하게 읽는 헬퍼 ──
+
+def _get_env(key: str, default: str = "") -> str:
+    """실행 시점에 os.getenv()를 호출하여 environment.py 로딩 이후 값을 정확히 읽는다."""
+    return os.getenv(key, default)
+
+
 def _parse_base_path() -> str:
-    path = BASE_S3_PATH
+    """BASE_S3_PATH에서 bucket 이후 prefix 추출: 's3://bucket/prefix' → 'prefix'"""
+    path = _get_env("BASE_S3_PATH", "s3://fdc-portal/FDC/plan-a")
     if path.startswith("s3://"):
         path = path[5:]
     # bucket 이름 이후의 경로만 추출
@@ -35,22 +40,32 @@ def _parse_base_path() -> str:
         return parts[1].rstrip("/")
     return ""
 
-S3_PREFIX = _parse_base_path()  # e.g., "FDC/plan-a"
-
 
 def _get_s3_client():
-    """S3/MinIO 호환 클라이언트 생성"""
-    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not S3_ENDPOINT_URL:
-        logger.warning("S3 환경변수 미설정 (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_ENDPOINT_URL)")
+    """
+    S3/MinIO 호환 클라이언트 생성.
+    - 실행 시점에 환경변수를 읽어 빈 값 고정 문제 방지
+    - signature_version=s3v4 포함 (MinIO 호환)
+    """
+    access_key = _get_env("AWS_ACCESS_KEY_ID")
+    secret_key = _get_env("AWS_SECRET_ACCESS_KEY")
+    endpoint_url = _get_env("S3_ENDPOINT_URL")
+    region = _get_env("S3_REGION_NAME", "us-east-1")
+
+    if not access_key or not secret_key or not endpoint_url:
+        logger.warning(
+            "S3 환경변수 미설정 (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_ENDPOINT_URL)"
+        )
         return None
 
     try:
         client = boto3.client(
             "s3",
-            endpoint_url=S3_ENDPOINT_URL,
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-            region_name=S3_REGION_NAME,
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name=region,
+            config=BotoConfig(signature_version="s3v4"),
         )
         return client
     except Exception as e:
@@ -59,8 +74,17 @@ def _get_s3_client():
 
 
 def is_s3_configured() -> bool:
-    """S3 설정이 완료되었는지 확인"""
-    return bool(AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and S3_ENDPOINT_URL)
+    """S3 설정이 완료되었는지 확인 (실행 시점 체크)"""
+    return bool(
+        _get_env("AWS_ACCESS_KEY_ID")
+        and _get_env("AWS_SECRET_ACCESS_KEY")
+        and _get_env("S3_ENDPOINT_URL")
+    )
+
+
+def _get_bucket_name() -> str:
+    """실행 시점에 BUCKET_NAME 읽기"""
+    return _get_env("BUCKET_NAME", "fdc-portal")
 
 
 # ── 파일 타입별 하위 경로 분류 ──
@@ -84,10 +108,11 @@ def _get_file_category(filename: str) -> str:
 
 
 def _build_s3_key(sub_path: str) -> str:
-    """S3 key 생성: {S3_PREFIX}/{sub_path}"""
-    if S3_PREFIX:
-        return f"{S3_PREFIX}/{sub_path}"
-    return sub_path
+    """S3 key 생성: {S3_PREFIX}/{sub_path} — 슬래시 중복 방지"""
+    prefix = _parse_base_path()
+    if prefix:
+        return f"{prefix}/{sub_path.lstrip('/')}"
+    return sub_path.lstrip("/")
 
 
 def upload_file_to_s3(
@@ -112,6 +137,7 @@ def upload_file_to_s3(
     if not client:
         return {"success": False, "s3_key": "", "error": "S3 not configured"}
 
+    bucket = _get_bucket_name()
     s3_key = _build_s3_key(s3_sub_path)
 
     extra_args = {}
@@ -123,8 +149,8 @@ def upload_file_to_s3(
         extra_args["Metadata"] = s3_metadata
 
     try:
-        client.upload_file(local_path, BUCKET_NAME, s3_key, ExtraArgs=extra_args if extra_args else None)
-        logger.info(f"S3 업로드 성공: {s3_key} (bucket={BUCKET_NAME})")
+        client.upload_file(local_path, bucket, s3_key, ExtraArgs=extra_args if extra_args else None)
+        logger.info(f"S3 업로드 성공: {s3_key} (bucket={bucket})")
         return {"success": True, "s3_key": s3_key, "error": None}
     except (ClientError, EndpointConnectionError) as e:
         logger.error(f"S3 업로드 실패: {s3_key} - {e}")
@@ -151,6 +177,7 @@ def upload_bytes_to_s3(
     if not client:
         return {"success": False, "s3_key": "", "error": "S3 not configured"}
 
+    bucket = _get_bucket_name()
     s3_key = _build_s3_key(s3_sub_path)
 
     extra_args = {}
@@ -162,7 +189,7 @@ def upload_bytes_to_s3(
         extra_args["Metadata"] = s3_metadata
 
     try:
-        client.upload_fileobj(io.BytesIO(data), BUCKET_NAME, s3_key, ExtraArgs=extra_args if extra_args else None)
+        client.upload_fileobj(io.BytesIO(data), bucket, s3_key, ExtraArgs=extra_args if extra_args else None)
         logger.info(f"S3 업로드 성공 (bytes): {s3_key}")
         return {"success": True, "s3_key": s3_key, "error": None}
     except (ClientError, EndpointConnectionError) as e:
@@ -247,9 +274,11 @@ def download_from_s3(s3_key: str) -> bytes | None:
     if not client:
         return None
 
+    bucket = _get_bucket_name()
+
     try:
         buf = io.BytesIO()
-        client.download_fileobj(BUCKET_NAME, s3_key, buf)
+        client.download_fileobj(bucket, s3_key, buf)
         buf.seek(0)
         return buf.read()
     except ClientError as e:
@@ -270,8 +299,10 @@ def delete_from_s3(s3_key: str) -> dict:
     if not client:
         return {"success": False, "error": "S3 not configured"}
 
+    bucket = _get_bucket_name()
+
     try:
-        client.delete_object(Bucket=BUCKET_NAME, Key=s3_key)
+        client.delete_object(Bucket=bucket, Key=s3_key)
         logger.info(f"S3 삭제 성공: {s3_key}")
         return {"success": True, "error": None}
     except Exception as e:
@@ -285,9 +316,11 @@ def generate_presigned_url(s3_key: str, expiration: int = 3600, filename: str = 
     if not client:
         return None
 
+    bucket = _get_bucket_name()
+
     try:
         params = {
-            "Bucket": BUCKET_NAME,
+            "Bucket": bucket,
             "Key": s3_key,
         }
         if filename:
@@ -310,11 +343,13 @@ def list_s3_files(prefix: str = "") -> list:
     if not client:
         return []
 
-    s3_prefix = _build_s3_key(prefix) if prefix else S3_PREFIX
+    bucket = _get_bucket_name()
+    s3_prefix = _build_s3_key(prefix) if prefix else _parse_base_path()
+
     try:
         result = []
         paginator = client.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix=s3_prefix):
+        for page in paginator.paginate(Bucket=bucket, Prefix=s3_prefix):
             for obj in page.get("Contents", []):
                 result.append({
                     "key": obj["Key"],

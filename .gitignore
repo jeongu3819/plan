@@ -52,3 +52,12 @@ docker-compose.override.yml
 frontend/.env
 frontend/.env.*
 backend/.env
+
+lib/
+Lib/
+site/
+Lib/site-packages/
+lib/site-packages/
+Scripts/
+Include/
+pyvenv.cfg
