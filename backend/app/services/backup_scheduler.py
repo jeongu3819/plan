@@ -232,7 +232,7 @@ def sync_uploads_to_s3() -> dict:
     로컬 uploads/ 디렉토리의 모든 파일을 S3에 동기화.
     이미 업로드된 파일은 건너뜀 (S3 key 존재 여부로 판단).
     """
-    from app.services.s3_service import upload_attachment_to_s3, is_s3_configured, list_s3_files
+    from utils.s3.s3_utils import is_s3_configured, list_s3_files, upload_attachment_bytes_to_s3, get_attachment_s3_key
 
     if not is_s3_configured():
         _log_backup_result("FILES", False, "S3 미설정, 파일 동기화 스킵")
@@ -284,22 +284,24 @@ def sync_uploads_to_s3() -> dict:
                 stored_name = fname
 
             # S3 key 예측해서 이미 존재하면 스킵
-            from app.services.s3_service import _get_file_category, _build_s3_key
-            category = _get_file_category(fname)
-            expected_sub = f"files/{category}/{context_type}_{context_id}/{stored_name}"
-            expected_key = _build_s3_key(expected_sub)
-
+            expected_key = get_attachment_s3_key(fname, stored_name, context_type, context_id)
             if expected_key in existing_keys:
                 skipped += 1
                 continue
 
-            result = upload_attachment_to_s3(
-                local_path=local_path,
-                original_filename=fname,
-                stored_name=stored_name,
-                context_type=context_type,
-                context_id=context_id,
-            )
+            try:
+                with open(local_path, "rb") as lf:
+                    data = lf.read()
+                result = upload_attachment_bytes_to_s3(
+                    data=data,
+                    original_filename=fname,
+                    stored_name=stored_name,
+                    context_type=context_type,
+                    context_id=context_id,
+                )
+            except Exception as e:
+                result = {"success": False, "error": str(e)}
+
             if result["success"]:
                 uploaded += 1
             else:
