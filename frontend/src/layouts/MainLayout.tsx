@@ -36,14 +36,11 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import TimelineIcon from '@mui/icons-material/Timeline';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
-import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
-import SettingsIcon from '@mui/icons-material/Settings';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import SearchIcon from '@mui/icons-material/Search';
@@ -307,7 +304,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const [spaceSelectedUserIds, setSpaceSelectedUserIds] = useState<number[]>([]);
   const [spaceUserSearch, setSpaceUserSearch] = useState('');
   const [spaceManageMode, setSpaceManageMode] = useState<'create' | 'manage'>('create');
-  const [managingSpace, setManagingSpace] = useState<any>(null);
+  const [managingSpace, _setManagingSpace] = useState<any>(null); void managingSpace;
   const [spacePickerAnchor, setSpacePickerAnchor] = useState<HTMLElement | null>(null);
   const [spaceSearchQuery, setSpaceSearchQuery] = useState('');
   const [spaceListPage, setSpaceListPage] = useState(0);
@@ -773,7 +770,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             <List sx={{ px: 1, pb: 1 }}>
               {projects.map((project, index) => {
                 const isActive = location.pathname === `/project/${project.id}`;
-                const dotColor = PROJECT_COLORS[index % PROJECT_COLORS.length];
+                void PROJECT_COLORS[index % PROJECT_COLORS.length];
                 return (
                   <ListItem
                     key={project.id}

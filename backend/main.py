@@ -5910,6 +5910,9 @@ def list_sheet_executions(
     project_id: Optional[int] = Query(None),
     template_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
+    equipment_name: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),  # YYYY-MM-DD
+    date_to: Optional[str] = Query(None),    # YYYY-MM-DD
     user_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -5921,7 +5924,14 @@ def list_sheet_executions(
         q = q.filter(SheetExecution.template_id == template_id)
     if status:
         q = q.filter(SheetExecution.status == status)
-    execs = q.order_by(SheetExecution.started_at.desc()).limit(100).all()
+    if equipment_name:
+        q = q.filter(SheetExecution.equipment_name.like(f"%{equipment_name}%"))
+    if date_from:
+        from sqlalchemy import text as _text
+        q = q.filter(SheetExecution.started_at >= date_from)
+    if date_to:
+        q = q.filter(SheetExecution.started_at <= f"{date_to} 23:59:59")
+    execs = q.order_by(SheetExecution.started_at.desc()).limit(200).all()
     return {"executions": [
         {
             "id": e.id, "template_id": e.template_id, "project_id": e.project_id,

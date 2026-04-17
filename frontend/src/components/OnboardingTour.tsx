@@ -26,10 +26,6 @@ interface OnboardingStep {
   duration?: number;  // step별 커스텀 duration (ms)
 }
 
-const clickEl = (attr: string) => {
-  const el = document.querySelector(`[data-tour="${attr}"]`) as HTMLElement;
-  if (el) el.click();
-};
 
 const highlightEl = (attr: string, on: boolean) => {
   const el = document.querySelector(`[data-tour="${attr}"]`) as HTMLElement;

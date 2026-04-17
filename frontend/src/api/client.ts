@@ -1086,7 +1086,7 @@ export const api = {
     const res = await client.post('/sheet-executions', body, { params: { space_id: spaceId, user_id: requireUserId(userId) } });
     return res.data;
   },
-  getSheetExecutions: async (spaceId: number, filters?: { project_id?: number; template_id?: number; status?: string; user_id?: number }): Promise<any> => {
+  getSheetExecutions: async (spaceId: number, filters?: { project_id?: number; template_id?: number; status?: string; user_id?: number; equipment_name?: string; date_from?: string; date_to?: string }): Promise<any> => {
     const params: Record<string, any> = { space_id: spaceId, ...filters };
     const res = await client.get('/sheet-executions', { params });
     return res.data;

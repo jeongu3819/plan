@@ -209,7 +209,7 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
   const currentUserObj = users.find(u => u.id === currentUserId);
   const isSuperAdmin = currentUserObj?.role === 'super_admin';
   const currentMember = members.find((m: any) => m.user_id === currentUserId);
-  const isProjectManager = currentMember?.role === 'manager' || currentMember?.role === 'member';
+  const _isProjectManager = currentMember?.role === 'manager' || currentMember?.role === 'member'; void _isProjectManager;
   const canManage = isOwner || isSuperAdmin;
 
   const updateMemberRoleMut = useMutation({
@@ -727,6 +727,9 @@ const ProjectSettingsView: React.FC<ProjectSettingsViewProps> = ({ projectId }) 
         </Paper>
       )}
 
+      {/* ─── Sheet 연결 섹션 (v3.0) ─── */}
+      <SheetProjectSection projectId={projectId} currentUserId={currentUserId} />
+
       {/* ─── Move to Space Section (Owner only) ─── */}
       {isOwner && (
         <SpaceMoveSection projectId={projectId} currentUserId={currentUserId} queryClient={queryClient} />
@@ -1118,6 +1121,129 @@ const SpaceMoveSection: React.FC<{
           이동
         </Button>
       </Box>
+    </Paper>
+  );
+};
+
+// ── Sheet Project Section (v3.0) ──
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import { LinearProgress } from '@mui/material';
+import { useSpaceNav } from '../../hooks/useSpaceNav';
+import { useNavigate as useNavigateSheet } from 'react-router-dom';
+
+const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }> = ({ projectId, currentUserId: _currentUserId }) => {
+  const currentSpaceId = useAppStore(state => state.currentSpaceId); void currentSpaceId;
+  const { spacePath } = useSpaceNav();
+  const navigate = useNavigateSheet();
+
+  const { data } = useQuery({
+    queryKey: ['projectSheetSummary', projectId],
+    queryFn: () => api.getProjectSheetSummary(projectId),
+    enabled: !!projectId,
+  });
+
+  const activeExecs = data?.active_executions || [];
+  const recentCompleted = data?.recent_completed || [];
+  const hasAny = (data?.total_executions || 0) > 0;
+
+  return (
+    <Paper sx={{ p: 3, mb: 3, borderRadius: 2 }} variant="outlined">
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <DescriptionIcon sx={{ color: '#7C3AED', fontSize: 20 }} />
+          <Typography variant="subtitle1" fontWeight={700}>Sheets</Typography>
+          {hasAny && (
+            <Chip label={`전체 ${data?.total_executions}`} size="small" sx={{ height: 20, fontSize: '0.65rem' }} />
+          )}
+        </Box>
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => navigate(`${spacePath}/sheets`)}
+          sx={{ fontSize: '0.75rem', borderColor: '#7C3AED', color: '#7C3AED' }}
+        >
+          Sheet 관리
+        </Button>
+      </Box>
+
+      {!hasAny ? (
+        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.8rem' }}>
+          이 프로젝트에 연결된 Sheet 실행이 없습니다.{' '}
+          <Box
+            component="span"
+            onClick={() => navigate(`${spacePath}/sheets`)}
+            sx={{ color: '#7C3AED', cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            Sheet 업로드하러 가기
+          </Box>
+        </Typography>
+      ) : (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {/* 진행 중 */}
+          {activeExecs.length > 0 && (
+            <Box>
+              <Typography variant="caption" fontWeight={700} sx={{ color: '#F59E0B', mb: 0.5, display: 'block' }}>
+                진행 중 ({activeExecs.length})
+              </Typography>
+              {activeExecs.map((exec: any) => (
+                <Box
+                  key={exec.id}
+                  onClick={() => navigate(`${spacePath}/sheets/execution/${exec.id}`)}
+                  sx={{
+                    display: 'flex', alignItems: 'center', gap: 1.5, py: 0.8, px: 1.5,
+                    borderRadius: 1.5, cursor: 'pointer', bgcolor: '#FFFBEB',
+                    border: '1px solid #FDE68A', mb: 0.5,
+                    '&:hover': { bgcolor: '#FEF3C7' },
+                  }}
+                >
+                  <PlayArrowIcon sx={{ fontSize: 16, color: '#F59E0B', flexShrink: 0 }} />
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {exec.title}
+                  </Typography>
+                  <Box sx={{ width: 60, flexShrink: 0 }}>
+                    <LinearProgress
+                      variant="determinate" value={exec.progress}
+                      sx={{ height: 4, borderRadius: 2, bgcolor: '#FDE68A', '& .MuiLinearProgress-bar': { bgcolor: '#F59E0B' } }}
+                    />
+                  </Box>
+                  <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#D97706', flexShrink: 0, fontWeight: 700 }}>
+                    {exec.progress}%
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+
+          {/* 최근 완료 */}
+          {recentCompleted.length > 0 && (
+            <Box>
+              <Typography variant="caption" fontWeight={700} sx={{ color: '#22C55E', mb: 0.5, display: 'block' }}>
+                최근 완료
+              </Typography>
+              {recentCompleted.slice(0, 5).map((exec: any) => (
+                <Box
+                  key={exec.id}
+                  onClick={() => navigate(`${spacePath}/sheets/execution/${exec.id}`)}
+                  sx={{
+                    display: 'flex', alignItems: 'center', gap: 1.5, py: 0.6, px: 1.5,
+                    borderRadius: 1.5, cursor: 'pointer',
+                    '&:hover': { bgcolor: '#F9FAFB' },
+                  }}
+                >
+                  <CheckCircleOutlineIcon sx={{ fontSize: 15, color: '#22C55E', flexShrink: 0 }} />
+                  <Typography variant="body2" sx={{ fontSize: '0.78rem', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#6B7280' }}>
+                    {exec.title}
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontSize: '0.62rem', color: '#9CA3AF', flexShrink: 0 }}>
+                    {exec.completed_at?.slice(0, 10)}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
+      )}
     </Paper>
   );
 };
