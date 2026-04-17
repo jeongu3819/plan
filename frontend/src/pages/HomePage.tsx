@@ -52,6 +52,8 @@ import { useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../hooks/useSpaceNav';
 import { useDensityScores } from '../hooks/useDensityScores';
 import ZeroStateDashboard from '../components/ZeroStateDashboard';
+import PurposeOverview from '../components/space/PurposeOverview';
+import type { SpacePurpose } from '../types';
 import {
   format,
   differenceInDays,
@@ -319,6 +321,14 @@ const HomePage: React.FC = () => {
     queryKey: ['stats', currentUserId, currentSpaceId],
     queryFn: () => api.getStats(currentUserId, currentSpaceId),
   });
+
+  // v3.0 목적 기반 Overview
+  const { data: overviewData, isLoading: overviewLoading } = useQuery({
+    queryKey: ['spaceOverview', currentSpaceId, currentUserId],
+    queryFn: () => api.getSpaceOverview(currentSpaceId!, currentUserId),
+    enabled: !!currentSpaceId && currentUserId > 0,
+  });
+  const spacePurpose = (overviewData?.purpose || 'project_management') as SpacePurpose;
 
   // Density Scores for My Tasks widget
   const myTasksForDensity = stats?.my_tasks || [];
@@ -1478,7 +1488,28 @@ const HomePage: React.FC = () => {
           <ZeroStateDashboard currentUserId={currentUserId} />
         </Box>
       ) : (
-        /* ── Sortable Widget Grid ── */
+        <>
+        {/* ── v3.0 목적 기반 Overview ── */}
+        {spacePurpose && spacePurpose !== 'project_management' && (
+          <Box sx={{
+            mb: 2, opacity: introPhase === 'done' ? 1 : 0,
+            transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
+            transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
+          }}>
+            <PurposeOverview
+              data={overviewData}
+              loading={overviewLoading}
+              purpose={spacePurpose}
+              onTaskClick={(taskId, projectId) => {
+                openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] }, projectId);
+              }}
+              onSheetClick={(executionId) => {
+                navigate(`${spacePath}/sheets/execution/${executionId}`);
+              }}
+            />
+          </Box>
+        )}
+        {/* ── Sortable Widget Grid ── */}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={displayOrder} strategy={rectSortingStrategy}>
             <Box
@@ -1499,6 +1530,7 @@ const HomePage: React.FC = () => {
             </Box>
           </SortableContext>
         </DndContext>
+        </>
       )}
 
       {/* ── Widget Palette Drawer ── */}

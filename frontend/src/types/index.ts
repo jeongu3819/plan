@@ -29,6 +29,14 @@ export interface Project {
   };
 }
 
+export type SpacePurpose =
+  | 'project_management'
+  | 'equipment_ops'
+  | 'process_change'
+  | 'sw_dev'
+  | 'integrated_ops'
+  | 'custom';
+
 export interface Space {
   id: number;
   name: string;
@@ -37,6 +45,7 @@ export interface Space {
   created_by?: number;
   is_active: boolean;
   created_at?: string;
+  purpose?: SpacePurpose;
   member_count: number;
   members: SpaceMemberInfo[];
 }
@@ -249,4 +258,105 @@ export interface ProjectAiQueryResponse {
       window_end?: string | null;
     };
   };
+}
+
+// ========================================
+// v3.0 Sheet 운영 타입
+// ========================================
+
+export interface SheetTemplate {
+  id: number;
+  name: string;
+  description?: string;
+  category?: string;
+  original_filename?: string;
+  sheet_name?: string;
+  structure?: SheetStructure;
+  row_count: number;
+  col_count: number;
+  checkable_count: number;
+  created_by?: number;
+  created_at?: string;
+}
+
+export interface SheetStructure {
+  cells: SheetCell[];
+  merges: SheetMerge[];
+  col_widths?: number[];
+  row_heights?: number[];
+  total_rows: number;
+  total_cols: number;
+  checkable_cells: SheetCheckableCell[];
+  headers?: { col: number; value: string }[];
+}
+
+export interface SheetCell {
+  row: number;
+  col: number;
+  value: string;
+  type?: string;
+  bg?: string;
+  font?: { bold?: boolean; italic?: boolean; fontSize?: number; fontColor?: string };
+  borders?: Record<string, string>;
+  align?: string;
+  wrapText?: boolean;
+  rowSpan?: number;
+  colSpan?: number;
+}
+
+export interface SheetMerge {
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
+}
+
+export interface SheetCheckableCell {
+  ref: string;
+  row: number;
+  col: number;
+  label: string;
+}
+
+export interface SheetExecution {
+  id: number;
+  template_id: number;
+  project_id?: number;
+  title: string;
+  equipment_name?: string;
+  status: 'in_progress' | 'completed' | 'cancelled';
+  total_items: number;
+  checked_items: number;
+  progress: number;
+  started_by?: number;
+  started_at?: string;
+  completed_at?: string;
+  completed_by?: number;
+  template_structure?: SheetStructure;
+  template_name?: string;
+  items?: SheetExecutionItem[];
+}
+
+export interface SheetExecutionItem {
+  id: number;
+  cell_ref: string;
+  row_idx: number;
+  col_idx: number;
+  label: string;
+  checked: boolean;
+  value?: string;
+  memo?: string;
+  checked_by?: number;
+  checked_at?: string;
+}
+
+export interface SheetExecutionLog {
+  id: number;
+  action: string;
+  item_id?: number;
+  old_value?: string;
+  new_value?: string;
+  memo?: string;
+  user_id?: number;
+  created_at?: string;
 }

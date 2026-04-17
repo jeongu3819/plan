@@ -53,6 +53,7 @@ import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import GroupsIcon from '@mui/icons-material/Groups';
+import DescriptionIcon from '@mui/icons-material/Description';
 
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import TemplateLibraryDialog from '../components/TemplateLibraryDialog';
@@ -69,6 +70,7 @@ import {
 } from '../utils/colorUtils';
 import { useUser } from '../context/UserContext';
 import { useAppStore } from '../stores/useAppStore';
+import SpacePurposeSelector from '../components/space/SpacePurposeSelector';
 
 const BG_PALETTE = [
   // Light
@@ -301,6 +303,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceDesc, setNewSpaceDesc] = useState('');
+  const [newSpacePurpose, setNewSpacePurpose] = useState<import('../types').SpacePurpose>('project_management');
   const [spaceSelectedUserIds, setSpaceSelectedUserIds] = useState<number[]>([]);
   const [spaceUserSearch, setSpaceUserSearch] = useState('');
   const [spaceManageMode, setSpaceManageMode] = useState<'create' | 'manage'>('create');
@@ -647,6 +650,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             { text: '공간 관리', icon: <WorkspacesIcon />, path: sp('/spaces') },
             { text: '@나를 언급', icon: <AlternateEmailIcon />, path: sp('/mentions') },
             { text: '그룹', icon: <GroupsIcon />, path: sp('/groups') },
+            { text: 'Sheets', icon: <DescriptionIcon />, path: sp('/sheets') },
             {
               text: 'AI Settings',
               icon: <AutoAwesomeIcon />,
@@ -1688,6 +1692,13 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             sx={{ mb: 2 }}
           />
 
+          {/* 공간 운영 목적 선택 (생성 모드에서만) */}
+          {spaceManageMode === 'create' && (
+            <Box sx={{ mb: 2 }}>
+              <SpacePurposeSelector value={newSpacePurpose} onChange={setNewSpacePurpose} />
+            </Box>
+          )}
+
           {/* Member selection — 검색 기반 */}
           <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', mb: 0.5, display: 'block' }}>
             멤버 추가 (이름 또는 ID로 검색)
@@ -1840,7 +1851,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 try {
                   const isFirstSpace = spaces.length === 0;
                   const created = await api.createSpace(
-                    { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined, member_user_ids: spaceSelectedUserIds },
+                    { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined, member_user_ids: spaceSelectedUserIds, purpose: newSpacePurpose },
                     effectiveUserId
                   );
                   queryClient.invalidateQueries({ queryKey: ['spaces'] });

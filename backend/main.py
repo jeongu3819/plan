@@ -34,6 +34,7 @@ from app.models import (
     MemberGroup, MemberGroupUser,
     TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
     Space, SpaceMember, SpaceJoinRequest,
+    SheetTemplate, SheetExecution, SheetExecutionItem, SheetExecutionLog,
 )
 from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS, KST
 from app.llm.dsllm_adapter import chat as dsllm_chat
@@ -97,6 +98,16 @@ def _run_migrations():
         if "warned_at" not in cols:
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE spaces ADD COLUMN warned_at DATETIME'))
+        if "purpose" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE spaces ADD COLUMN purpose VARCHAR(50) DEFAULT 'project_management'"))
+
+    # ── v3.0 Sheet 운영 테이블 자동 생성 ──
+    for tname in ["sheet_templates", "sheet_executions", "sheet_execution_items", "sheet_execution_logs"]:
+        if tname not in insp.get_table_names():
+            t = Base.metadata.tables.get(tname)
+            if t is not None:
+                Base.metadata.create_all(bind=engine, tables=[t])
 
 _run_migrations()
 
@@ -5065,10 +5076,13 @@ class SpaceCreate(BaseModel):
     slug: Optional[str] = None
     description: Optional[str] = None
     member_user_ids: Optional[List[int]] = None
+    purpose: Optional[str] = "project_management"
+    # project_management / equipment_ops / process_change / sw_dev / integrated_ops / custom
 
 class SpaceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    purpose: Optional[str] = None
 
 def _space_dict(s, db: Session) -> dict:
     members = db.query(SpaceMember, User).join(User, SpaceMember.user_id == User.id).filter(SpaceMember.space_id == s.id).all()
@@ -5082,6 +5096,7 @@ def _space_dict(s, db: Session) -> dict:
         "is_active": s.is_active,
         "created_at": iso(s.created_at) if s.created_at else None,
         "warned_at": iso(s.warned_at) if s.warned_at else None,
+        "purpose": getattr(s, "purpose", None) or "project_management",
         "project_count": project_count,
         "member_count": len(members),
         "members": [
@@ -5135,7 +5150,7 @@ def create_space(body: SpaceCreate, user_id: int = Query(...), db: Session = Dep
     existing = db.query(Space).filter(Space.slug == slug).first()
     if existing:
         slug = f"{slug}-{int(datetime.utcnow().timestamp()) % 10000}"
-    space = Space(name=body.name, slug=slug, description=body.description, created_by=user_id)
+    space = Space(name=body.name, slug=slug, description=body.description, created_by=user_id, purpose=body.purpose or "project_management")
     db.add(space)
     db.commit()
     db.refresh(space)
@@ -5186,6 +5201,8 @@ def update_space(space_id: int, body: SpaceUpdate, user_id: int = Query(...), db
         space.slug = new_slug
     if body.description is not None:
         space.description = body.description
+    if body.purpose is not None:
+        space.purpose = body.purpose
     db.commit()
     return _space_dict(space, db)
 
@@ -5590,6 +5607,513 @@ def list_s3_storage(
 
     files = list_s3_files(prefix)
     return {"files": files, "total": len(files)}
+
+
+# =========================
+# v3.0 공간 목적 기반 Overview API
+# =========================
+
+@app.get("/api/spaces/{space_id}/overview")
+def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """공간 목적에 맞는 Overview 데이터 반환"""
+    space = db.query(Space).filter(Space.id == space_id, Space.is_active == True).first()
+    if not space:
+        raise HTTPException(404, "Space not found")
+    member = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
+    if not member:
+        raise HTTPException(403, "접근 권한 없음")
+
+    purpose = getattr(space, "purpose", None) or "project_management"
+    state = load_state()
+    today = date.today().isoformat()
+
+    # 공통: 프로젝트 목록
+    projects = db.query(Project).filter(Project.space_id == space_id, Project.archived_at.is_(None)).all()
+    project_ids = [p.id for p in projects]
+
+    # 공통: Task 목록
+    tasks = db.query(Task).filter(Task.project_id.in_(project_ids), Task.archived_at.is_(None)).all() if project_ids else []
+
+    # 통계 계산
+    my_tasks = [t for t in tasks if user_id in (t.assignee_ids or [])]
+    overdue_tasks = [t for t in tasks if t.due_date and t.due_date < today and t.status not in ("done", "hold")]
+    today_tasks = [t for t in tasks if t.due_date == today]
+    in_progress = [t for t in tasks if t.status == "in_progress"]
+    todo_tasks = [t for t in tasks if t.status == "todo"]
+    done_tasks = [t for t in tasks if t.status == "done"]
+    hold_tasks = [t for t in tasks if t.status == "hold"]
+
+    # 이번 주 완료
+    from datetime import timedelta
+    week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+    week_done = [t for t in done_tasks if t.updated_at and t.updated_at.strftime("%Y-%m-%d") >= week_start]
+
+    # 다음 주 예정
+    next_week_start = (date.today() + timedelta(days=(7 - date.today().weekday()))).isoformat()
+    next_week_end = (date.today() + timedelta(days=(14 - date.today().weekday()))).isoformat()
+    next_week_tasks = [t for t in tasks if t.due_date and next_week_start <= t.due_date < next_week_end and t.status not in ("done",)]
+
+    # 우선순위 높은 Task
+    high_priority = [t for t in tasks if t.priority == "high" and t.status not in ("done", "hold")]
+
+    # Sheet 실행 현황
+    sheet_executions_active = db.query(SheetExecution).filter(
+        SheetExecution.space_id == space_id, SheetExecution.status == "in_progress"
+    ).all() if project_ids or True else []
+    sheet_recent_completed = db.query(SheetExecution).filter(
+        SheetExecution.space_id == space_id, SheetExecution.status == "completed"
+    ).order_by(SheetExecution.completed_at.desc()).limit(5).all()
+
+    def _task_brief(t):
+        meta = get_task_meta(state, t.id)
+        return {
+            "id": t.id, "title": t.title, "status": t.status, "priority": t.priority,
+            "due_date": t.due_date, "progress": meta.get("progress", 0),
+            "assignee_ids": t.assignee_ids or [], "project_id": t.project_id,
+        }
+
+    def _exec_brief(e):
+        return {
+            "id": e.id, "title": e.title, "template_id": e.template_id,
+            "status": e.status, "progress": e.progress,
+            "equipment_name": e.equipment_name,
+            "started_at": iso(e.started_at), "completed_at": iso(e.completed_at),
+        }
+
+    base = {
+        "purpose": purpose,
+        "stats": {
+            "total_projects": len(projects),
+            "total_tasks": len(tasks),
+            "my_tasks": len(my_tasks),
+            "todo": len(todo_tasks),
+            "in_progress": len(in_progress),
+            "done": len(done_tasks),
+            "hold": len(hold_tasks),
+            "overdue": len(overdue_tasks),
+        },
+        "overdue_tasks": [_task_brief(t) for t in overdue_tasks[:10]],
+        "today_tasks": [_task_brief(t) for t in today_tasks[:10]],
+        "high_priority_tasks": [_task_brief(t) for t in high_priority[:10]],
+        "in_progress_tasks": [_task_brief(t) for t in in_progress[:10]],
+        "week_done_count": len(week_done),
+        "next_week_tasks": [_task_brief(t) for t in next_week_tasks[:10]],
+        "active_sheets": [_exec_brief(e) for e in sheet_executions_active],
+        "recent_completed_sheets": [_exec_brief(e) for e in sheet_recent_completed],
+    }
+
+    # 목적별 추가 데이터
+    if purpose == "equipment_ops":
+        # 설비 운영: 미완료/이월 작업 강조
+        incomplete = [t for t in tasks if t.status in ("todo", "in_progress") and t.due_date and t.due_date < today]
+        base["incomplete_carried_over"] = [_task_brief(t) for t in incomplete[:10]]
+    elif purpose == "sw_dev":
+        # SW 개발: 개발 중 / 완료 / 대기 구분
+        base["dev_in_progress"] = [_task_brief(t) for t in in_progress[:15]]
+        base["dev_done_recent"] = [_task_brief(t) for t in week_done[:10]]
+
+    return base
+
+
+# =========================
+# v3.0 Sheet Template API
+# =========================
+
+class SheetTemplateCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: Optional[str] = "general"
+
+@app.post("/api/sheet-templates/upload")
+async def upload_sheet_template(
+    file: UploadFile = FastAPIFile(...),
+    space_id: int = Query(...),
+    name: Optional[str] = Query(None),
+    description: Optional[str] = Query(None),
+    category: Optional[str] = Query("general"),
+    sheet_name: Optional[str] = Query(None),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Excel/CSV 파일을 업로드하여 Sheet 템플릿으로 파싱 저장"""
+    from app.services.sheet_parser import parse_excel_to_structure
+
+    contents = await file.read()
+    original_filename = file.filename or "unknown.xlsx"
+
+    # 파싱
+    try:
+        structure, meta = parse_excel_to_structure(contents, original_filename, sheet_name)
+    except Exception as e:
+        raise HTTPException(400, f"파일 파싱 실패: {str(e)}")
+
+    template = SheetTemplate(
+        space_id=space_id,
+        name=name or os.path.splitext(original_filename)[0],
+        description=description,
+        category=category,
+        original_filename=original_filename,
+        sheet_name=meta.get("sheet_name"),
+        structure=structure,
+        row_count=meta.get("row_count", 0),
+        col_count=meta.get("col_count", 0),
+        checkable_count=meta.get("checkable_count", 0),
+        created_by=user_id,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+
+    return {
+        "id": template.id,
+        "name": template.name,
+        "category": template.category,
+        "original_filename": template.original_filename,
+        "sheet_name": template.sheet_name,
+        "row_count": template.row_count,
+        "col_count": template.col_count,
+        "checkable_count": template.checkable_count,
+        "created_at": iso(template.created_at),
+    }
+
+
+@app.get("/api/sheet-templates")
+def list_sheet_templates(
+    space_id: int = Query(...),
+    category: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """공간 내 Sheet 템플릿 목록"""
+    q = db.query(SheetTemplate).filter(SheetTemplate.space_id == space_id)
+    if category:
+        q = q.filter(SheetTemplate.category == category)
+    templates = q.order_by(SheetTemplate.created_at.desc()).all()
+    return {"templates": [
+        {
+            "id": t.id, "name": t.name, "description": t.description,
+            "category": t.category, "original_filename": t.original_filename,
+            "sheet_name": t.sheet_name,
+            "row_count": t.row_count, "col_count": t.col_count,
+            "checkable_count": t.checkable_count,
+            "created_by": t.created_by,
+            "created_at": iso(t.created_at),
+        } for t in templates
+    ]}
+
+
+@app.get("/api/sheet-templates/{template_id}")
+def get_sheet_template(template_id: int, db: Session = Depends(get_db)):
+    """Sheet 템플릿 상세 (구조 포함)"""
+    t = db.query(SheetTemplate).filter(SheetTemplate.id == template_id).first()
+    if not t:
+        raise HTTPException(404, "Template not found")
+    return {
+        "id": t.id, "name": t.name, "description": t.description,
+        "category": t.category, "original_filename": t.original_filename,
+        "sheet_name": t.sheet_name,
+        "structure": t.structure,
+        "row_count": t.row_count, "col_count": t.col_count,
+        "checkable_count": t.checkable_count,
+        "created_by": t.created_by,
+        "created_at": iso(t.created_at),
+    }
+
+
+@app.delete("/api/sheet-templates/{template_id}")
+def delete_sheet_template(template_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """Sheet 템플릿 삭제"""
+    t = db.query(SheetTemplate).filter(SheetTemplate.id == template_id).first()
+    if not t:
+        raise HTTPException(404, "Template not found")
+    db.delete(t)
+    db.commit()
+    return {"message": "Template deleted"}
+
+
+# =========================
+# v3.0 Sheet Execution API
+# =========================
+
+class SheetExecutionCreate(BaseModel):
+    template_id: int
+    project_id: Optional[int] = None
+    title: Optional[str] = None
+    equipment_name: Optional[str] = None
+
+@app.post("/api/sheet-executions")
+def create_sheet_execution(
+    body: SheetExecutionCreate,
+    space_id: int = Query(...),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행 시작 — 템플릿 기반으로 실행본 + 체크 항목 생성"""
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == body.template_id).first()
+    if not template:
+        raise HTTPException(404, "Template not found")
+
+    execution = SheetExecution(
+        template_id=template.id,
+        project_id=body.project_id,
+        space_id=space_id,
+        title=body.title or f"{template.name} - {date.today().isoformat()}",
+        equipment_name=body.equipment_name,
+        status="in_progress",
+        total_items=template.checkable_count,
+        checked_items=0,
+        progress=0,
+        started_by=user_id,
+    )
+    db.add(execution)
+    db.flush()
+
+    # 템플릿의 checkable_cells로부터 실행 항목 생성
+    structure = template.structure or {}
+    checkable_cells = structure.get("checkable_cells", [])
+    for cell in checkable_cells:
+        item = SheetExecutionItem(
+            execution_id=execution.id,
+            cell_ref=cell.get("ref", ""),
+            row_idx=cell.get("row", 0),
+            col_idx=cell.get("col", 0),
+            label=cell.get("label", ""),
+            checked=False,
+            value=None,
+            memo=None,
+        )
+        db.add(item)
+
+    # 시작 로그
+    db.add(SheetExecutionLog(
+        execution_id=execution.id, action="start", user_id=user_id,
+        new_value=f"실행 시작: {execution.title}",
+    ))
+
+    db.commit()
+    db.refresh(execution)
+
+    return {
+        "id": execution.id,
+        "template_id": execution.template_id,
+        "project_id": execution.project_id,
+        "title": execution.title,
+        "status": execution.status,
+        "total_items": execution.total_items,
+        "progress": execution.progress,
+        "started_at": iso(execution.started_at),
+    }
+
+
+@app.get("/api/sheet-executions")
+def list_sheet_executions(
+    space_id: int = Query(...),
+    project_id: Optional[int] = Query(None),
+    template_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행 목록 조회 (필터 지원)"""
+    q = db.query(SheetExecution).filter(SheetExecution.space_id == space_id)
+    if project_id is not None:
+        q = q.filter(SheetExecution.project_id == project_id)
+    if template_id is not None:
+        q = q.filter(SheetExecution.template_id == template_id)
+    if status:
+        q = q.filter(SheetExecution.status == status)
+    execs = q.order_by(SheetExecution.started_at.desc()).limit(100).all()
+    return {"executions": [
+        {
+            "id": e.id, "template_id": e.template_id, "project_id": e.project_id,
+            "title": e.title, "equipment_name": e.equipment_name,
+            "status": e.status, "total_items": e.total_items,
+            "checked_items": e.checked_items, "progress": e.progress,
+            "started_by": e.started_by, "started_at": iso(e.started_at),
+            "completed_at": iso(e.completed_at), "completed_by": e.completed_by,
+        } for e in execs
+    ]}
+
+
+@app.get("/api/sheet-executions/{execution_id}")
+def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
+    """Sheet 실행 상세 + 항목 + 템플릿 구조"""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+
+    items = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id
+    ).order_by(SheetExecutionItem.row_idx, SheetExecutionItem.col_idx).all()
+
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+
+    return {
+        "id": execution.id,
+        "template_id": execution.template_id,
+        "project_id": execution.project_id,
+        "title": execution.title,
+        "equipment_name": execution.equipment_name,
+        "status": execution.status,
+        "total_items": execution.total_items,
+        "checked_items": execution.checked_items,
+        "progress": execution.progress,
+        "started_by": execution.started_by,
+        "started_at": iso(execution.started_at),
+        "completed_at": iso(execution.completed_at),
+        "completed_by": execution.completed_by,
+        "template_structure": template.structure if template else {},
+        "template_name": template.name if template else "",
+        "items": [
+            {
+                "id": item.id,
+                "cell_ref": item.cell_ref,
+                "row_idx": item.row_idx,
+                "col_idx": item.col_idx,
+                "label": item.label,
+                "checked": item.checked,
+                "value": item.value,
+                "memo": item.memo,
+                "checked_by": item.checked_by,
+                "checked_at": iso(item.checked_at) if item.checked_at else None,
+            } for item in items
+        ],
+    }
+
+
+@app.patch("/api/sheet-executions/{execution_id}/items/{item_id}")
+def update_sheet_execution_item(
+    execution_id: int,
+    item_id: int,
+    checked: Optional[bool] = Body(None),
+    value: Optional[str] = Body(None),
+    memo: Optional[str] = Body(None),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """실행 항목 체크/메모 업데이트"""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    if execution.status == "completed":
+        raise HTTPException(400, "이미 완료된 실행입니다")
+
+    item = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.id == item_id, SheetExecutionItem.execution_id == execution_id
+    ).first()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    old_checked = item.checked
+    old_value = item.value
+
+    if checked is not None:
+        item.checked = checked
+        item.checked_by = user_id
+        item.checked_at = datetime.now(KST) if checked else None
+    if value is not None:
+        item.value = value
+    if memo is not None:
+        item.memo = memo
+
+    # 이력 로그
+    if checked is not None and checked != old_checked:
+        db.add(SheetExecutionLog(
+            execution_id=execution_id, item_id=item_id,
+            action="check" if checked else "uncheck",
+            old_value=str(old_checked), new_value=str(checked),
+            user_id=user_id,
+        ))
+    if memo is not None:
+        db.add(SheetExecutionLog(
+            execution_id=execution_id, item_id=item_id,
+            action="memo", new_value=memo[:200] if memo else "",
+            user_id=user_id,
+        ))
+
+    # 진행률 재계산
+    total = execution.total_items or 1
+    checked_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
+    ).count()
+    execution.checked_items = checked_count
+    execution.progress = min(100, int(checked_count / total * 100))
+
+    db.commit()
+
+    return {
+        "id": item.id,
+        "checked": item.checked,
+        "value": item.value,
+        "memo": item.memo,
+        "checked_by": item.checked_by,
+        "checked_at": iso(item.checked_at) if item.checked_at else None,
+        "execution_progress": execution.progress,
+        "execution_checked_items": execution.checked_items,
+    }
+
+
+@app.patch("/api/sheet-executions/{execution_id}/complete")
+def complete_sheet_execution(
+    execution_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행 완료 처리"""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+
+    execution.status = "completed"
+    execution.completed_at = datetime.now(KST)
+    execution.completed_by = user_id
+
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="complete",
+        new_value=f"완료 (진행률: {execution.progress}%)", user_id=user_id,
+    ))
+
+    db.commit()
+    return {"message": "실행이 완료되었습니다", "progress": execution.progress}
+
+
+@app.get("/api/sheet-executions/{execution_id}/logs")
+def get_sheet_execution_logs(execution_id: int, db: Session = Depends(get_db)):
+    """실행 이력 로그 조회"""
+    logs = db.query(SheetExecutionLog).filter(
+        SheetExecutionLog.execution_id == execution_id
+    ).order_by(SheetExecutionLog.created_at.desc()).limit(200).all()
+    return {"logs": [
+        {
+            "id": l.id, "action": l.action, "item_id": l.item_id,
+            "old_value": l.old_value, "new_value": l.new_value,
+            "memo": l.memo, "user_id": l.user_id,
+            "created_at": iso(l.created_at),
+        } for l in logs
+    ]}
+
+
+@app.get("/api/projects/{project_id}/sheet-summary")
+def get_project_sheet_summary(project_id: int, db: Session = Depends(get_db)):
+    """프로젝트에 연결된 Sheet 실행 요약"""
+    execs = db.query(SheetExecution).filter(SheetExecution.project_id == project_id).order_by(SheetExecution.started_at.desc()).all()
+    active = [e for e in execs if e.status == "in_progress"]
+    completed = [e for e in execs if e.status == "completed"]
+    return {
+        "project_id": project_id,
+        "total_executions": len(execs),
+        "active_count": len(active),
+        "completed_count": len(completed),
+        "active_executions": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "started_at": iso(e.started_at)}
+            for e in active
+        ],
+        "recent_completed": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "completed_at": iso(e.completed_at)}
+            for e in completed[:10]
+        ],
+    }
 
 
 # =========================
