@@ -2037,25 +2037,27 @@ def create_attachment(task_id: int, attachment: AttachmentCreate, db: Session = 
 
 @app.delete("/api/attachments/{attachment_id}")
 def delete_attachment(attachment_id: int, db: Session = Depends(get_db)):
-    """첨부파일 삭제. S3 + 로컬 + DB 모두에서 삭제."""
-    from utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
-
+    """첨부파일 삭제. S3 + 로컬 + DB + sidecar 모두에서 삭제."""
     state = load_state()
     att = next((a for a in state.get("attachments", []) if int(a.get("id")) == attachment_id), None)
+
+    # file 타입일 때만 S3/로컬 파일 정리 (S3 import를 여기서만 수행)
     if att and att.get("type") == "file" and att.get("stored_name"):
         task_id = att.get("task_id")
+        try:
+            from utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
+            if is_s3_configured():
+                s3_key = att.get("s3_key", "")
+                if not s3_key and task_id:
+                    s3_key = get_attachment_s3_key(
+                        att.get("filename", ""), att["stored_name"], "task", int(task_id)
+                    )
+                if s3_key:
+                    delete_from_s3(s3_key)
+        except Exception as e:
+            logging.getLogger("main").warning(f"S3 파일 삭제 실패 (무시): {e}")
 
-        # S3 삭제
-        if is_s3_configured():
-            s3_key = att.get("s3_key", "")
-            if not s3_key and task_id:
-                s3_key = get_attachment_s3_key(
-                    att.get("filename", ""), att["stored_name"], "task", int(task_id)
-                )
-            if s3_key:
-                delete_from_s3(s3_key)
-
-        # 로컬 파일도 있으면 삭제 (기존 파일 정리)
+        # 로컬 파일도 있으면 삭제
         if task_id:
             file_path = os.path.join(UPLOAD_DIR, f"tasks/{task_id}", att["stored_name"])
             if os.path.exists(file_path):
@@ -2069,8 +2071,11 @@ def delete_attachment(attachment_id: int, db: Session = Depends(get_db)):
     save_state(state)
 
     # DB에서도 삭제 (URL 첨부 등 DB에 레코드가 있을 수 있음)
-    db.query(AttachmentModel).filter(AttachmentModel.id == attachment_id).delete()
-    db.commit()
+    try:
+        db.query(AttachmentModel).filter(AttachmentModel.id == attachment_id).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
 
     return {"message": "Attachment deleted"}
 
