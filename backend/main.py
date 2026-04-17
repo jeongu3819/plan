@@ -725,7 +725,14 @@ def _sync_all_task_progress():
             total = len(checkboxes)
             checked = sum(1 for a in checkboxes if a.checked)
             progress = round(checked / total * 100) if total > 0 else 0
-            expected_status = "todo" if progress == 0 else ("done" if progress >= 100 else "in_progress")
+            # 자동 승격만: todo→in_progress(진행시작), any→done(전체완료)
+            # progress==0 이어도 기존 status를 todo로 강제 회귀하지 않음
+            if progress >= 100:
+                expected_status = "done"
+            elif progress > 0 and task.status == "todo":
+                expected_status = "in_progress"
+            else:
+                expected_status = task.status  # 현재 상태 유지
             meta = get_task_meta(state, tid)
             if task.status != expected_status or meta.get("progress", 0) != progress:
                 task.status = expected_status
@@ -946,6 +953,27 @@ def get_user_project_ids(db: Session, state: dict, user_id: int) -> set:
 
     return pids
 
+def get_user_public_project_ids(db: Session, state: dict, user_id: int) -> set:
+    """사용자가 속한 space의 공개 프로젝트 ID 집합 반환"""
+    # 사용자가 속한 space 목록
+    user_space_ids = {
+        sm.space_id for sm in
+        db.query(SpaceMember).filter(SpaceMember.user_id == int(user_id)).all()
+    }
+    if not user_space_ids:
+        return set()
+    # 해당 space에 속한 공개 프로젝트
+    public_projects = db.query(Project).filter(
+        Project.space_id.in_(user_space_ids),
+        Project.archived_at.is_(None),
+    ).all()
+    pids = set()
+    for p in public_projects:
+        meta = get_project_meta(state, p.id)
+        if meta.get("visibility") == "public":
+            pids.add(p.id)
+    return pids
+
 def check_project_access(db: Session, state: dict, project_id: int, user_id: int):
     # admin pass
     if is_admin_like_role(get_user_role(db, user_id)):
@@ -971,8 +999,14 @@ def check_project_access(db: Session, state: dict, project_id: int, user_id: int
     if any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(user_id) for m in state.get("project_members", [])):
         return True
 
-    if meta.get("visibility") == "public":
-        return True
+    # 공개 프로젝트: 같은 space 소속 사용자만 조회 허용
+    if meta.get("visibility") == "public" and p.space_id:
+        is_space_member = db.query(SpaceMember).filter(
+            SpaceMember.space_id == p.space_id,
+            SpaceMember.user_id == int(user_id),
+        ).first()
+        if is_space_member:
+            return True
 
     raise HTTPException(status_code=403, detail="Access denied: you are not a member of this project")
 
@@ -1097,9 +1131,8 @@ def get_all_data(user_id: Optional[int] = None, db: Session = Depends(get_db)):
         is_admin = is_admin_like_role(role)
         if not is_admin:
             authorized_pids = get_user_project_ids(db, state, user_id)
-            # public 프로젝트도 허용
-            public_pids = {p["id"] for p in projects if p.get("visibility") == "public"}
-            authorized_pids |= public_pids
+            # 같은 space 소속 공개 프로젝트도 허용
+            authorized_pids |= get_user_public_project_ids(db, state, user_id)
 
             projects = [p for p in projects if p["id"] in authorized_pids]
             tasks = [
@@ -1322,9 +1355,10 @@ def get_projects(user_id: Optional[int] = None, space_id: Optional[int] = None, 
 
     if user_id:
         accessible_project_ids = get_user_project_ids(db, state, user_id)
+        accessible_project_ids |= get_user_public_project_ids(db, state, user_id)
         projects = [
             p for p in projects
-            if p["id"] in accessible_project_ids or p.get("visibility") == "public"
+            if p["id"] in accessible_project_ids
         ]
 
     return {"projects": projects}
@@ -1847,12 +1881,7 @@ def get_tasks(
     # user 권한 기반 필터: 멤버인 프로젝트의 모든 task + public 프로젝트 task
     if user_id:
         user_project_ids = get_user_project_ids(db, state, user_id)
-        public_pids = {
-            p.id
-            for p in db.query(Project).filter(Project.archived_at.is_(None)).all()
-            if get_project_meta(state, p.id).get("visibility") == "public"
-        }
-        user_project_ids |= public_pids
+        user_project_ids |= get_user_public_project_ids(db, state, user_id)
 
         tasks = [
             t for t in tasks
@@ -1946,10 +1975,11 @@ def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: 
 
     db.commit()
     db.refresh(t)
-    # 체크박스 activity가 있으면 progress 기반으로 status 재동기화
-    _sync_task_progress(db, task_id)
-    db.refresh(t)  # bulk update 후 ORM 객체에 최신 status 반영
-    state = load_state()  # _sync_task_progress가 sidecar를 갱신했을 수 있으므로 재로드
+    # 사용자가 직접 status를 변경한 경우 자동 동기화를 건너뛰어 수동 변경을 우선
+    if "status" not in data:
+        _sync_task_progress(db, task_id)
+        db.refresh(t)
+    state = load_state()
     return task_dict(t, state)
 
 @app.delete("/api/tasks/{task_id}")
@@ -2006,8 +2036,8 @@ def create_attachment(task_id: int, attachment: AttachmentCreate, db: Session = 
     return new_att
 
 @app.delete("/api/attachments/{attachment_id}")
-def delete_attachment(attachment_id: int):
-    """첨부파일 삭제. S3 + 로컬 모두에서 삭제."""
+def delete_attachment(attachment_id: int, db: Session = Depends(get_db)):
+    """첨부파일 삭제. S3 + 로컬 + DB 모두에서 삭제."""
     from utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
 
     state = load_state()
@@ -2034,8 +2064,14 @@ def delete_attachment(attachment_id: int):
                 except Exception:
                     pass
 
+    # sidecar에서 삭제
     state["attachments"] = [a for a in state.get("attachments", []) if int(a.get("id")) != attachment_id]
     save_state(state)
+
+    # DB에서도 삭제 (URL 첨부 등 DB에 레코드가 있을 수 있음)
+    db.query(AttachmentModel).filter(AttachmentModel.id == attachment_id).delete()
+    db.commit()
+
     return {"message": "Attachment deleted"}
 
 
@@ -2899,8 +2935,8 @@ def get_global_roadmap(
 
     # 사용자가 멤버인 프로젝트만 표시 (admin이어도 멤버 기준)
     authorized_pids = get_user_project_ids(db, state, user_id)
-    public_pids = {p["id"] for p in all_projects if p.get("visibility") == "public"}
-    accessible = authorized_pids | public_pids
+    authorized_pids |= get_user_public_project_ids(db, state, user_id)
+    accessible = authorized_pids
     projects = [p for p in all_projects if p["id"] in accessible]
 
     task_rows = db.query(Task).filter(Task.archived_at.is_(None)).all()
@@ -3247,7 +3283,15 @@ def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 def _sync_task_progress(db: Session, task_id: int):
-    """Recalculate task progress from checkbox activities and auto-sync status."""
+    """Recalculate task progress from checkbox activities and auto-sync status.
+
+    정책:
+    - progress == 0 이어도 현재 status를 todo로 강제 회귀하지 않음
+      (사용자가 in_progress로 설정했다면 유지)
+    - progress > 0 이고 status가 todo이면 → in_progress로 자동 승격
+    - progress >= 100 이면 → done으로 자동 완료
+    - hold 상태는 수동 지정이므로 건드리지 않음
+    """
     activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
     checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
     if not checkboxes:
@@ -3256,18 +3300,17 @@ def _sync_task_progress(db: Session, task_id: int):
     checked = sum(1 for a in checkboxes if a.checked)
     progress = round(checked / total * 100) if total > 0 else 0
 
-    # Auto-sync status based on progress (hold 상태는 수동 지정이므로 유지)
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         return
     updates: dict = {"progress": progress}
     if task.status != "hold":
-        if progress == 0:
-            updates["status"] = "todo"
-        elif progress >= 100:
+        if progress >= 100:
             updates["status"] = "done"
-        else:
+        elif progress > 0 and task.status == "todo":
+            # 체크가 시작되면 todo → in_progress 자동 승격
             updates["status"] = "in_progress"
+        # progress == 0 이어도 현재 status 유지 (todo로 강제 회귀하지 않음)
     db.query(Task).filter(Task.id == task_id).update(updates)
     db.commit()
     # Also sync to sidecar task_meta
@@ -5165,7 +5208,8 @@ def get_unassigned_projects(user_id: int = Query(...), db: Session = Depends(get
     projects = [project_dict(p, state) for p in rows]
     if user_id:
         accessible = get_user_project_ids(db, state, user_id)
-        projects = [p for p in projects if p["id"] in accessible or p.get("visibility") == "public"]
+        accessible |= get_user_public_project_ids(db, state, user_id)
+        projects = [p for p in projects if p["id"] in accessible]
     return {"projects": projects}
 
 @app.post("/api/spaces/{space_id}/members")

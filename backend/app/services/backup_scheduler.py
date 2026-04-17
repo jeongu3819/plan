@@ -157,6 +157,8 @@ def backup_database() -> dict:
                 f"-P{port}",
                 "--single-transaction",
                 "--quick",
+                "--routines",
+                "--triggers",
                 dbname,
             ]
             env = os.environ.copy()
@@ -179,7 +181,7 @@ def backup_database() -> dict:
                 _log_backup_result("DB", False, f"mysqldump 결과 파일이 비어있음: {local_path}")
                 return {"success": False, "local_path": local_path, "s3_result": None, "error": "Empty dump file"}
 
-            logger.info(f"mysqldump 성공: {local_path} ({file_size:,} bytes)")
+            logger.info(f"[DB 전체 dump 성공] DB={dbname}, 파일={local_path} ({file_size:,} bytes)")
             success = True
 
         else:
