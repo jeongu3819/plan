@@ -2008,7 +2008,7 @@ def create_attachment(task_id: int, attachment: AttachmentCreate, db: Session = 
 @app.delete("/api/attachments/{attachment_id}")
 def delete_attachment(attachment_id: int):
     """첨부파일 삭제. S3 + 로컬 모두에서 삭제."""
-    from app.services.s3_service import delete_from_s3, is_s3_configured, get_attachment_s3_key
+    from utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
 
     state = load_state()
     att = next((a for a in state.get("attachments", []) if int(a.get("id")) == attachment_id), None)
@@ -2048,7 +2048,7 @@ async def upload_task_file(
     db: Session = Depends(get_db),
 ):
     """Upload a file attachment to a task. S3 우선, S3 실패 시 로컬 저장."""
-    from app.services.s3_service import upload_attachment_bytes_to_s3, is_s3_configured
+    from utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
     import logging as _logging
 
     state = load_state()
@@ -2117,7 +2117,7 @@ async def upload_task_file(
 def download_task_file(task_id: int, stored_name: str):
     """Download a file attachment from a task. S3 우선, 없으면 로컬 fallback."""
     from fastapi.responses import Response
-    from app.services.s3_service import download_from_s3, is_s3_configured
+    from utils.s3.s3_utils import download_from_s3, is_s3_configured
 
     state = load_state()
     att = next(
@@ -2149,7 +2149,7 @@ def download_task_file(task_id: int, stored_name: str):
 
     # 2) s3_key가 없지만 S3 설정 + 메타데이터로 key 재구성 시도
     if not s3_key and is_s3_configured():
-        from app.services.s3_service import get_attachment_s3_key
+        from utils.s3.s3_utils import get_attachment_s3_key
         reconstructed_key = get_attachment_s3_key(filename, stored_name, "task", task_id)
         data = download_from_s3(reconstructed_key)
         if data is not None:
@@ -2201,7 +2201,7 @@ async def upload_project_file(
     db: Session = Depends(get_db),
 ):
     """프로젝트 파일 업로드. S3 우선, S3 실패 시 로컬 저장."""
-    from app.services.s3_service import upload_attachment_bytes_to_s3, is_s3_configured
+    from utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
     import logging as _logging
 
     state = load_state()
@@ -2266,7 +2266,7 @@ async def upload_project_file(
 def download_project_file(project_id: int, file_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """프로젝트 파일 다운로드. S3 우선, 없으면 로컬 fallback."""
     from fastapi.responses import Response
-    from app.services.s3_service import download_from_s3, is_s3_configured, get_attachment_s3_key
+    from utils.s3.s3_utils import download_from_s3, is_s3_configured, get_attachment_s3_key
 
     state = load_state()
 
@@ -2329,7 +2329,7 @@ def download_project_file(project_id: int, file_id: int, user_id: Optional[int] 
 @app.delete("/api/projects/{project_id}/files/{file_id}")
 def delete_project_file(project_id: int, file_id: int):
     """프로젝트 파일 삭제. S3 + 로컬 모두에서 삭제."""
-    from app.services.s3_service import delete_from_s3, is_s3_configured, get_attachment_s3_key
+    from utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
 
     state = load_state()
     project_files = state.get("project_files", [])
@@ -5486,7 +5486,7 @@ def get_backup_status(user_id: int = Query(...), db: Session = Depends(get_db)):
     if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
         raise HTTPException(status_code=403, detail="Super admin only")
 
-    from app.services.s3_service import is_s3_configured, list_s3_files
+    from utils.s3.s3_utils import is_s3_configured, list_s3_files
     from app.services.backup_scheduler import BACKUP_LOG_DIR, BACKUP_HOUR, BACKUP_MINUTE
 
     # 최근 로그 파일 읽기
@@ -5535,7 +5535,7 @@ def list_s3_storage(
     if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
         raise HTTPException(status_code=403, detail="Super admin only")
 
-    from app.services.s3_service import list_s3_files, is_s3_configured
+    from utils.s3.s3_utils import list_s3_files, is_s3_configured
     if not is_s3_configured():
         return {"files": [], "message": "S3 not configured"}
 
