@@ -1007,7 +1007,7 @@ export const api = {
     const res = await client.patch(`/projects/${projectId}/move-space`, null, { params: { space_id: spaceId, user_id: requireUserId(userId) } });
     return res.data;
   },
-  updateSpace: async (spaceId: number, data: { name?: string; description?: string }, userId: number): Promise<any> => {
+  updateSpace: async (spaceId: number, data: { name?: string; description?: string; purpose?: string }, userId: number): Promise<any> => {
     const res = await client.patch(`/spaces/${spaceId}`, data, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },

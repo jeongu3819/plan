@@ -18,6 +18,13 @@ import ViewKanbanIcon from '@mui/icons-material/ViewKanban';
 import { Task } from '../../types';
 import WeeklyProgressView from './WeeklyProgressView';
 import { api } from '../../api/client';
+import {
+  BOARD_COLUMNS,
+  ALL_COLUMN_IDS,
+  belongsToColumn,
+  computeColumnMoveUpdates,
+  type BoardColumnId,
+} from '../../utils/taskStatus';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../stores/useAppStore';
 import MagicInput from '../../components/MagicInput';
@@ -46,17 +53,9 @@ interface BoardViewProps {
   projectId: number;
 }
 
-// Visual columns for the board
-const BOARD_COLUMNS: { id: string; label: string; sublabel?: string; color: string; status: Task['status'] }[] = [
-  { id: 'todo', label: 'To Do', color: '#6B7280', status: 'todo' },
-  { id: 'in_progress', label: 'In Progress', color: '#2955FF', status: 'in_progress' },
-  { id: 'in_progress_advanced', label: 'In Progress', sublabel: '50% 이상 진행', color: '#7C3AED', status: 'in_progress' },
-  { id: 'done', label: 'Done', color: '#22C55E', status: 'done' },
-  { id: 'hold', label: 'Hold', color: '#F59E0B', status: 'hold' },
-];
-
-// All droppable IDs (including hold)
-const ALL_DROP_IDS = ['todo', 'in_progress', 'in_progress_advanced', 'done', 'hold'];
+// Columns and drop IDs now live in utils/taskStatus.ts so that board/list/detail
+// share one source of truth for the `in_progress` vs `in_progress_advanced`
+// (≥50% progress) distinction.
 
 type SortField = 'default' | 'created_at' | 'due_date' | 'priority' | 'title';
 type SortDirection = 'asc' | 'desc';
@@ -228,24 +227,14 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
       return bD.localeCompare(aD);
     });
 
-  // Get tasks for each visual column
+  // Get tasks for each visual column — derivation lives in utils/taskStatus.ts
   const getColumnTasks = React.useCallback(
     (colId: string): Task[] => {
       if (!tasks) return [];
-      switch (colId) {
-        case 'todo':
-          return tasks.filter(t => t.status === 'todo');
-        case 'in_progress':
-          return sortByDueDateAsc(tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) < 50));
-        case 'in_progress_advanced':
-          return sortByDueDateAsc(tasks.filter(t => t.status === 'in_progress' && (t.progress ?? 0) >= 50));
-        case 'done':
-          return sortByDueDateDesc(tasks.filter(t => t.status === 'done'));
-        case 'hold':
-          return tasks.filter(t => t.status === 'hold');
-        default:
-          return [];
-      }
+      const filtered = tasks.filter(t => belongsToColumn(t, colId as BoardColumnId));
+      if (colId === 'in_progress' || colId === 'in_progress_advanced') return sortByDueDateAsc(filtered);
+      if (colId === 'done') return sortByDueDateDesc(filtered);
+      return filtered;
     },
     [tasks]
   );
@@ -259,9 +248,9 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     })
   );
 
-  const updateStatusMutation = useMutation({
-    mutationFn: ({ taskId, status }: { taskId: number; status: string }) =>
-      api.updateTask(taskId, { status: status as Task['status'] }),
+  const updateTaskMutation = useMutation({
+    mutationFn: ({ taskId, updates }: { taskId: number; updates: Partial<Task> }) =>
+      api.updateTask(taskId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
     },
@@ -280,21 +269,26 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     const activeId = active.id as number;
     const overId = over.id as string;
 
-    // Determine the target status from drop zone
-    let newStatus = '';
-    if (ALL_DROP_IDS.includes(overId)) {
-      // Dropped on a column/zone directly
-      const col = BOARD_COLUMNS.find(c => c.id === overId);
-      newStatus = col ? col.status : '';
+    // Resolve target column id (may be a column or another task card)
+    let targetCol: BoardColumnId | null = null;
+    if ((ALL_COLUMN_IDS as string[]).includes(overId)) {
+      targetCol = overId as BoardColumnId;
     } else {
-      // Dropped over another task — find which column it belongs to
       const overTask = tasks?.find(t => t.id === Number(overId));
-      if (overTask) newStatus = overTask.status;
+      if (overTask) {
+        // Derive column from the over-task so cross-column drops work for
+        // in_progress vs in_progress_advanced.
+        const col = BOARD_COLUMNS.find(c => c.status === overTask.status);
+        if (col) targetCol = col.id;
+      }
     }
 
     const draggedTask = tasks?.find(t => t.id === activeId);
-    if (draggedTask && newStatus && draggedTask.status !== newStatus) {
-      updateStatusMutation.mutate({ taskId: activeId, status: newStatus });
+    if (!draggedTask || !targetCol) return;
+
+    const updates = computeColumnMoveUpdates(draggedTask, targetCol);
+    if (updates) {
+      updateTaskMutation.mutate({ taskId: activeId, updates });
     }
   };
 
