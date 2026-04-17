@@ -16,7 +16,7 @@ from typing import Optional
 from pathlib import Path
 
 import boto3
-from botocore.config import Config as BotoConfig
+from botocore.config import Config
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 logger = logging.getLogger("s3_service")
@@ -59,13 +59,18 @@ def _get_s3_client():
         return None
 
     try:
+        # s3_utils.py와 동일한 설정으로 통일 (proxy 우회, path style)
+        s3_config = Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+        )
         client = boto3.client(
             "s3",
             endpoint_url=endpoint_url,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             region_name=region,
-            config=BotoConfig(signature_version="s3v4"),
+            config=s3_config,
         )
         return client
     except Exception as e:

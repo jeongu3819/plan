@@ -102,7 +102,7 @@ def backup_database() -> dict:
     - MySQL: mysqldump 실행
     반환: {"success": bool, "local_path": str, "s3_result": dict}
     """
-    from app.services.s3_service import upload_file_to_s3, is_s3_configured
+    from utils.s3.s3_utils import upload_local_file_to_s3, is_s3_configured
 
     database_url = _get_database_url()
     now = _now_kst()
@@ -196,20 +196,18 @@ def backup_database() -> dict:
         _log_backup_result("DB", False, f"DB 백업 예외: {e}")
         return {"success": False, "local_path": local_path, "s3_result": None, "error": str(e)}
 
-    # S3 업로드
+    # S3 업로드 (s3fs 기반 — 이미지 업로드와 동일한 방식)
     s3_result = None
     if success and is_s3_configured():
         # 경로: db-backups/2026-04-14/schedule_2026-04-14_030000.sql
         s3_sub_path = f"db-backups/{date_str}/{os.path.basename(local_path)}"
-        s3_result = upload_file_to_s3(
-            local_path=local_path,
-            s3_sub_path=s3_sub_path,
-            filename=os.path.basename(local_path),
-            metadata={"backup-type": "database", "backup-date": date_str, "db-name": dbname},
-        )
-
-        if s3_result["success"]:
-            _log_backup_result("DB", True, f"DB → S3 업로드 완료 ({os.path.getsize(local_path):,} bytes)", s3_key=s3_result.get("s3_key", ""))
+        try:
+            s3_full_path = upload_local_file_to_s3(
+                local_path=local_path,
+                sub_path=s3_sub_path,
+            )
+            s3_result = {"success": True, "s3_path": s3_full_path, "error": None}
+            _log_backup_result("DB", True, f"DB → S3 업로드 완료 ({os.path.getsize(local_path):,} bytes)", s3_key=s3_full_path)
 
             # 성공 시에만 로컬 파일 삭제 (설정에 따라)
             if _should_delete_local():
@@ -218,10 +216,11 @@ def backup_database() -> dict:
                     logger.info(f"로컬 백업 파일 삭제됨: {local_path}")
                 except Exception as e:
                     logger.warning(f"로컬 백업 파일 삭제 실패 (무시): {e}")
-        else:
-            _log_backup_result("DB", False, f"DB → S3 업로드 실패: {s3_result.get('error', 'unknown')}", s3_key=s3_result.get("s3_key", ""))
+        except Exception as e:
+            s3_result = {"success": False, "s3_path": "", "error": str(e)}
+            _log_backup_result("DB", False, f"DB → S3 업로드 실패: {e}")
             # 업로드 실패 시 로컬 파일은 삭제하지 않고 보존
-            logger.warning(f"S3 업로드 실패 — 로컬 백업 파일 보존: {local_path}")
+            logger.error(f"DB 백업 S3 업로드 실패 (로컬 파일 보존: {local_path}): {e}")
     else:
         _log_backup_result("DB", success, f"DB 로컬 백업 완료: {local_path}")
 
@@ -328,7 +327,7 @@ def start_backup_scheduler():
     """APScheduler 시작 (FastAPI startup에서 호출)"""
     global _scheduler
 
-    from app.services.s3_service import is_s3_configured
+    from utils.s3.s3_utils import is_s3_configured
 
     if not is_s3_configured():
         logger.warning("S3 미설정 → 백업 스케줄러 시작하지 않음")
