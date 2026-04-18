@@ -23,6 +23,7 @@ import {
   ALL_COLUMN_IDS,
   belongsToColumn,
   computeColumnMoveUpdates,
+  deriveBoardColumn,
   type BoardColumnId,
 } from '../../utils/taskStatus';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -276,10 +277,9 @@ const BoardView: React.FC<BoardViewProps> = ({ projectId }) => {
     } else {
       const overTask = tasks?.find(t => t.id === Number(overId));
       if (overTask) {
-        // Derive column from the over-task so cross-column drops work for
-        // in_progress vs in_progress_advanced.
-        const col = BOARD_COLUMNS.find(c => c.status === overTask.status);
-        if (col) targetCol = col.id;
+        // Derive the column (including in_progress vs in_progress_advanced)
+        // from the over-task so dropping on a task in the ≥50% column lands there.
+        targetCol = deriveBoardColumn(overTask);
       }
     }
 

@@ -322,6 +322,7 @@ export interface SheetExecution {
   id: number;
   template_id: number;
   project_id?: number;
+  task_id?: number;
   title: string;
   equipment_name?: string;
   status: 'in_progress' | 'completed' | 'cancelled';

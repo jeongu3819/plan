@@ -5,7 +5,7 @@ import { useState } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, IconButton, Dialog,
   DialogTitle, DialogContent, DialogActions, Tooltip, alpha,
-  CircularProgress,
+  CircularProgress, FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -52,11 +52,18 @@ export default function SheetTemplatePage() {
   const [startDialogTemplate, setStartDialogTemplate] = useState<SheetTemplate | null>(null);
   const [execTitle, setExecTitle] = useState('');
   const [execEquipment, setExecEquipment] = useState('');
+  const [execProjectId, setExecProjectId] = useState<number | ''>('');
 
   const { data: templatesData, isLoading } = useQuery({
     queryKey: ['sheetTemplates', currentSpaceId],
     queryFn: () => api.getSheetTemplates(currentSpaceId!),
     enabled: !!currentSpaceId,
+  });
+
+  const { data: spaceProjects = [] } = useQuery({
+    queryKey: ['projects', currentUserId, currentSpaceId],
+    queryFn: () => api.getProjects(currentUserId, currentSpaceId),
+    enabled: !!currentSpaceId && !!currentUserId,
   });
 
   const templates: SheetTemplate[] = templatesData?.templates || [];
@@ -82,12 +89,18 @@ export default function SheetTemplatePage() {
     try {
       const exec = await api.createSheetExecution({
         template_id: startDialogTemplate.id,
+        project_id: typeof execProjectId === 'number' ? execProjectId : undefined,
         title: execTitle.trim() || undefined,
         equipment_name: execEquipment.trim() || undefined,
       }, currentSpaceId, currentUserId);
       setStartDialogTemplate(null);
       setExecTitle('');
       setExecEquipment('');
+      setExecProjectId('');
+      queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
+      if (typeof execProjectId === 'number') {
+        queryClient.invalidateQueries({ queryKey: ['projectSheetSummary', execProjectId] });
+      }
       navigate(`${spacePath}/sheets/execution/${exec.id}`);
     } catch (e) {
       console.error(e);
@@ -231,7 +244,7 @@ export default function SheetTemplatePage() {
       </Dialog>
 
       {/* Start execution dialog */}
-      <Dialog open={!!startDialogTemplate} onClose={() => setStartDialogTemplate(null)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+      <Dialog open={!!startDialogTemplate} onClose={() => { setStartDialogTemplate(null); setExecProjectId(''); }} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
         <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Sheet 실행 시작</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -255,10 +268,26 @@ export default function SheetTemplatePage() {
                 style={{ width: '100%', padding: '8px 12px', border: '1px solid #D1D5DB', borderRadius: 8, fontSize: '0.85rem' }}
               />
             </Box>
+            <FormControl fullWidth size="small">
+              <InputLabel>연결할 프로젝트 (선택)</InputLabel>
+              <Select
+                value={execProjectId === '' ? '' : String(execProjectId)}
+                label="연결할 프로젝트 (선택)"
+                onChange={e => {
+                  const v = e.target.value;
+                  setExecProjectId(v === '' ? '' : Number(v));
+                }}
+              >
+                <MenuItem value=""><em>연결 안 함 (공간 전용)</em></MenuItem>
+                {spaceProjects.map(p => (
+                  <MenuItem key={p.id} value={String(p.id)}>{p.name}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           </Box>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setStartDialogTemplate(null)} sx={{ color: '#6B7280' }}>취소</Button>
+          <Button onClick={() => { setStartDialogTemplate(null); setExecProjectId(''); }} sx={{ color: '#6B7280' }}>취소</Button>
           <Button variant="contained" onClick={handleStartExecution} sx={{ bgcolor: '#2955FF' }}>실행 시작</Button>
         </DialogActions>
       </Dialog>

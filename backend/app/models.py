@@ -532,6 +532,7 @@ class SheetExecution(Base):
     id = Column(Integer, primary_key=True, index=True)
     template_id = Column(Integer, ForeignKey("sheet_templates.id"), nullable=False, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True, index=True)
     space_id = Column(Integer, ForeignKey("spaces.id"), nullable=False, index=True)
 
     title = Column(String(300), nullable=True)  # 실행 제목 (예: "2026-04-17 PM Check")
@@ -552,6 +553,7 @@ class SheetExecution(Base):
     __table_args__ = (
         Index("ix_sheet_exec_template", "template_id", "started_at"),
         Index("ix_sheet_exec_project", "project_id", "started_at"),
+        Index("ix_sheet_exec_task", "task_id", "started_at"),
         Index("ix_sheet_exec_space", "space_id", "started_at"),
     )
 

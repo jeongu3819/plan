@@ -25,6 +25,7 @@ import { Task, Attachment, TaskActivity, SubProject } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, User, API_URL } from '../api/client';
 import WorkNoteModal from './WorkNoteModal';
+import TaskSheetPanel from './sheets/TaskSheetPanel';
 import { parseTaskInput } from '../utils/magicInputParser';
 
 const icon = <CheckBoxOutlineBlankIcon fontSize="small" />;
@@ -837,6 +838,15 @@ const TaskDrawer: React.FC = () => {
                                 <Typography variant="caption" sx={{ color: '#9CA3AF' }}>첨부 파일 없음</Typography>
                             )}
                         </Box>
+                    )}
+
+                    {/* Check Sheets (only for existing tasks) */}
+                    {selectedTask?.id && (
+                        <TaskSheetPanel
+                            taskId={selectedTask.id}
+                            projectId={selectedTask.project_id || drawerProjectId || undefined}
+                            canEdit={canEdit}
+                        />
                     )}
                 </Stack>
             </Box>

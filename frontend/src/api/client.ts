@@ -1053,6 +1053,12 @@ export const api = {
   // ========================================
   // v3.0 Sheet Templates
   // ========================================
+  inspectSheetFile: async (file: File): Promise<{ multi: boolean; sheet_names: string[]; suggested: string | null }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await client.post('/sheet-templates/inspect', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return res.data;
+  },
   uploadSheetTemplate: async (file: File, spaceId: number, userId: number, opts?: { name?: string; description?: string; category?: string; sheet_name?: string }): Promise<any> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -1082,11 +1088,11 @@ export const api = {
   // ========================================
   // v3.0 Sheet Executions
   // ========================================
-  createSheetExecution: async (body: { template_id: number; project_id?: number; title?: string; equipment_name?: string }, spaceId: number, userId: number): Promise<any> => {
+  createSheetExecution: async (body: { template_id: number; project_id?: number; task_id?: number; title?: string; equipment_name?: string }, spaceId: number, userId: number): Promise<any> => {
     const res = await client.post('/sheet-executions', body, { params: { space_id: spaceId, user_id: requireUserId(userId) } });
     return res.data;
   },
-  getSheetExecutions: async (spaceId: number, filters?: { project_id?: number; template_id?: number; status?: string; user_id?: number; equipment_name?: string; date_from?: string; date_to?: string }): Promise<any> => {
+  getSheetExecutions: async (spaceId: number, filters?: { project_id?: number; task_id?: number; template_id?: number; status?: string; user_id?: number; equipment_name?: string; date_from?: string; date_to?: string }): Promise<any> => {
     const params: Record<string, any> = { space_id: spaceId, ...filters };
     const res = await client.get('/sheet-executions', { params });
     return res.data;
@@ -1109,6 +1115,10 @@ export const api = {
   },
   getProjectSheetSummary: async (projectId: number): Promise<any> => {
     const res = await client.get(`/projects/${projectId}/sheet-summary`);
+    return res.data;
+  },
+  getTaskSheetSummary: async (taskId: number): Promise<any> => {
+    const res = await client.get(`/tasks/${taskId}/sheet-summary`);
     return res.data;
   },
 };

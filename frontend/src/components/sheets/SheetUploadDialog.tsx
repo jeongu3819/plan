@@ -35,6 +35,9 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
   const [category, setCategory] = useState('general');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState<string>('');
+  const [inspecting, setInspecting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const resetForm = () => {
@@ -43,16 +46,34 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
     setDescription('');
     setCategory('general');
     setError('');
+    setSheetNames([]);
+    setSelectedSheet('');
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) {
-      setFile(f);
-      if (!name) {
-        setName(f.name.replace(/\.(xlsx|xls|csv)$/i, ''));
-      }
-      setError('');
+    if (!f) return;
+    setFile(f);
+    if (!name) {
+      setName(f.name.replace(/\.(xlsx|xls|csv)$/i, ''));
+    }
+    setError('');
+    setSheetNames([]);
+    setSelectedSheet('');
+
+    // CSV 는 시트 선택이 필요없음
+    if (f.name.toLowerCase().endsWith('.csv')) return;
+
+    setInspecting(true);
+    try {
+      const info = await api.inspectSheetFile(f);
+      setSheetNames(info.sheet_names || []);
+      setSelectedSheet(info.suggested || info.sheet_names?.[0] || '');
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || '파일 열기 실패');
+      setFile(null);
+    } finally {
+      setInspecting(false);
     }
   };
 
@@ -65,6 +86,7 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
         name: name.trim() || undefined,
         description: description.trim() || undefined,
         category,
+        sheet_name: sheetNames.length > 1 && selectedSheet ? selectedSheet : undefined,
       });
       onSuccess?.(result);
       resetForm();
@@ -125,6 +147,26 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
           )}
         </Box>
 
+        {inspecting && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+            파일을 분석 중입니다…
+          </Typography>
+        )}
+        {sheetNames.length > 1 && (
+          <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
+            <InputLabel>파싱할 시트</InputLabel>
+            <Select
+              value={selectedSheet}
+              onChange={e => setSelectedSheet(e.target.value)}
+              label="파싱할 시트"
+            >
+              {sheetNames.map(n => (
+                <MenuItem key={n} value={n}>{n}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
+
         <TextField
           fullWidth size="small"
           label="Sheet 이름"
@@ -162,7 +204,7 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
         <Button onClick={() => { resetForm(); onClose(); }} sx={{ color: '#6B7280' }}>취소</Button>
         <Button
           variant="contained"
-          disabled={!file || uploading}
+          disabled={!file || uploading || inspecting}
           onClick={handleUpload}
           sx={{ bgcolor: '#2955FF' }}
         >

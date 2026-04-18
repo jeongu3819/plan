@@ -109,6 +109,13 @@ def _run_migrations():
             if t is not None:
                 Base.metadata.create_all(bind=engine, tables=[t])
 
+    # sheet_executions.task_id (Task Details 에서 Check Sheet 연결)
+    if "sheet_executions" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_executions")]
+        if "task_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_executions ADD COLUMN task_id INTEGER'))
+
 _run_migrations()
 
 app = FastAPI(title="Antigravity Schedule Platform API")
@@ -709,6 +716,36 @@ def set_task_meta(state: dict, task_id: int, values: dict):
             curr["progress"] = 0
     state["task_meta"][str(task_id)] = curr
 
+# ── status 파생 단일 소스 ──
+# 체크박스 진행률 기반 자동 status 승격 규칙을 한 곳으로 모은다.
+# 규칙:
+#   - hold: 수동 지정이므로 절대 자동 변경하지 않음
+#   - progress >= 100 → done
+#   - progress > 0 && status == todo → in_progress
+#   - 그 외: 현재 status 유지 (사용자가 직접 정한 값 보존)
+#   - "In Progress 50% 이상 진행"은 별도 status 값이 아니라 (status=in_progress
+#     AND progress>=50) 조합으로 프론트에서 파생 표시한다. 이 함수는 해당
+#     조합을 파괴하지 않는다.
+def _derive_task_status(current_status: str, progress: int) -> str:
+    if current_status == "hold":
+        return current_status
+    if progress >= 100:
+        return "done"
+    if progress > 0 and current_status == "todo":
+        return "in_progress"
+    return current_status
+
+
+def _compute_task_progress(activities) -> tuple[int, int]:
+    """Return (progress_percent, checkbox_count) for a task's activities."""
+    checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
+    total = len(checkboxes)
+    if total == 0:
+        return 0, 0
+    checked = sum(1 for a in checkboxes if a.checked)
+    return round(checked / total * 100), total
+
+
 # ── 서버 시작 시 기존 task progress/status 일괄 동기화 ──
 def _sync_all_task_progress():
     """기존 task들의 checkbox progress 기반 status를 일괄 보정."""
@@ -730,20 +767,10 @@ def _sync_all_task_progress():
             if not task or task.status == "hold":
                 continue
             activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == tid).all()
-            checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
-            if not checkboxes:
+            progress, cb_total = _compute_task_progress(activities)
+            if cb_total == 0:
                 continue
-            total = len(checkboxes)
-            checked = sum(1 for a in checkboxes if a.checked)
-            progress = round(checked / total * 100) if total > 0 else 0
-            # 자동 승격만: todo→in_progress(진행시작), any→done(전체완료)
-            # progress==0 이어도 기존 status를 todo로 강제 회귀하지 않음
-            if progress >= 100:
-                expected_status = "done"
-            elif progress > 0 and task.status == "todo":
-                expected_status = "in_progress"
-            else:
-                expected_status = task.status  # 현재 상태 유지
+            expected_status = _derive_task_status(task.status, progress)
             meta = get_task_meta(state, tid)
             if task.status != expected_status or meta.get("progress", 0) != progress:
                 task.status = expected_status
@@ -1972,6 +1999,14 @@ def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: 
         if k in data:
             setattr(t, k, data[k])
 
+    # progress도 DB 컬럼과 사이드카 meta에 함께 쓴다 (두 곳의 진실이
+    # 어긋나서 체크박스/드래그 간 진행률이 튀는 현상 방지).
+    if "progress" in data and data["progress"] is not None:
+        try:
+            t.progress = max(0, min(100, int(data["progress"])))
+        except Exception:
+            pass
+
     t.updated_at = datetime.now()
 
     # sidecar fields
@@ -1986,8 +2021,11 @@ def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: 
 
     db.commit()
     db.refresh(t)
-    # 사용자가 직접 status를 변경한 경우 자동 동기화를 건너뛰어 수동 변경을 우선
-    if "status" not in data:
+    # 사용자가 직접 status 또는 progress를 변경한 경우 자동 동기화를
+    # 건너뛰어 수동 변경(드래그/명시적 진행률 입력)을 우선한다. 이렇게 해야
+    # 드래그 직후 _sync_task_progress가 체크박스 기준으로 다시 덮어써서
+    # 상태가 되돌아가는 현상이 발생하지 않는다.
+    if "status" not in data and "progress" not in data:
         _sync_task_progress(db, task_id)
         db.refresh(t)
     state = load_state()
@@ -3301,32 +3339,22 @@ def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
 def _sync_task_progress(db: Session, task_id: int):
     """Recalculate task progress from checkbox activities and auto-sync status.
 
-    정책:
-    - progress == 0 이어도 현재 status를 todo로 강제 회귀하지 않음
-      (사용자가 in_progress로 설정했다면 유지)
-    - progress > 0 이고 status가 todo이면 → in_progress로 자동 승격
-    - progress >= 100 이면 → done으로 자동 완료
-    - hold 상태는 수동 지정이므로 건드리지 않음
+    진행률/파생 status 정책은 _derive_task_status/_compute_task_progress 참고.
+    이 함수는 체크박스가 하나라도 있을 때만 동작한다 (체크박스가 없으면
+    사용자가 직접 관리하는 task이므로 건드리지 않음).
     """
     activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
-    checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
-    if not checkboxes:
+    progress, cb_total = _compute_task_progress(activities)
+    if cb_total == 0:
         return
-    total = len(checkboxes)
-    checked = sum(1 for a in checkboxes if a.checked)
-    progress = round(checked / total * 100) if total > 0 else 0
 
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         return
+    expected_status = _derive_task_status(task.status, progress)
     updates: dict = {"progress": progress}
-    if task.status != "hold":
-        if progress >= 100:
-            updates["status"] = "done"
-        elif progress > 0 and task.status == "todo":
-            # 체크가 시작되면 todo → in_progress 자동 승격
-            updates["status"] = "in_progress"
-        # progress == 0 이어도 현재 status 유지 (todo로 강제 회귀하지 않음)
+    if expected_status != task.status:
+        updates["status"] = expected_status
     db.query(Task).filter(Task.id == task_id).update(updates)
     db.commit()
     # Also sync to sidecar task_meta
@@ -5724,6 +5752,37 @@ class SheetTemplateCreate(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = "general"
 
+@app.post("/api/sheet-templates/inspect")
+async def inspect_sheet_file(
+    file: UploadFile = FastAPIFile(...),
+):
+    """업로드 전 파일의 Sheet 목록만 조회 (multi-sheet xlsx 선택 UX 용)."""
+    contents = await file.read()
+    filename = file.filename or "unknown"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext == "csv":
+        return {"multi": False, "sheet_names": ["(CSV)"], "suggested": None}
+    if ext not in ("xlsx", "xls"):
+        raise HTTPException(400, f"지원하지 않는 파일 형식: .{ext} (xlsx, csv만 지원)")
+
+    try:
+        import io as _io
+        import openpyxl
+        wb = openpyxl.load_workbook(_io.BytesIO(contents), data_only=True, read_only=True)
+        names = list(wb.sheetnames)
+        active_title = wb.active.title if wb.active is not None else (names[0] if names else None)
+        wb.close()
+    except Exception as e:
+        raise HTTPException(400, f"파일 열기 실패: {str(e)}")
+
+    return {
+        "multi": len(names) > 1,
+        "sheet_names": names,
+        "suggested": active_title,
+    }
+
+
 @app.post("/api/sheet-templates/upload")
 async def upload_sheet_template(
     file: UploadFile = FastAPIFile(...),
@@ -5821,13 +5880,24 @@ def get_sheet_template(template_id: int, db: Session = Depends(get_db)):
 
 @app.delete("/api/sheet-templates/{template_id}")
 def delete_sheet_template(template_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
-    """Sheet 템플릿 삭제"""
+    """Sheet 템플릿 삭제 (연결된 실행본과 항목/로그도 함께 정리)"""
     t = db.query(SheetTemplate).filter(SheetTemplate.id == template_id).first()
     if not t:
         raise HTTPException(404, "Template not found")
+
+    # SheetExecution.template_id FK 에는 ON DELETE CASCADE 가 없으므로 수동으로 정리.
+    # SheetExecutionItem / SheetExecutionLog 는 execution_id 에 ondelete=CASCADE 가 있지만
+    # SQLite 등에서 cascade 가 꺼져 있을 수 있어 명시적으로 먼저 지운다.
+    exec_rows = db.query(SheetExecution.id).filter(SheetExecution.template_id == template_id).all()
+    exec_ids = [r[0] for r in exec_rows]
+    if exec_ids:
+        db.query(SheetExecutionLog).filter(SheetExecutionLog.execution_id.in_(exec_ids)).delete(synchronize_session=False)
+        db.query(SheetExecutionItem).filter(SheetExecutionItem.execution_id.in_(exec_ids)).delete(synchronize_session=False)
+        db.query(SheetExecution).filter(SheetExecution.template_id == template_id).delete(synchronize_session=False)
+
     db.delete(t)
     db.commit()
-    return {"message": "Template deleted"}
+    return {"message": "Template deleted", "deleted_executions": len(exec_ids)}
 
 
 # =========================
@@ -5837,6 +5907,7 @@ def delete_sheet_template(template_id: int, user_id: int = Query(...), db: Sessi
 class SheetExecutionCreate(BaseModel):
     template_id: int
     project_id: Optional[int] = None
+    task_id: Optional[int] = None
     title: Optional[str] = None
     equipment_name: Optional[str] = None
 
@@ -5855,6 +5926,7 @@ def create_sheet_execution(
     execution = SheetExecution(
         template_id=template.id,
         project_id=body.project_id,
+        task_id=body.task_id,
         space_id=space_id,
         title=body.title or f"{template.name} - {date.today().isoformat()}",
         equipment_name=body.equipment_name,
@@ -5896,6 +5968,7 @@ def create_sheet_execution(
         "id": execution.id,
         "template_id": execution.template_id,
         "project_id": execution.project_id,
+        "task_id": execution.task_id,
         "title": execution.title,
         "status": execution.status,
         "total_items": execution.total_items,
@@ -5908,6 +5981,7 @@ def create_sheet_execution(
 def list_sheet_executions(
     space_id: int = Query(...),
     project_id: Optional[int] = Query(None),
+    task_id: Optional[int] = Query(None),
     template_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
     equipment_name: Optional[str] = Query(None),
@@ -5920,6 +5994,8 @@ def list_sheet_executions(
     q = db.query(SheetExecution).filter(SheetExecution.space_id == space_id)
     if project_id is not None:
         q = q.filter(SheetExecution.project_id == project_id)
+    if task_id is not None:
+        q = q.filter(SheetExecution.task_id == task_id)
     if template_id is not None:
         q = q.filter(SheetExecution.template_id == template_id)
     if status:
@@ -5935,6 +6011,7 @@ def list_sheet_executions(
     return {"executions": [
         {
             "id": e.id, "template_id": e.template_id, "project_id": e.project_id,
+            "task_id": e.task_id,
             "title": e.title, "equipment_name": e.equipment_name,
             "status": e.status, "total_items": e.total_items,
             "checked_items": e.checked_items, "progress": e.progress,
@@ -5961,6 +6038,7 @@ def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
         "id": execution.id,
         "template_id": execution.template_id,
         "project_id": execution.project_id,
+        "task_id": execution.task_id,
         "title": execution.title,
         "equipment_name": execution.equipment_name,
         "status": execution.status,
@@ -6100,6 +6178,30 @@ def get_sheet_execution_logs(execution_id: int, db: Session = Depends(get_db)):
             "created_at": iso(l.created_at),
         } for l in logs
     ]}
+
+
+@app.get("/api/tasks/{task_id}/sheet-summary")
+def get_task_sheet_summary(task_id: int, db: Session = Depends(get_db)):
+    """Task 에 직접 연결된 Sheet 실행 요약 (Task Details 패널용)"""
+    execs = db.query(SheetExecution).filter(SheetExecution.task_id == task_id).order_by(SheetExecution.started_at.desc()).all()
+    active = [e for e in execs if e.status == "in_progress"]
+    completed = [e for e in execs if e.status == "completed"]
+    return {
+        "task_id": task_id,
+        "total_executions": len(execs),
+        "active_count": len(active),
+        "completed_count": len(completed),
+        "active_executions": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "started_at": iso(e.started_at)}
+            for e in active
+        ],
+        "recent_completed": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "completed_at": iso(e.completed_at)}
+            for e in completed[:10]
+        ],
+    }
 
 
 @app.get("/api/projects/{project_id}/sheet-summary")

@@ -17,7 +17,12 @@
       "Bash(npm install:*)",
       "Bash(npx vite:*)",
       "Read(//mnt/c/**)",
-      "Read(//c/Users//**)"
+      "Read(//c/Users//**)",
+      "Bash(ls \"C:\\\\\\\\Users\\\\\\\\송명숙\\\\\\\\AppData\\\\\\\\Roaming\\\\\\\\npm\\\\\\\\node_modules\\\\\\\\@anthropic-ai\\\\\\\\claude-code\\\\\\\\vendor\\\\\\\\\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('main.py', encoding='utf-8'\\).read\\(\\)\\); print\\('main.py OK'\\)\")",
+      "Bash(python *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(echo \"tsc=$?\")"
     ]
   }
 }

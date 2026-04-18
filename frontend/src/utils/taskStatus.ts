@@ -49,6 +49,39 @@ export function belongsToColumn(task: Pick<Task, 'status' | 'progress'>, colId: 
 }
 
 /**
+ * Display label/colors for a task based on its derived column.
+ * Use this wherever a single status chip/label is rendered so that
+ * `in_progress` with progress ≥50 shows "In Progress · 50% 이상 진행".
+ */
+export interface StatusDisplay {
+  label: string;
+  sublabel?: string;
+  color: string;
+  bgcolor: string;
+}
+
+export function getStatusDisplay(task: Pick<Task, 'status' | 'progress'>): StatusDisplay {
+  const col = deriveBoardColumn(task);
+  switch (col) {
+    case 'todo':
+      return { label: 'To Do', color: '#6B7280', bgcolor: '#F3F4F6' };
+    case 'in_progress':
+      return { label: 'In Progress', color: '#2955FF', bgcolor: '#EEF2FF' };
+    case 'in_progress_advanced':
+      return {
+        label: 'In Progress',
+        sublabel: '50% 이상 진행',
+        color: '#7C3AED',
+        bgcolor: '#F3E8FF',
+      };
+    case 'done':
+      return { label: 'Done', color: '#22C55E', bgcolor: '#F0FDF4' };
+    case 'hold':
+      return { label: 'Hold', color: '#F59E0B', bgcolor: '#FFFBEB' };
+  }
+}
+
+/**
  * Compute the (status, progress) updates needed to move a task into `targetCol`.
  * Returns `null` if the task already renders in that column (no update needed).
  *
