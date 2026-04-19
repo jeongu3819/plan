@@ -35,7 +35,7 @@ export default function SheetHistoryPage() {
 
   useEffect(() => {
     if (overviewData && overviewData.purpose === 'project_management') {
-      navigate(spacePath || '/');
+      navigate(spacePath('/'), { replace: true });
     }
   }, [overviewData, navigate, spacePath]);
 

@@ -507,13 +507,14 @@ const HomePage: React.FC = () => {
             )}
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Typography
-                variant="body2"
+                variant="body1"
                 sx={{
                   fontWeight: 600,
-                  fontSize: '0.82rem',
+                  fontSize: '0.92rem',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
+                  lineHeight: 1.4,
                 }}
               >
                 {task.title}
@@ -524,7 +525,7 @@ const HomePage: React.FC = () => {
                   sx={{
                     color:
                       differenceInDays(new Date(task.due_date), new Date()) < 0 ? '#EF4444' : '#9CA3AF',
-                    fontSize: '0.7rem',
+                    fontSize: '0.8rem',
                   }}
                 >
                   Due {format(new Date(task.due_date), 'MMM dd')}
@@ -535,9 +536,9 @@ const HomePage: React.FC = () => {
               label={task.priority || 'medium'}
               size="small"
               sx={{
-                height: 18,
-                fontSize: '0.6rem',
-                fontWeight: 600,
+                height: 20,
+                fontSize: '0.7rem',
+                fontWeight: 700,
                 bgcolor:
                   task.priority === 'high'
                     ? '#FEF2F2'
@@ -562,9 +563,9 @@ const HomePage: React.FC = () => {
   const WidgetHeader: React.FC<{ def: WidgetDef }> = ({ def }) => (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, px: 0.5 }}>
       <Box sx={{ color: '#2955FF', display: 'flex' }}>
-        {React.cloneElement(def.icon as React.ReactElement, { sx: { fontSize: '1.1rem' } })}
+        {React.cloneElement(def.icon as React.ReactElement, { sx: { fontSize: '1.3rem' } })}
       </Box>
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.85rem', flexGrow: 1 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 700, fontSize: '1rem', flexGrow: 1 }}>
         {def.title}
       </Typography>
     </Box>
@@ -629,13 +630,13 @@ const HomePage: React.FC = () => {
                     >
                       <Typography
                         variant="caption"
-                        sx={{ color: '#9CA3AF', fontSize: '0.65rem', fontWeight: 500 }}
+                        sx={{ color: '#6B7280', fontSize: '0.78rem', fontWeight: 600 }}
                       >
                         {item.label}
                       </Typography>
                       <Typography
-                        variant="h6"
-                        sx={{ fontWeight: 800, color: item.color, fontSize: '1.3rem' }}
+                        variant="h5"
+                        sx={{ fontWeight: 800, color: item.color, fontSize: '1.55rem' }}
                       >
                         {item.value}
                       </Typography>
@@ -725,12 +726,12 @@ const HomePage: React.FC = () => {
                 {(stats?.total || 0) > 0 && !overviewFilter && (
                   <Box>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                      <Typography variant="caption" sx={{ fontWeight: 600, fontSize: '0.7rem' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.82rem' }}>
                         Completion
                       </Typography>
                       <Typography
-                        variant="caption"
-                        sx={{ fontWeight: 700, fontSize: '0.7rem', color: '#22C55E' }}
+                        variant="body2"
+                        sx={{ fontWeight: 700, fontSize: '0.82rem', color: '#22C55E' }}
                       >
                         {Math.round(((stats?.done || 0) / (stats?.total || 1)) * 100)}%
                       </Typography>

@@ -55,7 +55,7 @@ export default function SheetTemplatePage() {
 
   useEffect(() => {
     if (overviewData && overviewData.purpose === 'project_management') {
-      navigate(spacePath || '/');
+      navigate(spacePath('/'), { replace: true });
     }
   }, [overviewData, navigate, spacePath]);
 
