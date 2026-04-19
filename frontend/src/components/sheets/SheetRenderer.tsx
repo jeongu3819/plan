@@ -21,15 +21,15 @@ interface Props {
   readOnly?: boolean;
 }
 
-const DEFAULT_COL_WIDTH = 80;
-const DEFAULT_ROW_HEIGHT = 28;
-const MIN_COL_WIDTH = 40;
+const DEFAULT_COL_WIDTH = 64; // ~8.43 in Excel
+const DEFAULT_ROW_HEIGHT = 22; // ~15pt in Excel
+const MIN_COL_WIDTH = 24;
 
 function borderStyle(style?: string): string {
   if (!style) return 'none';
   if (style === 'thin') return '1px solid #D1D5DB';
   if (style === 'medium') return '2px solid #9CA3AF';
-  if (style === 'thick') return '3px solid #6B7280';
+  if (style === 'thick') return '3px solid #4B5563';
   if (style === 'dashed') return '1px dashed #D1D5DB';
   if (style === 'dotted') return '1px dotted #D1D5DB';
   return '1px solid #D1D5DB';
@@ -131,7 +131,8 @@ export default function SheetRenderer({
     const widths: number[] = [];
     for (let c = 0; c < total_cols; c++) {
       const w = col_widths?.[c] || 8.43;
-      widths.push(Math.max(MIN_COL_WIDTH, Math.round(w * 8)));
+      // Excel 8.43 chars -> ~64px
+      widths.push(Math.max(MIN_COL_WIDTH, Math.round(w * 7.5)));
     }
     return widths;
   }, [col_widths, total_cols]);
@@ -140,7 +141,8 @@ export default function SheetRenderer({
     const heights: number[] = [];
     for (let r = 0; r < total_rows; r++) {
       const h = row_heights?.[r] || 15;
-      heights.push(Math.max(DEFAULT_ROW_HEIGHT, Math.round(h * 1.5)));
+      // Excel 15pt -> ~20px
+      heights.push(Math.max(DEFAULT_ROW_HEIGHT, Math.round(h * 1.33)));
     }
     return heights;
   }, [row_heights, total_rows]);
@@ -155,7 +157,6 @@ export default function SheetRenderer({
 
   // Helper: find if row has a checked item (for auto-fill checked_at column)
   const getRowCheckedAt = useCallback((rowIdx: number): string | undefined => {
-    // Find check_status items in this row
     for (const c of (checkable_cells || [])) {
       if (c.row === rowIdx) {
         const at = checkedAtMap.get(c.ref);
@@ -166,12 +167,18 @@ export default function SheetRenderer({
   }, [checkable_cells, checkedAtMap]);
 
   return (
-    <Box sx={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 1, bgcolor: '#fff' }}>
-      <Box sx={{ display: 'inline-block', minWidth: totalWidth }}>
+    <Box sx={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 1, bgcolor: '#f3f4f6', p: 2 }}>
+      <Box sx={{ 
+        display: 'inline-block', 
+        minWidth: totalWidth, 
+        bgcolor: '#fff', 
+        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+        fontFamily: '"Pretendard", "Noto Sans KR", sans-serif',
+      }}>
         {Array.from({ length: total_rows }, (_, rowIdx) => (
           <Box
             key={rowIdx}
-            sx={{ display: 'flex', minHeight: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT }}
+            sx={{ display: 'flex', height: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT }}
           >
             {Array.from({ length: total_cols }, (_, colIdx) => {
               const key = `${rowIdx}-${colIdx}`;
@@ -193,7 +200,7 @@ export default function SheetRenderer({
                 height += rowHeights[r] || DEFAULT_ROW_HEIGHT;
               }
 
-              const bg = cell?.bg || (rowIdx === 0 ? '#F9FAFB' : undefined);
+              const bg = cell?.bg || 'transparent';
               const font = cell?.font;
               const borders = cell?.borders;
 
@@ -205,21 +212,28 @@ export default function SheetRenderer({
               const cellRef = getCellRef(rowIdx, colIdx);
               const isChecked = checkedMap.get(cellRef) ?? execItem?.checked ?? false;
 
+              // 안전한 fontSize 계산 (Excel pt -> css px 변환 유지)
+              const fontSizePx = font?.fontSize ? Math.round(font.fontSize * 1.33) : 12;
+
               return (
                 <Box
                   key={key}
                   sx={{
-                    width, minWidth: width, height, minHeight: height,
-                    display: 'flex', alignItems: 'center',
-                    px: 0.5, py: 0.2,
-                    bgcolor: bg || 'transparent',
+                    width, height,
+                    minWidth: width, minHeight: height,
+                    maxWidth: width, maxHeight: height,
+                    boxSizing: 'border-box',
+                    display: 'flex', 
+                    flexDirection: 'column',
+                    alignItems: cell?.align === 'center' ? 'center' : cell?.align === 'right' ? 'flex-end' : 'flex-start',
+                    justifyContent: 'center', // 수직 중앙 정렬 기본 (Excel 기본은 bottom이지만, center가 웹에선 깔끔함)
+                    py: 0.2, px: 0.5,
+                    bgcolor: bg,
                     borderRight: borderStyle(borders?.right || 'thin'),
                     borderBottom: borderStyle(borders?.bottom || 'thin'),
-                    borderLeft: colIdx === 0 ? borderStyle(borders?.left || 'thin') : 'none',
-                    borderTop: rowIdx === 0 ? borderStyle(borders?.top || 'thin') : 'none',
+                    borderLeft: colIdx === 0 ? borderStyle(borders?.left || 'thick') : 'none',
+                    borderTop: rowIdx === 0 ? borderStyle(borders?.top || 'thick') : 'none',
                     overflow: 'hidden',
-                    position: 'relative',
-                    justifyContent: cell?.align === 'center' ? 'center' : cell?.align === 'right' ? 'flex-end' : 'flex-start',
                   }}
                 >
                   {isCheckable ? (
@@ -243,7 +257,7 @@ export default function SheetRenderer({
                         <Typography
                           variant="caption"
                           sx={{
-                            fontSize: '0.7rem',
+                            fontSize: `${fontSizePx}px`,
                             fontWeight: font?.bold ? 700 : 500,
                             color: (execItem?.value || cell?.value || '').includes('미완료') ? '#DC2626'
                               : (execItem?.value || cell?.value || '').includes('완료') ? '#16A34A'
@@ -258,13 +272,12 @@ export default function SheetRenderer({
                       )}
                     </Box>
                   ) : isCheckedAtCol && rowCheckedAt ? (
-                    /* v3.1: 점검일시 자동 표시 */
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, width: '100%' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, width: '100%', justifyContent: cell?.align === 'center' ? 'center' : 'flex-start' }}>
                       <AccessTimeIcon sx={{ fontSize: 12, color: '#2955FF', flexShrink: 0 }} />
                       <Typography
                         variant="caption"
                         sx={{
-                          fontSize: '0.68rem', color: '#2955FF', fontWeight: 600,
+                          fontSize: '11px', color: '#2955FF', fontWeight: 600,
                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         }}
                       >
@@ -275,13 +288,14 @@ export default function SheetRenderer({
                     <Typography
                       variant="body2"
                       sx={{
-                        fontSize: font?.fontSize ? Math.min(font.fontSize, 12) * 0.75 + 'rem' : '0.72rem',
+                        fontSize: `${fontSizePx}px`,
                         fontWeight: font?.bold ? 700 : 400,
                         fontStyle: font?.italic ? 'italic' : 'normal',
-                        color: font?.fontColor || 'inherit',
+                        color: font?.fontColor || '#111827',
                         whiteSpace: cell?.wrapText ? 'pre-wrap' : 'nowrap',
+                        wordBreak: cell?.wrapText ? 'break-word' : 'normal',
                         overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        textOverflow: cell?.wrapText ? 'clip' : 'ellipsis',
                         lineHeight: 1.3,
                         width: '100%',
                         textAlign: (cell?.align as any) || 'left',
