@@ -62,8 +62,8 @@ export default function SheetExecutionPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] }),
   });
 
-  const handleCheckChange = (_cellRef: string, rowIdx: number, colIdx: number, checked: boolean) => {
-    const item = (execution?.items || []).find((i: any) => i.row_idx === rowIdx && i.col_idx === colIdx);
+  const handleCheckChange = (cellRef: string, checked: boolean) => {
+    const item = (execution?.items || []).find((i: any) => i.cell_ref === cellRef);
     if (item) {
       checkMutation.mutate({ itemId: item.id, checked });
     }

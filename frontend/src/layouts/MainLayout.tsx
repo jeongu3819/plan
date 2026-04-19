@@ -221,6 +221,8 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     queryFn: () => api.getSpaceJoinRequests(currentSpaceId!, effectiveUserId),
     enabled: !!currentSpaceId && effectiveUserId > 0,
     retry: false,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   // Sync space from URL or auto-select first space

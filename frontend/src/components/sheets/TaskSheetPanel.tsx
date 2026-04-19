@@ -2,22 +2,25 @@
  * TaskSheetPanel — Task Details 내부 Check Sheet 패널
  * - 해당 Task 에 연결된 SheetExecution 목록을 보여주고
  * - 템플릿을 선택해 새 실행을 시작한다 (task_id 를 자동으로 함께 보냄)
+ * v3.1: 클릭 시 SheetExecutionPopup 으로 열기 옵션 추가
  */
 import { useState } from 'react';
 import {
   Box, Typography, Button, Chip, LinearProgress, Dialog,
   DialogTitle, DialogContent, DialogActions, FormControl,
-  InputLabel, Select, MenuItem, alpha, Link,
+  InputLabel, Select, MenuItem, alpha, Link, Tooltip,
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import AddIcon from '@mui/icons-material/Add';
+import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../../hooks/useSpaceNav';
+import SheetExecutionPopup from './SheetExecutionPopup';
 import type { SheetTemplate } from '../../types';
 
 interface Props {
@@ -36,6 +39,9 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | ''>('');
   const [execTitle, setExecTitle] = useState('');
   const [starting, setStarting] = useState(false);
+
+  // v3.1: 팝업 상태
+  const [popupExecId, setPopupExecId] = useState<number | null>(null);
 
   const { data: summary, refetch } = useQuery({
     queryKey: ['taskSheetSummary', taskId],
@@ -64,7 +70,6 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
     if (!selectedTemplateId || !currentSpaceId) return;
     setStarting(true);
     try {
-      const tpl = templates.find(t => t.id === selectedTemplateId);
       const exec = await api.createSheetExecution({
         template_id: Number(selectedTemplateId),
         task_id: taskId,
@@ -73,9 +78,8 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
       }, currentSpaceId, currentUserId);
       setPickerOpen(false);
       refetch();
-      navigate(`${spacePath}/sheets/execution/${exec.id}`);
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      void tpl;
+      // v3.1: 바로 팝업으로 열기
+      setPopupExecId(exec.id);
     } catch (e) {
       console.error(e);
     } finally {
@@ -114,11 +118,12 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
           {active.map((exec: any) => (
             <Box
               key={exec.id}
-              onClick={() => navigate(`${spacePath}/sheets/execution/${exec.id}`)}
+              onClick={() => setPopupExecId(exec.id)}
               sx={{
                 display: 'flex', alignItems: 'center', gap: 1, p: 1, borderRadius: 1.5,
                 cursor: 'pointer', bgcolor: '#FFFBEB', border: '1px solid #FDE68A',
                 '&:hover': { bgcolor: '#FEF3C7' },
+                transition: 'all 0.15s',
               }}
             >
               <PlayArrowIcon sx={{ fontSize: 14, color: '#F59E0B', flexShrink: 0 }} />
@@ -134,15 +139,19 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
               <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#D97706', flexShrink: 0, fontWeight: 700 }}>
                 {exec.progress}%
               </Typography>
+              <Tooltip title="전체 화면으로 열기">
+                <OpenInFullIcon sx={{ fontSize: 12, color: '#D97706', flexShrink: 0 }} />
+              </Tooltip>
             </Box>
           ))}
           {completed.slice(0, 5).map((exec: any) => (
             <Box
               key={exec.id}
-              onClick={() => navigate(`${spacePath}/sheets/execution/${exec.id}`)}
+              onClick={() => setPopupExecId(exec.id)}
               sx={{
                 display: 'flex', alignItems: 'center', gap: 1, p: 1, borderRadius: 1.5, cursor: 'pointer',
                 '&:hover': { bgcolor: '#F9FAFB' },
+                transition: 'all 0.15s',
               }}
             >
               <CheckCircleOutlineIcon sx={{ fontSize: 14, color: '#22C55E', flexShrink: 0 }} />
@@ -174,6 +183,7 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
               {templates.map(t => (
                 <MenuItem key={t.id} value={String(t.id)}>
                   {t.name} (체크 {t.checkable_count}개)
+                  {t.column_role_mapping && ' ✓ 역할매핑'}
                 </MenuItem>
               ))}
             </Select>
@@ -200,6 +210,14 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* v3.1: SheetExecution 팝업 */}
+      <SheetExecutionPopup
+        open={!!popupExecId}
+        onClose={() => { setPopupExecId(null); refetch(); }}
+        executionId={popupExecId}
+        userId={currentUserId}
+      />
     </Box>
   );
 }

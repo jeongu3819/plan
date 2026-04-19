@@ -62,12 +62,17 @@ export default function SheetTemplatePage() {
 
   const openPreview = async (template: SheetTemplate) => {
     setPreviewLoading(true);
-    setPreviewTemplate({ id: template.id, name: template.name });
+    setPreviewTemplate({ id: template.id, name: template.name, original_filename: template.original_filename });
     try {
       const detail = await api.getSheetTemplate(template.id);
       setPreviewTemplate(detail);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      console.error('Template preview failed:', e);
+      // 에러 시에도 최소한의 정보로 표시 (빈 화면 방지)
+      setPreviewTemplate((prev: any) => ({
+        ...prev,
+        _error: e?.response?.data?.detail || '양식 데이터를 불러올 수 없습니다',
+      }));
     } finally {
       setPreviewLoading(false);
     }
@@ -163,6 +168,9 @@ export default function SheetTemplatePage() {
                     sx={{ height: 20, fontSize: '0.62rem', fontWeight: 600, bgcolor: alpha(catColor, 0.1), color: catColor }} />
                   <Chip label={`${t.row_count}행 × ${t.col_count}열`} size="small" sx={{ height: 20, fontSize: '0.62rem' }} />
                   <Chip label={`체크 ${t.checkable_count}개`} size="small" sx={{ height: 20, fontSize: '0.62rem', bgcolor: alpha('#22C55E', 0.1), color: '#16A34A' }} />
+                  {t.column_role_mapping && (
+                    <Chip label="역할 매핑 완료" size="small" sx={{ height: 20, fontSize: '0.62rem', bgcolor: alpha('#2955FF', 0.1), color: '#2955FF' }} />
+                  )}
                 </Box>
                 {t.original_filename && (
                   <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
@@ -222,14 +230,21 @@ export default function SheetTemplatePage() {
           </Toolbar>
         </AppBar>
         <DialogContent sx={{ p: 2 }}>
-          {previewLoading || !previewTemplate?.structure ? (
+          {previewLoading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}>
-              {previewLoading ? <CircularProgress /> : (
-                <Typography color="text.secondary">구조 데이터가 없습니다</Typography>
-              )}
+              <CircularProgress />
             </Box>
-          ) : (
+          ) : previewTemplate?._error ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 10, gap: 2 }}>
+              <Typography color="error" fontWeight={600}>{previewTemplate._error}</Typography>
+              <Button variant="outlined" onClick={() => openPreview(previewTemplate)}>다시 시도</Button>
+            </Box>
+          ) : previewTemplate?.structure ? (
             <SheetRenderer structure={previewTemplate.structure} readOnly />
+          ) : (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}>
+              <Typography color="text.secondary">구조 데이터가 없습니다</Typography>
+            </Box>
           )}
         </DialogContent>
       </Dialog>

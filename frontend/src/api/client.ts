@@ -1034,7 +1034,7 @@ export const api = {
     return res.data;
   },
   getSpaceJoinRequests: async (spaceId: number, userId: number): Promise<any[]> => {
-    const res = await client.get(`/spaces/${spaceId}/join-requests`, { params: { user_id: requireUserId(userId) } });
+    const res = await client.get(`/spaces/${spaceId}/join-requests-safe`, { params: { user_id: requireUserId(userId) } });
     return res.data.requests || [];
   },
   approveSpaceJoinRequest: async (spaceId: number, requestId: number, action: string, userId: number): Promise<any> => {
@@ -1119,6 +1119,14 @@ export const api = {
   },
   getTaskSheetSummary: async (taskId: number): Promise<any> => {
     const res = await client.get(`/tasks/${taskId}/sheet-summary`);
+    return res.data;
+  },
+
+  // ========================================
+  // v3.1 Sheet Column Roles
+  // ========================================
+  confirmSheetRoles: async (templateId: number, roles: any, userId: number): Promise<any> => {
+    const res = await client.post(`/sheet-templates/${templateId}/confirm-roles`, roles, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
 };

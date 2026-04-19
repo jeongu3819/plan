@@ -516,6 +516,10 @@ class SheetTemplate(Base):
     col_count = Column(Integer, nullable=False, default=0)
     checkable_count = Column(Integer, nullable=False, default=0)  # 체크 가능 항목 수
 
+    # v3.1: 자동 인식된 컬럼 역할 매핑 (사용자 확인 후 저장)
+    column_role_mapping = Column(JSON, nullable=True)
+    structure_hash = Column(String(32), nullable=True, index=True)  # 같은 양식 인식용 해시
+
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

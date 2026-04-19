@@ -116,6 +116,16 @@ def _run_migrations():
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE sheet_executions ADD COLUMN task_id INTEGER'))
 
+    # v3.1: sheet_templates.column_role_mapping (자동 인식 결과 저장)
+    if "sheet_templates" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_templates")]
+        if "column_role_mapping" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_templates ADD COLUMN column_role_mapping JSON'))
+        if "structure_hash" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_templates ADD COLUMN structure_hash VARCHAR(32)'))
+
 _run_migrations()
 
 app = FastAPI(title="Antigravity Schedule Platform API")
@@ -5355,6 +5365,21 @@ def get_space_join_requests(space_id: int, user_id: int = Query(...), db: Sessio
         for r, u in reqs
     ]}
 
+@app.get("/api/spaces/{space_id}/join-requests-safe")
+def get_space_join_requests_safe(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """join-requests 조회 — 권한 없으면 빈 배열 반환 (기능 차단 방지)"""
+    try:
+        _require_space_admin(db, space_id, user_id)
+    except HTTPException:
+        return {"requests": []}
+    reqs = db.query(SpaceJoinRequest, User).join(User, SpaceJoinRequest.user_id == User.id).filter(
+        SpaceJoinRequest.space_id == space_id, SpaceJoinRequest.status == "pending"
+    ).all()
+    return {"requests": [
+        {"id": r.id, "user_id": r.user_id, "username": u.username, "loginid": u.loginid, "message": r.message, "created_at": iso(r.created_at)}
+        for r, u in reqs
+    ]}
+
 @app.post("/api/spaces/{space_id}/join-requests/{request_id}/approve")
 def approve_join_request(space_id: int, request_id: int, action: str = Query(...), user_id: int = Query(...), db: Session = Depends(get_db)):
     """action: 'approve' or 'reject'"""
@@ -5806,6 +5831,17 @@ async def upload_sheet_template(
     except Exception as e:
         raise HTTPException(400, f"파일 파싱 실패: {str(e)}")
 
+    # v3.1: 같은 구조 해시의 이전 매핑이 있으면 자동 적용
+    s_hash = meta.get("structure_hash", "")
+    prev_mapping = None
+    if s_hash:
+        prev_tpl = db.query(SheetTemplate).filter(
+            SheetTemplate.structure_hash == s_hash,
+            SheetTemplate.column_role_mapping.isnot(None),
+        ).order_by(SheetTemplate.created_at.desc()).first()
+        if prev_tpl:
+            prev_mapping = prev_tpl.column_role_mapping
+
     template = SheetTemplate(
         space_id=space_id,
         name=name or os.path.splitext(original_filename)[0],
@@ -5817,6 +5853,8 @@ async def upload_sheet_template(
         row_count=meta.get("row_count", 0),
         col_count=meta.get("col_count", 0),
         checkable_count=meta.get("checkable_count", 0),
+        structure_hash=s_hash,
+        column_role_mapping=prev_mapping,  # 이전 매핑 자동 적용
         created_by=user_id,
     )
     db.add(template)
@@ -5832,6 +5870,9 @@ async def upload_sheet_template(
         "row_count": template.row_count,
         "col_count": template.col_count,
         "checkable_count": template.checkable_count,
+        "structure_hash": template.structure_hash,
+        "column_roles": structure.get("column_roles", {}),
+        "column_role_mapping": template.column_role_mapping,
         "created_at": iso(template.created_at),
     }
 
@@ -5873,9 +5914,27 @@ def get_sheet_template(template_id: int, db: Session = Depends(get_db)):
         "structure": t.structure,
         "row_count": t.row_count, "col_count": t.col_count,
         "checkable_count": t.checkable_count,
+        "column_role_mapping": t.column_role_mapping,
+        "structure_hash": t.structure_hash,
         "created_by": t.created_by,
         "created_at": iso(t.created_at),
     }
+
+
+@app.post("/api/sheet-templates/{template_id}/confirm-roles")
+def confirm_sheet_roles(
+    template_id: int,
+    roles: Dict[str, Any] = Body(...),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """사용자가 확인/수정한 컬럼 역할 매핑을 저장"""
+    t = db.query(SheetTemplate).filter(SheetTemplate.id == template_id).first()
+    if not t:
+        raise HTTPException(404, "Template not found")
+    t.column_role_mapping = roles
+    db.commit()
+    return {"message": "Column role mapping saved", "column_role_mapping": roles}
 
 
 @app.delete("/api/sheet-templates/{template_id}")

@@ -1,16 +1,23 @@
 /**
  * SheetRenderer — Excel 원형 유사 렌더링 컴포넌트
  * 병합셀, 색상, 폰트, 테두리, 줄바꿈을 최대한 유지하여 웹에서 표시
+ * v3.1: column_roles 기반 체크 + 점검일시 연동, checkedMap/checkedAtMap 직접 지원
  */
-import { useMemo } from 'react';
+import { useMemo, useCallback } from 'react';
 import { Box, Checkbox, Typography, Tooltip } from '@mui/material';
-import type { SheetStructure, SheetCell, SheetExecutionItem } from '../../types';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import type { SheetStructure, SheetCell, SheetExecutionItem, ColumnRoleMapping } from '../../types';
 
 interface Props {
   structure: SheetStructure;
   executionItems?: SheetExecutionItem[];
-  onCheckChange?: (cellRef: string, rowIdx: number, colIdx: number, checked: boolean) => void;
-  onMemoChange?: (cellRef: string, rowIdx: number, colIdx: number, memo: string) => void;
+  /** v3.1: 직접 체크 상태 전달 (cell_ref → checked) */
+  checkedMap?: Map<string, boolean>;
+  /** v3.1: 체크 시 점검일시 전달 (cell_ref → ISO string) */
+  checkedAtMap?: Map<string, string>;
+  /** v3.1: 컬럼 역할 매핑 (체크상태/점검일시/담당자 등) */
+  columnRoles?: ColumnRoleMapping | null;
+  onCheckChange?: (cellRef: string, checked: boolean) => void;
   readOnly?: boolean;
 }
 
@@ -28,7 +35,28 @@ function borderStyle(style?: string): string {
   return '1px solid #D1D5DB';
 }
 
-export default function SheetRenderer({ structure, executionItems, onCheckChange, readOnly }: Props) {
+/** 점검일시를 보기 좋은 형식으로 변환 */
+function formatCheckedAt(iso?: string): string {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}/${dd} ${hh}:${mi}`;
+  } catch {
+    return iso;
+  }
+}
+
+export default function SheetRenderer({
+  structure, executionItems,
+  checkedMap: propCheckedMap,
+  checkedAtMap: propCheckedAtMap,
+  columnRoles,
+  onCheckChange, readOnly,
+}: Props) {
   const { cells, merges, col_widths, row_heights, total_rows, total_cols, checkable_cells } = structure;
 
   // Build cell map for O(1) lookup
@@ -49,7 +77,7 @@ export default function SheetRenderer({ structure, executionItems, onCheckChange
     return set;
   }, [checkable_cells]);
 
-  // Build execution items map
+  // Build execution items map (legacy path)
   const execItemMap = useMemo(() => {
     const map = new Map<string, SheetExecutionItem>();
     for (const item of (executionItems || [])) {
@@ -57,6 +85,32 @@ export default function SheetRenderer({ structure, executionItems, onCheckChange
     }
     return map;
   }, [executionItems]);
+
+  // Build checked state from modern checkedMap or legacy executionItems
+  const checkedMap = useMemo<Map<string, boolean>>(() => {
+    if (propCheckedMap && propCheckedMap.size > 0) return propCheckedMap;
+    const map = new Map<string, boolean>();
+    if (executionItems) {
+      for (const item of executionItems) {
+        map.set(item.cell_ref, item.checked);
+      }
+    }
+    return map;
+  }, [propCheckedMap, executionItems]);
+
+  const checkedAtMap = useMemo<Map<string, string>>(() => {
+    if (propCheckedAtMap && propCheckedAtMap.size > 0) return propCheckedAtMap;
+    const map = new Map<string, string>();
+    if (executionItems) {
+      for (const item of executionItems) {
+        if (item.checked_at) map.set(item.cell_ref, item.checked_at);
+      }
+    }
+    return map;
+  }, [propCheckedAtMap, executionItems]);
+
+  // v3.1: checked_at 컬럼 인덱스 (0-based)
+  const checkedAtCol = columnRoles?.checked_at?.col ?? -1;
 
   // Build hidden cells set (cells hidden by merges)
   const hiddenCells = useMemo(() => {
@@ -93,6 +147,24 @@ export default function SheetRenderer({ structure, executionItems, onCheckChange
 
   const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
+  // Helper: get cell ref from checkable_cells
+  const getCellRef = useCallback((row: number, col: number): string => {
+    const c = (checkable_cells || []).find(cc => cc.row === row && cc.col === col);
+    return c?.ref || `${row}-${col}`;
+  }, [checkable_cells]);
+
+  // Helper: find if row has a checked item (for auto-fill checked_at column)
+  const getRowCheckedAt = useCallback((rowIdx: number): string | undefined => {
+    // Find check_status items in this row
+    for (const c of (checkable_cells || [])) {
+      if (c.row === rowIdx) {
+        const at = checkedAtMap.get(c.ref);
+        if (at) return at;
+      }
+    }
+    return undefined;
+  }, [checkable_cells, checkedAtMap]);
+
   return (
     <Box sx={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 1, bgcolor: '#fff' }}>
       <Box sx={{ display: 'inline-block', minWidth: totalWidth }}>
@@ -125,6 +197,14 @@ export default function SheetRenderer({ structure, executionItems, onCheckChange
               const font = cell?.font;
               const borders = cell?.borders;
 
+              // v3.1: 점검일시 컬럼이면 자동으로 체크 시간을 표시
+              const isCheckedAtCol = checkedAtCol >= 0 && colIdx === checkedAtCol;
+              const rowCheckedAt = isCheckedAtCol ? getRowCheckedAt(rowIdx) : undefined;
+
+              // 현재 체크 상태 (checkedMap 또는 execItem)
+              const cellRef = getCellRef(rowIdx, colIdx);
+              const isChecked = checkedMap.get(cellRef) ?? execItem?.checked ?? false;
+
               return (
                 <Box
                   key={key}
@@ -148,13 +228,14 @@ export default function SheetRenderer({ structure, executionItems, onCheckChange
                         <span>
                           <Checkbox
                             size="small"
-                            checked={execItem?.checked ?? false}
+                            checked={isChecked}
                             disabled={readOnly}
-                            onChange={(e) => onCheckChange?.(
-                              checkable_cells?.find(c => c.row === rowIdx && c.col === colIdx)?.ref || key,
-                              rowIdx, colIdx, e.target.checked
-                            )}
-                            sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: 18 } }}
+                            onChange={(e) => onCheckChange?.(cellRef, e.target.checked)}
+                            sx={{
+                              p: 0, '& .MuiSvgIcon-root': { fontSize: 18 },
+                              color: isChecked ? '#22C55E' : '#D1D5DB',
+                              '&.Mui-checked': { color: '#22C55E' },
+                            }}
                           />
                         </span>
                       </Tooltip>
@@ -175,6 +256,20 @@ export default function SheetRenderer({ structure, executionItems, onCheckChange
                           {execItem?.value ?? cell?.value ?? ''}
                         </Typography>
                       )}
+                    </Box>
+                  ) : isCheckedAtCol && rowCheckedAt ? (
+                    /* v3.1: 점검일시 자동 표시 */
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, width: '100%' }}>
+                      <AccessTimeIcon sx={{ fontSize: 12, color: '#2955FF', flexShrink: 0 }} />
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          fontSize: '0.68rem', color: '#2955FF', fontWeight: 600,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {formatCheckedAt(rowCheckedAt)}
+                      </Typography>
                     </Box>
                   ) : (
                     <Typography

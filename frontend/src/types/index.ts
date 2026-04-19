@@ -264,6 +264,20 @@ export interface ProjectAiQueryResponse {
 // v3.0 Sheet 운영 타입
 // ========================================
 
+export interface ColumnRoleInfo {
+  col: number;       // 0-based column index
+  header: string;    // detected header text
+  confidence: number; // 0~1
+}
+
+export interface ColumnRoleMapping {
+  check_status?: ColumnRoleInfo;
+  checked_at?: ColumnRoleInfo;
+  assignee?: ColumnRoleInfo;
+  due_date?: ColumnRoleInfo;
+  remark?: ColumnRoleInfo;
+}
+
 export interface SheetTemplate {
   id: number;
   name: string;
@@ -275,6 +289,8 @@ export interface SheetTemplate {
   row_count: number;
   col_count: number;
   checkable_count: number;
+  column_role_mapping?: ColumnRoleMapping | null;
+  structure_hash?: string;
   created_by?: number;
   created_at?: string;
 }
@@ -288,6 +304,10 @@ export interface SheetStructure {
   total_cols: number;
   checkable_cells: SheetCheckableCell[];
   headers?: { col: number; value: string }[];
+  column_roles?: ColumnRoleMapping;
+  header_row_idx?: number;
+  data_start_row?: number;
+  structure_hash?: string;
 }
 
 export interface SheetCell {
