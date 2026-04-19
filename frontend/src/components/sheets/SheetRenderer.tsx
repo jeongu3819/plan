@@ -142,20 +142,40 @@ export default function SheetRenderer({ structure, executionItems, onCheckChange
                     justifyContent: cell?.align === 'center' ? 'center' : cell?.align === 'right' ? 'flex-end' : 'flex-start',
                   }}
                 >
-                  {isCheckable && !readOnly ? (
-                    <Tooltip title={execItem?.memo || ''} placement="top" arrow>
-                      <Checkbox
-                        size="small"
-                        checked={execItem?.checked || false}
-                        onChange={(e) => onCheckChange?.(
-                          checkable_cells?.find(c => c.row === rowIdx && c.col === colIdx)?.ref || key,
-                          rowIdx, colIdx, e.target.checked
-                        )}
-                        sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: 18 } }}
-                      />
-                    </Tooltip>
-                  ) : isCheckable && readOnly && execItem?.checked ? (
-                    <Checkbox size="small" checked disabled sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: 18 } }} />
+                  {isCheckable ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, width: '100%', justifyContent: cell?.align === 'center' ? 'center' : 'flex-start' }}>
+                      <Tooltip title={execItem?.memo || ''} placement="top" arrow>
+                        <span>
+                          <Checkbox
+                            size="small"
+                            checked={execItem?.checked ?? false}
+                            disabled={readOnly}
+                            onChange={(e) => onCheckChange?.(
+                              checkable_cells?.find(c => c.row === rowIdx && c.col === colIdx)?.ref || key,
+                              rowIdx, colIdx, e.target.checked
+                            )}
+                            sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: 18 } }}
+                          />
+                        </span>
+                      </Tooltip>
+                      {(execItem?.value || cell?.value) && (
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            fontSize: '0.7rem',
+                            fontWeight: font?.bold ? 700 : 500,
+                            color: (execItem?.value || cell?.value || '').includes('미완료') ? '#DC2626'
+                              : (execItem?.value || cell?.value || '').includes('완료') ? '#16A34A'
+                              : font?.fontColor || '#374151',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {execItem?.value ?? cell?.value ?? ''}
+                        </Typography>
+                      )}
+                    </Box>
                   ) : (
                     <Typography
                       variant="body2"

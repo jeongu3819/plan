@@ -5940,20 +5940,36 @@ def create_sheet_execution(
     db.flush()
 
     # 템플릿의 checkable_cells로부터 실행 항목 생성
+    # - initial_value(원본 셀값) 가 있으면 그걸 value 에 pre-fill (엔지니어는 그 위에서 바로 수정 가능)
+    # - "완료"/"OK"/"양호"/"pass"/"O"/"✓" 류는 checked=True 로 자동 표시
     structure = template.structure or {}
     checkable_cells = structure.get("checkable_cells", [])
+    COMPLETED_INITIAL = {"완료", "OK", "ok", "PASS", "pass", "양호", "O", "o", "○", "●", "✓", "✔", "☑"}
+    checked_at_now = datetime.utcnow()
+    initial_checked_count = 0
     for cell in checkable_cells:
+        init_val = cell.get("initial_value")
+        init_val_str = (str(init_val).strip() if init_val is not None else "")
+        pre_checked = init_val_str in COMPLETED_INITIAL
+        if pre_checked:
+            initial_checked_count += 1
         item = SheetExecutionItem(
             execution_id=execution.id,
             cell_ref=cell.get("ref", ""),
             row_idx=cell.get("row", 0),
             col_idx=cell.get("col", 0),
             label=cell.get("label", ""),
-            checked=False,
-            value=None,
+            checked=pre_checked,
+            value=init_val_str or None,
             memo=None,
+            checked_by=user_id if pre_checked else None,
+            checked_at=checked_at_now if pre_checked else None,
         )
         db.add(item)
+
+    if initial_checked_count and execution.total_items:
+        execution.checked_items = initial_checked_count
+        execution.progress = round(initial_checked_count / execution.total_items * 100)
 
     # 시작 로그
     db.add(SheetExecutionLog(

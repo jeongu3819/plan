@@ -316,6 +316,7 @@ export interface SheetCheckableCell {
   row: number;
   col: number;
   label: string;
+  initial_value?: string;
 }
 
 export interface SheetExecution {
