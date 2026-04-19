@@ -268,6 +268,7 @@ export interface ColumnRoleInfo {
   col: number;       // 0-based column index
   header: string;    // detected header text
   confidence: number; // 0~1
+  editor_type?: 'text' | 'textarea' | 'select' | 'date'; // 에디터 타입
 }
 
 export interface ColumnRoleMapping {
@@ -275,6 +276,8 @@ export interface ColumnRoleMapping {
   checked_at?: ColumnRoleInfo;
   assignee?: ColumnRoleInfo;
   due_date?: ColumnRoleInfo;
+  planned_date?: ColumnRoleInfo;
+  cycle?: ColumnRoleInfo;
   remark?: ColumnRoleInfo;
 }
 

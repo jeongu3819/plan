@@ -1105,6 +1105,14 @@ export const api = {
     const res = await client.patch(`/sheet-executions/${executionId}/items/${itemId}`, body, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
+  upsertSheetExecutionCell: async (executionId: number, cellRef: string, body: { checked?: boolean; value?: string; memo?: string }, userId: number): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/cells/${cellRef}`, body, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  copySheetExecution: async (executionId: number, title: string, includeData: boolean, userId: number): Promise<any> => {
+    const res = await client.post(`/sheet-executions/${executionId}/copy`, null, { params: { title, include_data: includeData, user_id: requireUserId(userId) } });
+    return res.data;
+  },
   completeSheetExecution: async (executionId: number, userId: number): Promise<any> => {
     const res = await client.patch(`/sheet-executions/${executionId}/complete`, null, { params: { user_id: requireUserId(userId) } });
     return res.data;

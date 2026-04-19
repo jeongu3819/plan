@@ -33,20 +33,38 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     refetchInterval: 30000,
   });
 
-  const updateMut = useMutation({
-    mutationFn: ({ itemId, data }: { itemId: number; data: any }) =>
-      api.updateSheetExecutionItem(executionId!, itemId, data, userId),
+  const upsertMut = useMutation({
+    mutationFn: ({ cellRef, data }: { cellRef: string; data: any }) =>
+      api.upsertSheetExecutionCell(executionId!, cellRef, data, userId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
     },
   });
 
+  const copyMut = useMutation({
+    mutationFn: ({ title, includeData }: { title: string; includeData: boolean }) =>
+      api.copySheetExecution(executionId!, title, includeData, userId),
+    onSuccess: () => {
+      alert('체크시트가 복제되었습니다.');
+      queryClient.invalidateQueries(); // 목록 새로고침
+      onClose(); // 복제 후 팝업 닫기 (새 시트가 리스트에 보여짐)
+    },
+  });
+
   const handleCheckChange = useCallback((cellRef: string, checked: boolean) => {
-    if (!execution?.items) return;
-    const item = execution.items.find(it => it.cell_ref === cellRef);
-    if (!item) return;
-    updateMut.mutate({ itemId: item.id, data: { checked } });
-  }, [execution, updateMut]);
+    upsertMut.mutate({ cellRef, data: { checked } });
+  }, [upsertMut]);
+
+  const handleValueChange = useCallback((cellRef: string, value: string) => {
+    upsertMut.mutate({ cellRef, data: { value } });
+  }, [upsertMut]);
+
+  const handleCopyClick = () => {
+    const title = prompt('새로운 체크시트 이름을 입력하세요:', (execution?.title || '') + ' (복사본)');
+    if (!title) return;
+    const includeData = confirm('기존 체크 내역과 입력값을 포함해서 복사하시겠습니까?\n(취소 시 양식만 복사됩니다)');
+    copyMut.mutate({ title, includeData });
+  };
 
   const structure = execution?.template_structure;
   const progress = execution?.progress ?? 0;
@@ -54,15 +72,16 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   const totalCount = execution?.total_items ?? 0;
   const columnRoles = structure?.column_roles;
 
-  // 항목별 체크 상태를 SheetRenderer에 전달할 map으로 변환
+  // 항목별 매핑
   const checkedMap = new Map<string, boolean>();
   const checkedAtMap = new Map<string, string>();
+  const valueMap = new Map<string, string>();
+  
   if (execution?.items) {
     for (const item of execution.items) {
       checkedMap.set(item.cell_ref, item.checked);
-      if (item.checked_at) {
-        checkedAtMap.set(item.cell_ref, item.checked_at);
-      }
+      if (item.checked_at) checkedAtMap.set(item.cell_ref, item.checked_at);
+      if (item.value) valueMap.set(item.cell_ref, item.value);
     }
   }
 
@@ -123,13 +142,24 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             />
           </Box>
 
-          {updateMut.isPending && (
+          {(upsertMut.isPending || copyMut.isPending) && (
             <Chip
-              label="저장 중..."
+              label={copyMut.isPending ? "복사 중..." : "저장 중..."}
               size="small"
               sx={{ bgcolor: alpha('#F59E0B', 0.15), color: '#F59E0B', height: 22, fontSize: '0.62rem' }}
             />
           )}
+          
+          <Chip
+            label="복제하기"
+            onClick={handleCopyClick}
+            size="small"
+            sx={{
+              bgcolor: 'rgba(255,255,255,0.1)', color: '#fff',
+              fontWeight: 600, fontSize: '0.72rem', height: 26, cursor: 'pointer',
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.2)' }
+            }}
+          />
 
           <IconButton onClick={onClose} sx={{ color: 'rgba(255,255,255,0.7)' }}>
             <CloseIcon />
@@ -155,8 +185,10 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
               structure={structure}
               checkedMap={checkedMap}
               checkedAtMap={checkedAtMap}
+              valueMap={valueMap}
               columnRoles={columnRoles}
               onCheckChange={handleCheckChange}
+              onValueChange={handleValueChange}
               readOnly={execution?.status === 'completed'}
             />
           </Box>

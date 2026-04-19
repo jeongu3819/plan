@@ -6214,6 +6214,144 @@ def update_sheet_execution_item(
         "execution_checked_items": execution.checked_items,
     }
 
+class CellUpsertRequest(BaseModel):
+    value: Optional[str] = None
+    memo: Optional[str] = None
+    checked: Optional[bool] = None
+
+@app.patch("/api/sheet-executions/{execution_id}/cells/{cell_ref}")
+def upsert_sheet_execution_cell(
+    execution_id: int,
+    cell_ref: str,
+    body: CellUpsertRequest,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """특정 셀(cell_ref)의 값을 동적으로 Upsert (담당자/비고 등 임의의 컬럼 수정용)"""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    if execution.status == "completed":
+        raise HTTPException(400, "이미 완료된 실행입니다")
+
+    item = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id,
+        SheetExecutionItem.cell_ref == cell_ref
+    ).first()
+
+    # 셀의 row, col 인덱스를 파싱 (임시 방편: A1 등 정규식으로 파싱 가능하지만, 없으면 0으로 처리)
+    import re
+    row_idx, col_idx = 0, 0
+    match = re.match(r"^([A-Z]+)(\d+)$", cell_ref)
+    if match:
+        col_str = match.group(1)
+        col_idx = 0
+        for char in col_str:
+            col_idx = col_idx * 26 + (ord(char) - ord('A') + 1)
+        col_idx -= 1
+        row_idx = int(match.group(2)) - 1
+
+    old_value = None
+    if not item:
+        item = SheetExecutionItem(
+            execution_id=execution_id,
+            cell_ref=cell_ref,
+            row_idx=row_idx,
+            col_idx=col_idx,
+            checked=False,
+            value=body.value,
+            memo=body.memo
+        )
+        if body.checked:
+            item.checked = True
+            item.checked_by = user_id
+            item.checked_at = datetime.now(KST)
+        db.add(item)
+    else:
+        old_value = item.value
+        old_checked = item.checked
+        if body.checked is not None:
+            item.checked = body.checked
+            if body.checked and not old_checked:
+                item.checked_by = user_id
+                item.checked_at = datetime.now(KST)
+            elif not body.checked and old_checked:
+                item.checked_at = None
+        if body.value is not None:
+            item.value = body.value
+        if body.memo is not None:
+            item.memo = body.memo
+
+    db.commit()
+    
+    # 진행률 재계산 (기존 items 기준)
+    total = execution.total_items or 1
+    checked_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
+    ).count()
+    progress = min(100, int((checked_count / total) * 100)) if total > 0 else 0
+    execution.checked_items = checked_count
+    execution.progress = progress
+    db.commit()
+
+    return {"status": "ok", "progress": progress}
+
+@app.post("/api/sheet-executions/{execution_id}/copy")
+def copy_sheet_execution(
+    execution_id: int,
+    title: str = Query(...),
+    include_data: bool = Query(False),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """기존 실행본을 복제하여 새로운 실행본 생성"""
+    original = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not original:
+        raise HTTPException(404, "Execution not found")
+        
+    execution = SheetExecution(
+        template_id=original.template_id,
+        project_id=original.project_id,
+        task_id=original.task_id,
+        space_id=original.space_id,
+        title=title,
+        equipment_name=original.equipment_name,
+        status="in_progress",
+        total_items=original.total_items,
+        checked_items=0,
+        progress=0,
+        started_by=user_id,
+    )
+    db.add(execution)
+    db.flush()
+
+    # 데이터 복제
+    if include_data:
+        original_items = db.query(SheetExecutionItem).filter(SheetExecutionItem.execution_id == execution_id).all()
+        checked_count = 0
+        for item in original_items:
+            new_item = SheetExecutionItem(
+                execution_id=execution.id,
+                cell_ref=item.cell_ref,
+                row_idx=item.row_idx,
+                col_idx=item.col_idx,
+                label=item.label,
+                checked=item.checked,
+                value=item.value,
+                memo=item.memo,
+                checked_by=user_id if item.checked else None,
+                checked_at=datetime.now(KST) if item.checked else None,
+            )
+            if new_item.checked:
+                checked_count += 1
+            db.add(new_item)
+            
+        execution.checked_items = checked_count
+        execution.progress = min(100, int((checked_count / (execution.total_items or 1)) * 100))
+    
+    db.commit()
+    
+    return {"id": execution.id}
 
 @app.patch("/api/sheet-executions/{execution_id}/complete")
 def complete_sheet_execution(

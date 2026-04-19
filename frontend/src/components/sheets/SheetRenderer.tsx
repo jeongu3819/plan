@@ -3,8 +3,8 @@
  * 병합셀, 색상, 폰트, 테두리, 줄바꿈을 최대한 유지하여 웹에서 표시
  * v3.1: column_roles 기반 체크 + 점검일시 연동, checkedMap/checkedAtMap 직접 지원
  */
-import { useMemo, useCallback } from 'react';
-import { Box, Checkbox, Typography, Tooltip } from '@mui/material';
+import { useMemo, useCallback, useState } from 'react';
+import { Box, Checkbox, Typography, Tooltip, TextField } from '@mui/material';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import type { SheetStructure, SheetCell, SheetExecutionItem, ColumnRoleMapping } from '../../types';
 
@@ -18,6 +18,9 @@ interface Props {
   /** v3.1: 컬럼 역할 매핑 (체크상태/점검일시/담당자 등) */
   columnRoles?: ColumnRoleMapping | null;
   onCheckChange?: (cellRef: string, checked: boolean) => void;
+  /** v3.1: 텍스트/기타 컬럼 편집 지원 (cell_ref → value) */
+  valueMap?: Map<string, string>;
+  onValueChange?: (cellRef: string, value: string) => void;
   readOnly?: boolean;
 }
 
@@ -54,8 +57,9 @@ export default function SheetRenderer({
   structure, executionItems,
   checkedMap: propCheckedMap,
   checkedAtMap: propCheckedAtMap,
+  valueMap: propValueMap,
   columnRoles,
-  onCheckChange, readOnly,
+  onCheckChange, onValueChange, readOnly,
 }: Props) {
   const { cells, merges, col_widths, row_heights, total_rows, total_cols, checkable_cells } = structure;
 
@@ -109,8 +113,35 @@ export default function SheetRenderer({
     return map;
   }, [propCheckedAtMap, executionItems]);
 
+  const valueMap = useMemo<Map<string, string>>(() => {
+    if (propValueMap) return propValueMap;
+    const map = new Map<string, string>();
+    if (executionItems) {
+      for (const item of executionItems) {
+        if (item.value) map.set(item.cell_ref, item.value);
+      }
+    }
+    return map;
+  }, [propValueMap, executionItems]);
+
   // v3.1: checked_at 컬럼 인덱스 (0-based)
   const checkedAtCol = columnRoles?.checked_at?.col ?? -1;
+
+  // Editable columns
+  const editableCols = useMemo(() => {
+    const map = new Map<number, string>(); // colIdx -> editorType
+    if (columnRoles && !readOnly) {
+      if (columnRoles.assignee?.col !== undefined) map.set(columnRoles.assignee.col, columnRoles.assignee.editor_type || 'text');
+      if (columnRoles.due_date?.col !== undefined) map.set(columnRoles.due_date.col, columnRoles.due_date.editor_type || 'date');
+      if (columnRoles.planned_date?.col !== undefined) map.set(columnRoles.planned_date.col, columnRoles.planned_date.editor_type || 'date');
+      if (columnRoles.remark?.col !== undefined) map.set(columnRoles.remark.col, columnRoles.remark.editor_type || 'text');
+      if (columnRoles.cycle?.col !== undefined) map.set(columnRoles.cycle.col, columnRoles.cycle.editor_type || 'text');
+    }
+    return map;
+  }, [columnRoles, readOnly]);
+
+  const [editingCell, setEditingCell] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<string>('');
 
   // Build hidden cells set (cells hidden by merges)
   const hiddenCells = useMemo(() => {
@@ -208,9 +239,14 @@ export default function SheetRenderer({
               const isCheckedAtCol = checkedAtCol >= 0 && colIdx === checkedAtCol;
               const rowCheckedAt = isCheckedAtCol ? getRowCheckedAt(rowIdx) : undefined;
 
-              // 현재 체크 상태 (checkedMap 또는 execItem)
+              // 현재 체크 상태 및 기타 수정값
               const cellRef = getCellRef(rowIdx, colIdx);
               const isChecked = checkedMap.get(cellRef) ?? execItem?.checked ?? false;
+              const cellValue = valueMap.get(cellRef) ?? execItem?.value ?? cell?.value ?? '';
+
+              // Editable 관련
+              const editorType = editingCell === cellRef ? editableCols.get(colIdx) : null;
+              const isEditableHoverable = editableCols.has(colIdx) && rowIdx > 0 && !isCheckable && !isCheckedAtCol;
 
               // 안전한 fontSize 계산 (Excel pt -> css px 변환 유지)
               const fontSizePx = font?.fontSize ? Math.round(font.fontSize * 1.33) : 12;
@@ -218,6 +254,12 @@ export default function SheetRenderer({
               return (
                 <Box
                   key={key}
+                  onClick={() => {
+                    if (isEditableHoverable && !readOnly) {
+                      setEditingCell(cellRef);
+                      setEditValue(cellValue);
+                    }
+                  }}
                   sx={{
                     width, height,
                     minWidth: width, minHeight: height,
@@ -234,9 +276,43 @@ export default function SheetRenderer({
                     borderLeft: colIdx === 0 ? borderStyle(borders?.left || 'thick') : 'none',
                     borderTop: rowIdx === 0 ? borderStyle(borders?.top || 'thick') : 'none',
                     overflow: 'hidden',
+                    cursor: isEditableHoverable ? 'text' : 'default',
+                    '&:hover': isEditableHoverable ? { bgcolor: 'rgba(41, 85, 255, 0.04)' } : {}, // editable hover 표시
                   }}
                 >
-                  {isCheckable ? (
+                  {editorType ? (
+                    <TextField
+                      autoFocus
+                      variant="standard"
+                      size="small"
+                      type={editorType === 'date' ? 'date' : 'text'}
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onBlur={() => {
+                        if (editValue !== cellValue) {
+                          onValueChange?.(cellRef, editValue);
+                        }
+                        setEditingCell(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          (e.target as HTMLInputElement).blur();
+                        }
+                      }}
+                      InputProps={{
+                        disableUnderline: true,
+                        style: {
+                          fontSize: `${fontSizePx}px`,
+                          fontWeight: font?.bold ? 700 : 400,
+                          color: font?.fontColor || '#111827',
+                          width: '100%',
+                          textAlign: (cell?.align as any) || 'left',
+                        }
+                      }}
+                      sx={{ p: 0, m: 0, width: '100%' }}
+                    />
+                  ) : isCheckable ? (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, width: '100%', justifyContent: cell?.align === 'center' ? 'center' : 'flex-start' }}>
                       <Tooltip title={execItem?.memo || ''} placement="top" arrow>
                         <span>
@@ -301,7 +377,7 @@ export default function SheetRenderer({
                         textAlign: (cell?.align as any) || 'left',
                       }}
                     >
-                      {cell?.value || ''}
+                      {cellValue}
                     </Typography>
                   )}
                 </Box>

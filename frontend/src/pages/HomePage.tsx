@@ -53,6 +53,7 @@ import { useSpaceNav } from '../hooks/useSpaceNav';
 import { useDensityScores } from '../hooks/useDensityScores';
 import ZeroStateDashboard from '../components/ZeroStateDashboard';
 import PurposeOverview from '../components/space/PurposeOverview';
+import SheetExecutionPopup from '../components/sheets/SheetExecutionPopup';
 import type { SpacePurpose } from '../types';
 import {
   format,
@@ -305,6 +306,7 @@ const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const { spacePath } = useSpaceNav();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [popupExecId, setPopupExecId] = useState<number | null>(null);
 
   const [calMonth, setCalMonth] = useState(new Date());
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
@@ -1504,11 +1506,17 @@ const HomePage: React.FC = () => {
                 openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] }, projectId);
               }}
               onSheetClick={(executionId) => {
-                navigate(`${spacePath}/sheets/execution/${executionId}`);
+                setPopupExecId(executionId);
               }}
             />
           </Box>
         )}
+        <SheetExecutionPopup
+          open={popupExecId !== null}
+          executionId={popupExecId}
+          userId={currentUserId}
+          onClose={() => setPopupExecId(null)}
+        />
         {/* ── Sortable Widget Grid ── */}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={displayOrder} strategy={rectSortingStrategy}>
