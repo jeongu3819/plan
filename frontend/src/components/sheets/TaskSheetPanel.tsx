@@ -97,16 +97,16 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
             onClick={openPicker}
             sx={{ textTransform: 'none', fontSize: '0.7rem', color: '#7C3AED' }}
           >
-            Sheet 실행 시작
+            체크시트 연결
           </Button>
         )}
       </Box>
 
       {!hasAny ? (
         <Typography variant="caption" sx={{ color: '#9CA3AF' }}>
-          연결된 Check Sheet 가 없습니다.{' '}
+          이 Task 에 연결된 체크시트가 없습니다.{' '}
           <Link component="button" onClick={() => navigate(`${spacePath}/sheets`)} sx={{ fontSize: '0.7rem', color: '#7C3AED' }}>
-            Sheet 관리로 이동
+            양식 저장소로 이동
           </Link>
         </Typography>
       ) : (
@@ -158,16 +158,16 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
 
       {/* Template picker dialog */}
       <Dialog open={pickerOpen} onClose={() => setPickerOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
-        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>Check Sheet 실행 시작</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>체크시트 연결</DialogTitle>
         <DialogContent>
           <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-            이 Task 에 Sheet 실행본을 연결합니다. 실행 후 Task Details 에서 진행률을 볼 수 있습니다.
+            이 Task 에서 사용할 체크시트 양식을 선택하세요. 연결 후 엔지니어가 직접 항목별로 체크하며 진행합니다.
           </Typography>
           <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
-            <InputLabel>Sheet 템플릿</InputLabel>
+            <InputLabel>체크시트 양식</InputLabel>
             <Select
               value={selectedTemplateId === '' ? '' : String(selectedTemplateId)}
-              label="Sheet 템플릿"
+              label="체크시트 양식"
               onChange={e => setSelectedTemplateId(e.target.value === '' ? '' : Number(e.target.value))}
             >
               <MenuItem value=""><em>선택</em></MenuItem>
@@ -179,11 +179,11 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
             </Select>
           </FormControl>
           <Box>
-            <Typography variant="caption" fontWeight={600}>실행 제목 (선택)</Typography>
+            <Typography variant="caption" fontWeight={600}>시트 이름 (선택)</Typography>
             <input
               value={execTitle}
               onChange={e => setExecTitle(e.target.value)}
-              placeholder="미입력 시 자동 생성"
+              placeholder="미입력 시 양식 이름 + 날짜로 자동 생성"
               style={{ width: '100%', padding: '8px 12px', border: '1px solid #D1D5DB', borderRadius: 8, fontSize: '0.85rem', marginTop: 4 }}
             />
           </Box>
@@ -196,7 +196,7 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
             disabled={!selectedTemplateId || starting}
             sx={{ bgcolor: '#7C3AED' }}
           >
-            {starting ? '실행 중…' : '실행 시작'}
+            {starting ? '연결 중…' : '연결하고 열기'}
           </Button>
         </DialogActions>
       </Dialog>

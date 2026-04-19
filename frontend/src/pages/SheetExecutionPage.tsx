@@ -80,7 +80,7 @@ export default function SheetExecutionPage() {
   if (!execution) {
     return (
       <Box sx={{ p: 3, textAlign: 'center' }}>
-        <Typography color="text.secondary">실행을 찾을 수 없습니다</Typography>
+        <Typography color="text.secondary">체크시트를 찾을 수 없습니다</Typography>
       </Box>
     );
   }
@@ -122,7 +122,7 @@ export default function SheetExecutionPage() {
             onClick={() => setLogOpen(true)}
             sx={{ fontSize: '0.76rem' }}
           >
-            이력
+            변경 이력
           </Button>
           {!isCompleted && (
             <Button
@@ -130,13 +130,13 @@ export default function SheetExecutionPage() {
               variant="contained"
               startIcon={<CheckCircleIcon sx={{ fontSize: 16 }} />}
               onClick={() => {
-                if (confirm(`실행을 완료하시겠습니까? (진행률: ${execution.progress}%)`)) {
+                if (confirm(`체크시트를 완료 처리하시겠습니까? (진행률: ${execution.progress}%)`)) {
                   completeMutation.mutate();
                 }
               }}
               sx={{ fontSize: '0.76rem', bgcolor: '#22C55E' }}
             >
-              완료
+              완료 처리
             </Button>
           )}
         </Box>
@@ -275,7 +275,7 @@ export default function SheetExecutionPage() {
 
       {/* Log dialog */}
       <Dialog open={logOpen} onClose={() => setLogOpen(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
-        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>실행 이력</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '1rem' }}>변경 이력</DialogTitle>
         <DialogContent>
           {(logsData?.logs || []).length === 0 ? (
             <Typography variant="body2" color="text.secondary">이력이 없습니다</Typography>
