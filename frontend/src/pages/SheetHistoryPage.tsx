@@ -1,7 +1,7 @@
 /**
  * SheetHistoryPage — Sheet 실행 이력 조회/필터 (강화)
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Chip, FormControl, InputLabel,
   Select, MenuItem, alpha, CircularProgress, IconButton,
@@ -25,6 +25,19 @@ export default function SheetHistoryPage() {
   const currentSpaceId = useAppStore(state => state.currentSpaceId);
   const navigate = useNavigate();
   const { spacePath } = useSpaceNav();
+  const currentUserId = useAppStore(state => state.currentUserId);
+
+  const { data: overviewData } = useQuery({
+    queryKey: ['spaceOverview', currentSpaceId, currentUserId],
+    queryFn: () => api.getSpaceOverview(currentSpaceId!, currentUserId),
+    enabled: !!currentSpaceId && currentUserId > 0,
+  });
+
+  useEffect(() => {
+    if (overviewData && overviewData.purpose === 'project_management') {
+      navigate(spacePath || '/');
+    }
+  }, [overviewData, navigate, spacePath]);
 
   const [statusFilter, setStatusFilter] = useState('');
   const [equipmentFilter, setEquipmentFilter] = useState('');

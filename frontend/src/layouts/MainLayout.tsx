@@ -245,6 +245,14 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     }
   }, [spaces, urlSpaceSlug, spaceAccess, currentSpaceId, setCurrentSpace]);
 
+  // fetch spaceOverview for purpose
+  const { data: overviewData } = useQuery({
+    queryKey: ['spaceOverview', currentSpaceId, effectiveUserId],
+    queryFn: () => api.getSpaceOverview(currentSpaceId!, effectiveUserId),
+    enabled: !!currentSpaceId && effectiveUserId > 0,
+  });
+  const spacePurpose = overviewData?.purpose || 'project_management';
+
   // projects (filtered by current space)
   const { data: allProjects = [] } = useQuery<Project[]>({
     queryKey: ['projects', effectiveUserId, currentSpaceId],
@@ -649,7 +657,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             { text: '공간 관리', icon: <WorkspacesIcon />, path: sp('/spaces') },
             { text: '@나를 언급', icon: <AlternateEmailIcon />, path: sp('/mentions') },
             { text: '그룹', icon: <GroupsIcon />, path: sp('/groups') },
-            { text: 'Sheets', icon: <DescriptionIcon />, path: sp('/sheets') },
+            { text: 'Sheets', icon: <DescriptionIcon />, path: sp('/sheets'), excludePurpose: 'project_management' },
             {
               text: 'AI Settings',
               icon: <AutoAwesomeIcon />,
@@ -658,6 +666,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             },
           ]
             .filter(item => !(item as any).superAdminOnly || isSuperAdmin)
+            .filter(item => !(item as any).excludePurpose || (item as any).excludePurpose !== spacePurpose)
             .map(item => {
               const isActive = location.pathname === item.path;
               return (

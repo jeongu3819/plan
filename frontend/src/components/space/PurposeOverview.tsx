@@ -48,10 +48,10 @@ function StatCard({ label, value, color, icon }: { label: string; value: number;
   return (
     <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, textAlign: 'center', borderColor: alpha(color, 0.3), minWidth: 0 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, mb: 0.3 }}>
-        {icon && <Box sx={{ color, display: 'flex', '& svg': { fontSize: 18 } }}>{icon}</Box>}
-        <Typography variant="h5" fontWeight={800} sx={{ color }}>{value}</Typography>
+        {icon && <Box sx={{ color, display: 'flex', '& svg': { fontSize: 20 } }}>{icon}</Box>}
+        <Typography variant="h4" fontWeight={800} sx={{ color }}>{value}</Typography>
       </Box>
-      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>{label}</Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>{label}</Typography>
     </Paper>
   );
 }
@@ -61,44 +61,44 @@ function TaskList({ title, tasks, color, icon, onTaskClick, emptyText }: {
   onTaskClick?: (taskId: number, projectId: number) => void; emptyText?: string;
 }) {
   return (
-    <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, borderColor: alpha(color, 0.2) }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
-        <Box sx={{ color, display: 'flex', '& svg': { fontSize: 16 } }}>{icon}</Box>
-        <Typography variant="subtitle2" fontWeight={700} sx={{ fontSize: '0.78rem' }}>{title}</Typography>
+    <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, borderColor: alpha(color, 0.2), display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
+        <Box sx={{ color, display: 'flex', '& svg': { fontSize: 18 } }}>{icon}</Box>
+        <Typography variant="subtitle2" fontWeight={700} sx={{ fontSize: '0.85rem' }}>{title}</Typography>
         {tasks.length > 0 && (
-          <Chip label={tasks.length} size="small" sx={{ height: 18, fontSize: '0.65rem', fontWeight: 700, bgcolor: alpha(color, 0.1), color }} />
+          <Chip label={tasks.length} size="small" sx={{ height: 20, fontSize: '0.72rem', fontWeight: 700, bgcolor: alpha(color, 0.1), color }} />
         )}
       </Box>
       {tasks.length === 0 ? (
-        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>{emptyText || '항목 없음'}</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.8rem' }}>{emptyText || '항목 없음'}</Typography>
       ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, flexGrow: 1 }}>
           {tasks.slice(0, 8).map((t: any) => (
             <Box
               key={t.id}
               onClick={() => onTaskClick?.(t.id, t.project_id)}
               sx={{
-                display: 'flex', alignItems: 'center', gap: 1, py: 0.5, px: 1,
+                display: 'flex', alignItems: 'center', gap: 1, py: 0.8, px: 1,
                 borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: alpha(color, 0.05) },
               }}
             >
               <Box sx={{
-                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                 bgcolor: t.priority === 'high' ? '#EF4444' : t.priority === 'medium' ? '#F59E0B' : '#6B7280',
               }} />
-              <Typography variant="body2" sx={{ fontSize: '0.76rem', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <Typography variant="body2" sx={{ fontSize: '0.81rem', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {t.title}
               </Typography>
               {t.due_date && (
-                <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#9CA3AF', flexShrink: 0 }}>
+                <Typography variant="caption" sx={{ fontSize: '0.72rem', color: '#9CA3AF', flexShrink: 0 }}>
                   {t.due_date}
                 </Typography>
               )}
               {t.progress > 0 && (
-                <Box sx={{ width: 40, flexShrink: 0 }}>
+                <Box sx={{ width: 45, flexShrink: 0 }}>
                   <LinearProgress
                     variant="determinate" value={t.progress}
-                    sx={{ height: 3, borderRadius: 1, bgcolor: '#F3F4F6', '& .MuiLinearProgress-bar': { bgcolor: color } }}
+                    sx={{ height: 4, borderRadius: 1.5, bgcolor: '#F3F4F6', '& .MuiLinearProgress-bar': { bgcolor: color } }}
                   />
                 </Box>
               )}
@@ -115,38 +115,47 @@ function SheetList({ title, sheets, color, onSheetClick }: {
 }) {
   if (sheets.length === 0) return null;
   return (
-    <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, borderColor: alpha(color, 0.2) }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
-        <DescriptionIcon sx={{ fontSize: 16, color }} />
-        <Typography variant="subtitle2" fontWeight={700} sx={{ fontSize: '0.78rem' }}>{title}</Typography>
-        <Chip label={sheets.length} size="small" sx={{ height: 18, fontSize: '0.65rem', fontWeight: 700, bgcolor: alpha(color, 0.1), color }} />
+    <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, borderColor: alpha(color, 0.2), display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
+        <DescriptionIcon sx={{ fontSize: 18, color }} />
+        <Typography variant="subtitle2" fontWeight={700} sx={{ fontSize: '0.85rem' }}>{title}</Typography>
+        <Chip label={sheets.length} size="small" sx={{ height: 20, fontSize: '0.72rem', fontWeight: 700, bgcolor: alpha(color, 0.1), color }} />
       </Box>
-      {sheets.map((s: any) => (
-        <Box
-          key={s.id}
-          onClick={() => onSheetClick?.(s.id)}
-          sx={{
-            display: 'flex', alignItems: 'center', gap: 1, py: 0.5, px: 1,
-            borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: alpha(color, 0.05) },
-          }}
-        >
-          <Typography variant="body2" sx={{ fontSize: '0.76rem', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {s.title}
-          </Typography>
-          {s.equipment_name && (
-            <Chip label={s.equipment_name} size="small" sx={{ height: 18, fontSize: '0.6rem' }} />
-          )}
-          <Box sx={{ width: 50, flexShrink: 0 }}>
-            <LinearProgress
-              variant="determinate" value={s.progress}
-              sx={{ height: 4, borderRadius: 2, bgcolor: '#F3F4F6', '& .MuiLinearProgress-bar': { bgcolor: s.progress >= 100 ? '#22C55E' : color } }}
-            />
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, flexGrow: 1 }}>
+        {sheets.map((s: any) => (
+          <Box
+            key={s.id}
+            onClick={() => onSheetClick?.(s.id)}
+            sx={{
+              display: 'flex', flexDirection: 'column', py: 0.8, px: 1,
+              borderRadius: 1, cursor: 'pointer', '&:hover': { bgcolor: alpha(color, 0.05) },
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+              <Typography variant="body2" sx={{ fontSize: '0.81rem', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                {s.title}
+              </Typography>
+              <Typography variant="caption" sx={{ fontSize: '0.72rem', color: '#9CA3AF', flexShrink: 0, minWidth: 26, textAlign: 'right' }}>
+                {s.progress}%
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" sx={{ fontSize: '0.72rem', color: '#6B7280', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                 {s.project_name ? `${s.project_name} > ` : ''}{s.task_name || ''}
+              </Typography>
+              {s.equipment_name && (
+                <Chip label={s.equipment_name} size="small" sx={{ height: 18, fontSize: '0.65rem' }} />
+              )}
+            </Box>
+            <Box sx={{ width: '100%', mt: 0.5 }}>
+              <LinearProgress
+                variant="determinate" value={s.progress}
+                sx={{ height: 4, borderRadius: 2, bgcolor: '#F3F4F6', '& .MuiLinearProgress-bar': { bgcolor: s.progress >= 100 ? '#22C55E' : color } }}
+              />
+            </Box>
           </Box>
-          <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#9CA3AF', flexShrink: 0 }}>
-            {s.progress}%
-          </Typography>
-        </Box>
-      ))}
+        ))}
+      </Box>
     </Paper>
   );
 }
@@ -195,11 +204,19 @@ function EquipmentOpsOverview({ data, onTaskClick, onSheetClick }: { data: Overv
         <StatCard label="진행 중 Sheet" value={data.active_sheets.length} color="#7C3AED" icon={<DescriptionIcon />} />
       </Box>
       <TaskList title="오늘 해야 할 작업" tasks={data.today_tasks} color="#2955FF" icon={<ScheduleIcon />} onTaskClick={onTaskClick} emptyText="오늘 마감 작업 없음" />
-      <SheetList title="Check Sheet 현황" sheets={data.active_sheets} color="#16A34A" onSheetClick={onSheetClick} />
-      {(data.incomplete_carried_over || []).length > 0 && (
-        <TaskList title="미완료/이월 작업" tasks={data.incomplete_carried_over || []} color="#EF4444" icon={<WarningAmberIcon />} onTaskClick={onTaskClick} />
-      )}
-      <TaskList title="우선순위 높은 항목" tasks={data.high_priority_tasks} color="#F59E0B" icon={<PriorityHighIcon />} onTaskClick={onTaskClick} />
+      
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' }, gap: 1 }}>
+        <Box>
+          <SheetList title="Check Sheet 현황" sheets={data.active_sheets} color="#16A34A" onSheetClick={onSheetClick} />
+        </Box>
+        <Box>
+          <TaskList title="미완료/이월 작업" tasks={data.incomplete_carried_over || []} color="#EF4444" icon={<WarningAmberIcon />} onTaskClick={onTaskClick} emptyText="미완료 작업 없음" />
+        </Box>
+        <Box>
+          <TaskList title="우선순위 높은 항목" tasks={data.high_priority_tasks} color="#F59E0B" icon={<PriorityHighIcon />} onTaskClick={onTaskClick} emptyText="우선순위 항목 없음" />
+        </Box>
+      </Box>
+
       <SheetList title="최근 완료된 점검" sheets={data.recent_completed_sheets} color="#22C55E" onSheetClick={onSheetClick} />
     </Box>
   );

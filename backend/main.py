@@ -5726,10 +5726,13 @@ def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = D
         }
 
     def _exec_brief(e):
+        pn = next((p.name for p in projects if p.id == e.project_id), None)
+        tn = next((t.title for t in tasks if t.id == e.task_id), None)
         return {
             "id": e.id, "title": e.title, "template_id": e.template_id,
             "status": e.status, "progress": e.progress,
             "equipment_name": e.equipment_name,
+            "project_name": pn, "task_name": tn,
             "started_at": iso(e.started_at), "completed_at": iso(e.completed_at),
         }
 

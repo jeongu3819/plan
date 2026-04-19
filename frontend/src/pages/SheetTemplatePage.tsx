@@ -2,7 +2,7 @@
  * SheetTemplatePage — Check Sheet 양식 저장소
  * 이 페이지는 "양식을 보관하는 곳"입니다. 엔지니어는 Task Details 에서 양식을 연결하여 체크합니다.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, IconButton, Dialog,
   DialogContent, Tooltip, alpha,
@@ -16,6 +16,8 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
+import { useNavigate } from 'react-router-dom';
+import { useSpaceNav } from '../hooks/useSpaceNav';
 import SheetUploadDialog from '../components/sheets/SheetUploadDialog';
 import SheetRenderer from '../components/sheets/SheetRenderer';
 import type { SheetTemplate } from '../types';
@@ -41,7 +43,21 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default function SheetTemplatePage() {
   const currentUserId = useAppStore(state => state.currentUserId);
   const currentSpaceId = useAppStore(state => state.currentSpaceId);
+  const { spacePath } = useSpaceNav();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  const { data: overviewData } = useQuery({
+    queryKey: ['spaceOverview', currentSpaceId, currentUserId],
+    queryFn: () => api.getSpaceOverview(currentSpaceId!, currentUserId),
+    enabled: !!currentSpaceId && currentUserId > 0,
+  });
+
+  useEffect(() => {
+    if (overviewData && overviewData.purpose === 'project_management') {
+      navigate(spacePath || '/');
+    }
+  }, [overviewData, navigate, spacePath]);
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [previewTemplate, setPreviewTemplate] = useState<any>(null);

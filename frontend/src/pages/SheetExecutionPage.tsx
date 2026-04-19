@@ -1,7 +1,7 @@
 /**
  * SheetExecutionPage — Sheet 실행 화면 (체크/메모/완료)
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, LinearProgress, IconButton,
   TextField, Dialog, DialogTitle, DialogContent, DialogActions,
@@ -24,6 +24,19 @@ export default function SheetExecutionPage() {
   const navigate = useNavigate();
   const { spacePath } = useSpaceNav();
   const queryClient = useQueryClient();
+  const currentSpaceId = useAppStore(state => state.currentSpaceId);
+
+  const { data: overviewData } = useQuery({
+    queryKey: ['spaceOverview', currentSpaceId, currentUserId],
+    queryFn: () => api.getSpaceOverview(currentSpaceId!, currentUserId),
+    enabled: !!currentSpaceId && currentUserId > 0,
+  });
+
+  useEffect(() => {
+    if (overviewData && overviewData.purpose === 'project_management') {
+      navigate(spacePath || '/');
+    }
+  }, [overviewData, navigate, spacePath]);
 
   const [memoDialog, setMemoDialog] = useState<{ itemId: number; cellRef: string; currentMemo: string } | null>(null);
   const [memoText, setMemoText] = useState('');
