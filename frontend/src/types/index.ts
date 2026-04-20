@@ -283,6 +283,8 @@ export interface ColumnRoleMapping {
   remark?: ColumnRoleInfo;
 }
 
+export type SheetType = 'inspection' | 'assignment_mapping';
+
 export interface SheetTemplate {
   id: number;
   name: string;
@@ -290,6 +292,7 @@ export interface SheetTemplate {
   category?: string;
   original_filename?: string;
   sheet_name?: string;
+  sheet_type?: SheetType;
   structure?: SheetStructure;
   row_count: number;
   col_count: number;
@@ -313,6 +316,7 @@ export interface SheetStructure {
   header_row_idx?: number;
   data_start_row?: number;
   structure_hash?: string;
+  suggested_type?: SheetType;
 }
 
 export interface SheetCell {
@@ -353,6 +357,7 @@ export interface SheetExecution {
   task_id?: number;
   title: string;
   equipment_name?: string;
+  sheet_type?: SheetType;
   status: 'in_progress' | 'completed' | 'cancelled';
   total_items: number;
   checked_items: number;
@@ -364,6 +369,17 @@ export interface SheetExecution {
   template_structure?: SheetStructure;
   template_name?: string;
   items?: SheetExecutionItem[];
+  mappings?: SheetExecutionMapping[];
+}
+
+export interface SheetExecutionMapping {
+  id: number;
+  master_name: string;
+  master_code?: string;
+  assigned_entity: string;
+  manager?: string;
+  last_checked_at?: string;
+  note?: string;
 }
 
 export interface SheetExecutionItem {

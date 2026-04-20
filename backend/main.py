@@ -126,6 +126,25 @@ def _run_migrations():
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE sheet_templates ADD COLUMN structure_hash VARCHAR(32)'))
 
+    # v3.2: sheet_type 및 sheet_execution_mappings 테이블
+    if "sheet_templates" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_templates")]
+        if "sheet_type" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_templates ADD COLUMN sheet_type VARCHAR(50) NOT NULL DEFAULT "inspection"'))
+
+    if "sheet_executions" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_executions")]
+        if "sheet_type" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_executions ADD COLUMN sheet_type VARCHAR(50) NOT NULL DEFAULT "inspection"'))
+
+    if "sheet_execution_mappings" not in insp.get_table_names():
+        from app.models import SheetExecutionMapping
+        t = Base.metadata.tables.get("sheet_execution_mappings")
+        if t is not None:
+            Base.metadata.create_all(bind=engine, tables=[t])
+
 _run_migrations()
 
 app = FastAPI(title="Antigravity Schedule Platform API")
@@ -5804,10 +5823,18 @@ async def inspect_sheet_file(
     except Exception as e:
         raise HTTPException(400, f"파일 열기 실패: {str(e)}")
 
+    try:
+        from app.services.sheet_parser import parse_excel_to_structure
+        _, meta = parse_excel_to_structure(contents, filename, active_title)
+        suggested_type = meta.get("suggested_type", "inspection")
+    except Exception:
+        suggested_type = "inspection"
+
     return {
         "multi": len(names) > 1,
         "sheet_names": names,
         "suggested": active_title,
+        "suggested_type": suggested_type,
     }
 
 
@@ -5819,6 +5846,7 @@ async def upload_sheet_template(
     description: Optional[str] = Query(None),
     category: Optional[str] = Query("general"),
     sheet_name: Optional[str] = Query(None),
+    sheet_type: Optional[str] = Query("inspection"),
     user_id: int = Query(...),
     db: Session = Depends(get_db),
 ):
@@ -5852,6 +5880,7 @@ async def upload_sheet_template(
         category=category,
         original_filename=original_filename,
         sheet_name=meta.get("sheet_name"),
+        sheet_type=sheet_type or meta.get("suggested_type", "inspection"),
         structure=structure,
         row_count=meta.get("row_count", 0),
         col_count=meta.get("col_count", 0),
@@ -5992,6 +6021,7 @@ def create_sheet_execution(
         space_id=space_id,
         title=body.title or f"{template.name} - {date.today().isoformat()}",
         equipment_name=body.equipment_name,
+        sheet_type=template.sheet_type,
         status="in_progress",
         total_items=template.checkable_count,
         checked_items=0,
@@ -6001,37 +6031,77 @@ def create_sheet_execution(
     db.add(execution)
     db.flush()
 
-    # 템플릿의 checkable_cells로부터 실행 항목 생성
-    # - initial_value(원본 셀값) 가 있으면 그걸 value 에 pre-fill (엔지니어는 그 위에서 바로 수정 가능)
-    # - "완료"/"OK"/"양호"/"pass"/"O"/"✓" 류는 checked=True 로 자동 표시
+    # 템플릿의 checkable_cells로부터 실행 항목 생성 또는 매핑 생성
     structure = template.structure or {}
-    checkable_cells = structure.get("checkable_cells", [])
-    COMPLETED_INITIAL = {"완료", "OK", "ok", "PASS", "pass", "양호", "O", "o", "○", "●", "✓", "✔", "☑"}
-    checked_at_now = datetime.utcnow()
     initial_checked_count = 0
-    for cell in checkable_cells:
-        init_val = cell.get("initial_value")
-        init_val_str = (str(init_val).strip() if init_val is not None else "")
-        # 파서가 상태/비고를 분리해 둔 경우 그것을 우선 사용
-        parsed_status = (cell.get("parsed_status") or "").strip()
-        parsed_note = (cell.get("parsed_note") or "").strip()
-        status_for_check = parsed_status or init_val_str
-        pre_checked = status_for_check in COMPLETED_INITIAL
-        if pre_checked:
-            initial_checked_count += 1
-        item = SheetExecutionItem(
-            execution_id=execution.id,
-            cell_ref=cell.get("ref", ""),
-            row_idx=cell.get("row", 0),
-            col_idx=cell.get("col", 0),
-            label=cell.get("label", ""),
-            checked=pre_checked,
-            value=(parsed_status or init_val_str) or None,
-            memo=parsed_note or None,
-            checked_by=user_id if pre_checked else None,
-            checked_at=checked_at_now if pre_checked else None,
-        )
-        db.add(item)
+
+    if template.sheet_type == "assignment_mapping":
+        from app.models import SheetExecutionMapping
+        cells = structure.get("cells", [])
+        data_start_row = structure.get("data_start_row", 1)
+        headers = structure.get("headers", [])
+        column_roles = structure.get("column_roles", {})
+        
+        assignment_cols = []
+        for h in headers:
+            text = h["value"]
+            if "설비" in text or "장비" in text or "부품" in text or "적용" in text:
+                assignment_cols.append(h["col"])
+        
+        manager_col = column_roles.get("assignee", {}).get("col", -1)
+        remark_col = column_roles.get("remark", {}).get("col", -1)
+
+        cell_map = {(c["row"], c["col"]): c["value"] for c in cells}
+        max_row = max((c["row"] for c in cells), default=0)
+        
+        for r in range(data_start_row, max_row + 1):
+            master_name = cell_map.get((r, 0), "")
+            if not str(master_name).strip():
+                continue
+            master_code = cell_map.get((r, 1), "")
+            
+            manager = str(cell_map.get((r, manager_col), "")) if manager_col >= 0 else ""
+            note = str(cell_map.get((r, remark_col), "")) if remark_col >= 0 else ""
+            
+            for c_idx in assignment_cols:
+                assigned_entity = str(cell_map.get((r, c_idx), "")).strip()
+                if assigned_entity:
+                    mapping = SheetExecutionMapping(
+                        execution_id=execution.id,
+                        master_name=str(master_name).strip(),
+                        master_code=str(master_code).strip() if master_code else None,
+                        assigned_entity=assigned_entity,
+                        manager=manager.strip() if manager else None,
+                        note=note.strip() if note else None,
+                    )
+                    db.add(mapping)
+    else:
+        # 기존 점검형: 템플릿의 checkable_cells로부터 실행 항목 생성
+        checkable_cells = structure.get("checkable_cells", [])
+        COMPLETED_INITIAL = {"완료", "OK", "ok", "PASS", "pass", "양호", "O", "o", "○", "●", "✓", "✔", "☑"}
+        checked_at_now = datetime.utcnow()
+        for cell in checkable_cells:
+            init_val = cell.get("initial_value")
+            init_val_str = (str(init_val).strip() if init_val is not None else "")
+            parsed_status = (cell.get("parsed_status") or "").strip()
+            parsed_note = (cell.get("parsed_note") or "").strip()
+            status_for_check = parsed_status or init_val_str
+            pre_checked = status_for_check in COMPLETED_INITIAL
+            if pre_checked:
+                initial_checked_count += 1
+            item = SheetExecutionItem(
+                execution_id=execution.id,
+                cell_ref=cell.get("ref", ""),
+                row_idx=cell.get("row", 0),
+                col_idx=cell.get("col", 0),
+                label=cell.get("label", ""),
+                checked=pre_checked,
+                value=(parsed_status or init_val_str) or None,
+                memo=parsed_note or None,
+                checked_by=user_id if pre_checked else None,
+                checked_at=checked_at_now if pre_checked else None,
+            )
+            db.add(item)
 
     if initial_checked_count and execution.total_items:
         execution.checked_items = initial_checked_count
@@ -6457,6 +6527,84 @@ def get_project_sheet_summary(project_id: int, db: Session = Depends(get_db)):
         ],
     }
 
+
+class SheetMappingCreate(BaseModel):
+    master_name: str
+    assigned_entity: str
+
+class SheetMappingUpdate(BaseModel):
+    master_name: Optional[str] = None
+    assigned_entity: Optional[str] = None
+    manager: Optional[str] = None
+    note: Optional[str] = None
+
+@app.post("/api/sheet-executions/{execution_id}/mappings")
+def add_sheet_mapping(execution_id: int, body: SheetMappingCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    from app.models import SheetExecutionMapping
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution: raise HTTPException(404, "Execution not found")
+
+    mapping = SheetExecutionMapping(
+        execution_id=execution_id,
+        master_name=body.master_name,
+        assigned_entity=body.assigned_entity,
+        manager=None, note=None,
+    )
+    db.add(mapping)
+    
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="add_mapping", user_id=user_id,
+        new_value=f"[{body.master_name}]에 [{body.assigned_entity}] 추가"
+    ))
+    db.commit()
+    db.refresh(mapping)
+    return mapping
+
+@app.patch("/api/sheet-executions/{execution_id}/mappings/{mapping_id}")
+def update_sheet_mapping(execution_id: int, mapping_id: int, body: SheetMappingUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    from app.models import SheetExecutionMapping
+    mapping = db.query(SheetExecutionMapping).filter(SheetExecutionMapping.id == mapping_id, SheetExecutionMapping.execution_id == execution_id).first()
+    if not mapping: raise HTTPException(404, "Mapping not found")
+
+    old_master = mapping.master_name
+    old_assigned = mapping.assigned_entity
+
+    log_msg = []
+    if body.master_name is not None and body.master_name != mapping.master_name:
+        mapping.master_name = body.master_name
+        log_msg.append(f"마스터 변경: {old_master} -> {body.master_name}")
+    if body.assigned_entity is not None and body.assigned_entity != mapping.assigned_entity:
+        mapping.assigned_entity = body.assigned_entity
+        log_msg.append(f"설비 변경: {old_assigned} -> {body.assigned_entity}")
+    if body.manager is not None: mapping.manager = body.manager
+    if body.note is not None: mapping.note = body.note
+
+    mapping.last_checked_at = datetime.utcnow()
+
+    if log_msg:
+        db.add(SheetExecutionLog(
+            execution_id=execution_id, action="update_mapping", user_id=user_id,
+            old_value=f"[{old_master}] {old_assigned}",
+            new_value=", ".join(log_msg)
+        ))
+
+    db.commit()
+    db.refresh(mapping)
+    return mapping
+
+@app.delete("/api/sheet-executions/{execution_id}/mappings/{mapping_id}")
+def delete_sheet_mapping(execution_id: int, mapping_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    from app.models import SheetExecutionMapping
+    mapping = db.query(SheetExecutionMapping).filter(SheetExecutionMapping.id == mapping_id, SheetExecutionMapping.execution_id == execution_id).first()
+    if not mapping: raise HTTPException(404, "Mapping not found")
+
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="delete_mapping", user_id=user_id,
+        old_value=f"[{mapping.master_name}]에 배정된 [{mapping.assigned_entity}] 삭제"
+    ))
+    db.delete(mapping)
+    db.commit()
+    return {"message": "Mapping deleted"}
 
 # =========================
 # Run

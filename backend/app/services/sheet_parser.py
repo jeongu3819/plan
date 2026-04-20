@@ -807,6 +807,19 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
 
     wb.close()
 
+    # ───────────────────────────────────────────────────────────
+    # v3.2: 시트 유형 자동 추천 (inspection vs assignment_mapping)
+    # ───────────────────────────────────────────────────────────
+    suggested_type = "inspection"
+    header_texts = [h.strip() for h in col_headers.values() if h]
+    assignment_keywords = ["적용설비", "설비명", "장비", "약품명", "약품", "코드", "적용 부분"]
+    
+    # 헤더 중 적용설비 1, 적용설비 2 식으로 나열되어 있는지 확인
+    assignment_cols_count = sum(1 for h in header_texts if "설비" in h or "장비" in h or "부품" in h)
+    
+    if assignment_cols_count >= 2 or any("약품" in h for h in header_texts[:2]):
+        suggested_type = "assignment_mapping"
+
     structure = {
         "cells": cells,
         "merges": merges,
@@ -820,6 +833,7 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
         "header_row_idx": header_row - 1,   # 0-based
         "data_start_row": header_row,        # 0-based (header_row 다음 행부터 데이터)
         "structure_hash": structure_hash,
+        "suggested_type": suggested_type,
     }
     meta = {
         "row_count": total_rows,
@@ -827,5 +841,6 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
         "checkable_count": len(checkable_cells),
         "sheet_name": sheet_name,
         "structure_hash": structure_hash,
+        "suggested_type": suggested_type,
     }
     return structure, meta

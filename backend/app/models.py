@@ -504,6 +504,9 @@ class SheetTemplate(Base):
     original_filename = Column(String(255), nullable=True)
     sheet_name = Column(String(100), nullable=True)  # 엑셀 시트 이름
 
+    sheet_type = Column(String(50), nullable=False, default="inspection")
+    # inspection / assignment_mapping
+
     # 파싱된 구조 (셀 데이터 + 병합/색상/수식 정보)
     structure = Column(JSON, nullable=False, default=dict)
     # {
@@ -541,6 +544,8 @@ class SheetExecution(Base):
 
     title = Column(String(300), nullable=True)  # 실행 제목 (예: "2026-04-17 PM Check")
     equipment_name = Column(String(200), nullable=True)  # 관련 설비명 (선택)
+
+    sheet_type = Column(String(50), nullable=False, default="inspection")
 
     status = Column(String(30), nullable=False, default="in_progress")
     # in_progress / completed / cancelled
@@ -604,4 +609,26 @@ class SheetExecutionLog(Base):
 
     __table_args__ = (
         Index("ix_sheet_exec_log_exec", "execution_id", "created_at"),
+    )
+
+class SheetExecutionMapping(Base):
+    """assignment_mapping 유형 시트의 매핑 관계 저장"""
+    __tablename__ = "sheet_execution_mappings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    execution_id = Column(Integer, ForeignKey("sheet_executions.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    master_name = Column(String(200), nullable=False)  # 예: 약품명, 마스터 항목
+    master_code = Column(String(100), nullable=True)   # 예: 약품코드
+    assigned_entity = Column(String(200), nullable=False)  # 예: 설비명, 연결될 항목
+    
+    manager = Column(String(100), nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_sheet_exec_mapping_exec", "execution_id", "master_name"),
     )

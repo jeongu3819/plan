@@ -41,6 +41,7 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
   const [error, setError] = useState('');
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>('');
+  const [sheetType, setSheetType] = useState<'inspection' | 'assignment_mapping'>('inspection');
   const [inspecting, setInspecting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -57,6 +58,7 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
     setError('');
     setSheetNames([]);
     setSelectedSheet('');
+    setSheetType('inspection');
     setUploadedTemplate(null);
     setUploadedStructure(null);
   };
@@ -71,6 +73,7 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
     setError('');
     setSheetNames([]);
     setSelectedSheet('');
+    setSheetType('inspection');
 
     // CSV 는 시트 선택이 필요없음
     if (f.name.toLowerCase().endsWith('.csv')) return;
@@ -80,6 +83,11 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
       const info = await api.inspectSheetFile(f);
       setSheetNames(info.sheet_names || []);
       setSelectedSheet(info.suggested || info.sheet_names?.[0] || '');
+      if (info.suggested_type === 'assignment_mapping') {
+        setSheetType('assignment_mapping');
+      } else {
+        setSheetType('inspection');
+      }
     } catch (err: any) {
       setError(err?.response?.data?.detail || '파일 열기 실패');
       setFile(null);
@@ -97,6 +105,7 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
         name: name.trim() || undefined,
         description: description.trim() || undefined,
         category,
+        sheet_type: sheetType,
         sheet_name: sheetNames.length > 1 && selectedSheet ? selectedSheet : undefined,
       });
 
@@ -224,14 +233,31 @@ export default function SheetUploadDialog({ open, onClose, spaceId, userId, onSu
             sx={{ mb: 1.5 }}
           />
 
-          <FormControl fullWidth size="small" sx={{ mb: 1.5 }}>
-            <InputLabel>분류</InputLabel>
-            <Select value={category} onChange={e => setCategory(e.target.value)} label="분류">
-              {CATEGORIES.map(c => (
-                <MenuItem key={c.value} value={c.value}>{c.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          <Box sx={{ display: 'flex', gap: 1, mb: 1.5 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>분류</InputLabel>
+              <Select value={category} onChange={e => setCategory(e.target.value)} label="분류">
+                {CATEGORIES.map(c => (
+                  <MenuItem key={c.value} value={c.value}>{c.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            {file && (
+              <FormControl fullWidth size="small" sx={{ flex: 1 }}>
+                <InputLabel>시트 목적 (자동추천)</InputLabel>
+                <Select
+                  value={sheetType}
+                  onChange={e => setSheetType(e.target.value as any)}
+                  label="시트 목적 (자동추천)"
+                  sx={{ bgcolor: sheetType === 'assignment_mapping' ? alpha('#2955FF', 0.05) : undefined }}
+                >
+                  <MenuItem value="inspection">점검 수행형</MenuItem>
+                  <MenuItem value="assignment_mapping">설비/배치 매핑형</MenuItem>
+                </Select>
+              </FormControl>
+            )}
+          </Box>
 
           <TextField
             fullWidth size="small"
