@@ -280,6 +280,93 @@ def _header_matches(header_text: str, keywords) -> bool:
     return any(k.lower() in h for k in keywords)
 
 
+# ═══════════════════════════════════════════════════════════
+# 상태 컬럼 값 정규화
+#   "O" / "X" / "N/A" 같은 단일 토큰은 그대로 두되
+#   "O(신규 bot 장착)" / "X - 사유" / "O: 설명" 같은 패턴은
+#   상태와 비고로 분리한다. 일반 텍스트("완료" 같은 한글 상태어)는 보존.
+# ═══════════════════════════════════════════════════════════
+# 길이가 긴 토큰을 먼저 둬야 정규식 alternation이 OK > O 처럼 동작 (그렇지 않으면 "OK" 가 "O" + "K" 로 잘림)
+_STATUS_PREFIX_RE = re.compile(
+    r"^\s*(?P<status>"
+    r"진행\s*중|진행중"
+    r"|해당없음|미완료|완료|보류|양호|불량|정상|이상"
+    r"|N\s*/\s*A|n\s*/\s*a|N\.A\.?|n\.a\.?"
+    r"|PASS|pass|FAIL|fail|OK|ok|NG|ng"
+    r"|○|●|×|△|▲"
+    r"|O|o|X|x"
+    r")",
+    re.UNICODE,
+)
+
+
+def _normalize_status_value(raw) -> Tuple[str, str]:
+    """
+    상태(체크) 컬럼의 셀 값을 (parsed_status, parsed_note)로 분리.
+
+    예:
+      "O"                  → ("O", "")
+      "X"                  → ("X", "")
+      "N/A"                → ("N/A", "")
+      "O(신규 bot 장착)"     → ("O", "신규 bot 장착")
+      "X - 사유"            → ("X", "사유")
+      "O: 설명"             → ("O", "설명")
+      "완료"                → ("완료", "")
+      ""                   → ("", "")
+      알 수 없는 텍스트       → (원본, "")
+    """
+    if raw is None:
+        return ("", "")
+    s = str(raw).strip()
+    if not s:
+        return ("", "")
+
+    m = _STATUS_PREFIX_RE.match(s)
+    if not m:
+        return (s, "")
+
+    status_token = m.group("status")
+    rest = s[m.end():]
+
+    # status_token 뒤에 공백/구분자/괄호 없이 곧바로 다른 글자가 이어지면(예: "OK점검완")
+    # 의도적으로 분리하지 않는다 — 원문 보존.
+    if rest and rest[0].isalnum() and not status_token.isalpha():
+        # status가 "O" 같은 단일 글자인데 그 뒤가 alphanumeric이면 보통 그냥 토큰의 일부 (드문 케이스)
+        # 안전하게 원본 유지
+        return (s, "")
+
+    # 상태 표준화
+    su = status_token.upper().replace(" ", "").replace(".", "")
+    if status_token == "○" or su == "O":
+        status = "O"
+    elif status_token == "●":
+        status = "O"
+    elif status_token == "×" or su == "X":
+        status = "X"
+    elif su in ("NA", "N/A"):
+        status = "N/A"
+    elif status_token == "해당없음":
+        status = "N/A"
+    elif status_token in ("△", "▲"):
+        status = status_token
+    else:
+        # 완료/미완료/OK/NG/양호 등은 입력 그대로 유지
+        status = status_token
+
+    note = ""
+    if rest:
+        rest_str = rest.strip()
+        # 괄호로 감싼 비고
+        paren_match = re.match(r"^[\(\[（【]\s*(.*?)\s*[\)\]）】]\s*$", rest_str)
+        if paren_match:
+            note = paren_match.group(1).strip()
+        else:
+            # 선행 구분자(-, :, –, —, /, 공백) 제거
+            note = re.sub(r"^[\s\-:：–—/]+", "", rest_str).strip()
+
+    return (status, note)
+
+
 def _is_checkable_cell(value, col_header: str = "") -> bool:
     """
     셀이 체크 가능한 항목인지 판단.
@@ -590,13 +677,22 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
                 if is_check:
                     label = _find_label_for_cell(ws, r, c, label_cols_list)
                     col_letter = get_column_letter(c)
-                    checkable_cells.append({
+                    entry = {
                         "ref": f"{col_letter}{r}",
                         "row": r - 1,
                         "col": c - 1,
                         "label": label,
                         "initial_value": value,  # 기존 "완료"/"미완료" 등 상태값 보존
-                    })
+                    }
+                    # 명시적 상태 컬럼인 경우만 분리 시도
+                    # (값 패턴으로만 잡힌 셀은 보존)
+                    if c in check_cols and value:
+                        parsed_status, parsed_note = _normalize_status_value(value)
+                        if parsed_status:
+                            entry["parsed_status"] = parsed_status
+                        if parsed_note:
+                            entry["parsed_note"] = parsed_note
+                    checkable_cells.append(entry)
 
     # 헤더 정보 (감지된 헤더 행 기준)
     headers = []
@@ -606,6 +702,42 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
     # v3.1: 컬럼 역할 자동 추정
     column_roles = detect_column_roles(col_headers, ws, header_row, total_rows)
     structure_hash = compute_structure_hash(col_headers)
+
+    # ───────────────────────────────────────────────────────────
+    # 비고(remark) 컬럼이 없는데 상태값에서 추출된 note가 있다면
+    # 가상 비고 컬럼을 시트 끝에 1개 추가하여 노트를 별도로 노출.
+    # ───────────────────────────────────────────────────────────
+    extracted_notes = [(cc["row"], cc.get("parsed_note")) for cc in checkable_cells if cc.get("parsed_note")]
+    if extracted_notes and "remark" not in column_roles:
+        virtual_col_idx = total_cols  # 0-based 새 컬럼 인덱스
+        # 헤더 셀
+        cells.append({
+            "row": header_row - 1,
+            "col": virtual_col_idx,
+            "value": "비고 (자동)",
+            "type": "text",
+            "font": {"bold": True, "fontColor": "#6B7280"},
+            "align": "center",
+        })
+        # 노트 셀
+        for r0, note in extracted_notes:
+            cells.append({
+                "row": r0,
+                "col": virtual_col_idx,
+                "value": note,
+                "type": "text",
+                "font": {"fontColor": "#374151", "italic": True},
+                "wrapText": True,
+            })
+        headers.append({"col": virtual_col_idx, "value": "비고 (자동)"})
+        col_widths.append(20.0)  # ~150px 폭
+        column_roles["remark"] = {
+            "col": virtual_col_idx,
+            "header": "비고 (자동)",
+            "confidence": 1.0,
+            "virtual": True,
+        }
+        total_cols += 1
 
     wb.close()
 

@@ -6012,7 +6012,11 @@ def create_sheet_execution(
     for cell in checkable_cells:
         init_val = cell.get("initial_value")
         init_val_str = (str(init_val).strip() if init_val is not None else "")
-        pre_checked = init_val_str in COMPLETED_INITIAL
+        # 파서가 상태/비고를 분리해 둔 경우 그것을 우선 사용
+        parsed_status = (cell.get("parsed_status") or "").strip()
+        parsed_note = (cell.get("parsed_note") or "").strip()
+        status_for_check = parsed_status or init_val_str
+        pre_checked = status_for_check in COMPLETED_INITIAL
         if pre_checked:
             initial_checked_count += 1
         item = SheetExecutionItem(
@@ -6022,8 +6026,8 @@ def create_sheet_execution(
             col_idx=cell.get("col", 0),
             label=cell.get("label", ""),
             checked=pre_checked,
-            value=init_val_str or None,
-            memo=None,
+            value=(parsed_status or init_val_str) or None,
+            memo=parsed_note or None,
             checked_by=user_id if pre_checked else None,
             checked_at=checked_at_now if pre_checked else None,
         )

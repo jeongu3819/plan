@@ -143,19 +143,23 @@ export default function SheetRenderer({
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
 
-  // Build hidden cells set (cells hidden by merges)
-  const hiddenCells = useMemo(() => {
+  // Build hidden cells set + reverse map to merge origin
+  // hiddenMergeMap[key] = merge that hides this cell; needed to decide if a horizontal placeholder is required
+  const { hiddenCells, hiddenMergeMap } = useMemo(() => {
     const set = new Set<string>();
+    const map = new Map<string, { startRow: number; startCol: number; endRow: number; endCol: number }>();
     for (const merge of (merges || [])) {
       for (let r = merge.startRow; r <= merge.endRow; r++) {
         for (let c = merge.startCol; c <= merge.endCol; c++) {
           if (r !== merge.startRow || c !== merge.startCol) {
-            set.add(`${r}-${c}`);
+            const key = `${r}-${c}`;
+            set.add(key);
+            map.set(key, merge);
           }
         }
       }
     }
-    return set;
+    return { hiddenCells: set, hiddenMergeMap: map };
   }, [merges]);
 
   const colWidths = useMemo(() => {
@@ -213,7 +217,29 @@ export default function SheetRenderer({
           >
             {Array.from({ length: total_cols }, (_, colIdx) => {
               const key = `${rowIdx}-${colIdx}`;
-              if (hiddenCells.has(key)) return null;
+              if (hiddenCells.has(key)) {
+                // 세로 병합으로 위 행에서 시작된 셀이 아래 행을 가릴 때
+                // 같은 행 컬럼 위치를 비워두면 그 다음 컬럼들이 왼쪽으로 밀려
+                // 병합 영역 위로 텍스트가 겹쳐 보이게 됨. → 폭만 차지하는 placeholder 렌더링.
+                const mg = hiddenMergeMap.get(key);
+                if (mg && mg.startRow < rowIdx) {
+                  const phWidth = colWidths[colIdx] || DEFAULT_COL_WIDTH;
+                  return (
+                    <Box
+                      key={key}
+                      aria-hidden
+                      sx={{
+                        width: phWidth,
+                        minWidth: phWidth,
+                        maxWidth: phWidth,
+                        flexShrink: 0,
+                        height: '100%',
+                      }}
+                    />
+                  );
+                }
+                return null;
+              }
 
               const cell = cellMap.get(key);
               const isCheckable = checkableSet.has(key);
