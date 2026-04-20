@@ -16,7 +16,29 @@ import { api } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../hooks/useSpaceNav';
-import SheetRenderer from '../components/sheets/SheetRenderer';
+import SheetRenderer, { type StatusValue } from '../components/sheets/SheetRenderer';
+
+// 엑셀 스타일 컬럼 letter — 가상 컬럼용 cell_ref 생성기
+function colLetter(col0: number): string {
+  let n = col0 + 1;
+  let out = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+function makeCellRef(row0: number, col0: number): string {
+  return `${colLetter(col0)}${row0 + 1}`;
+}
+function todayIso(): string {
+  const d = new Date();
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
 
 export default function SheetExecutionPage() {
   const { executionId } = useParams<{ executionId: string }>();
@@ -61,6 +83,13 @@ export default function SheetExecutionPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] }),
   });
 
+  // v3.2: cell_ref 단위 upsert — 상태/진행일/담당자/비고 모두 이걸로 처리
+  const cellUpsertMutation = useMutation({
+    mutationFn: ({ cellRef, body }: { cellRef: string; body: { checked?: boolean; value?: string; memo?: string } }) =>
+      api.upsertSheetExecutionCell(Number(executionId), cellRef, body, currentUserId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] }),
+  });
+
   const memoMutation = useMutation({
     mutationFn: ({ itemId, memo }: { itemId: number; memo: string }) =>
       api.updateSheetExecutionItem(Number(executionId), itemId, { memo }, currentUserId),
@@ -80,6 +109,38 @@ export default function SheetExecutionPage() {
     if (item) {
       checkMutation.mutate({ itemId: item.id, checked });
     }
+  };
+
+  // v3.2: 상태(여부성) 변경 핸들러
+  //   - 상태 셀: value = O / X / N/A, checked는 O일 때 true
+  //   - 진행일 셀: O 선택 시 오늘 날짜 자동 입력, X/N/A는 비움
+  const handleStatusChange = (cellRef: string, status: StatusValue, rowIdx: number) => {
+    const isO = status === 'O';
+    cellUpsertMutation.mutate({
+      cellRef,
+      body: {
+        value: status || '',
+        checked: isO,
+      },
+    });
+
+    // 진행일 컬럼이 있으면 연동
+    const roles = execution?.template_structure?.column_roles;
+    const progCol = roles?.progress_date?.col;
+    const checkedAtCol = roles?.checked_at?.col;
+    const targetCol = progCol ?? checkedAtCol;  // progress_date 우선, 없으면 checked_at
+    if (targetCol !== undefined && targetCol >= 0) {
+      const dateCellRef = makeCellRef(rowIdx, targetCol);
+      cellUpsertMutation.mutate({
+        cellRef: dateCellRef,
+        body: { value: isO ? todayIso() : '' },
+      });
+    }
+  };
+
+  // v3.2: 담당자/비고/진행일 등 editable 컬럼 값 변경
+  const handleValueChange = (cellRef: string, value: string) => {
+    cellUpsertMutation.mutate({ cellRef, body: { value } });
   };
 
   if (isLoading) {
@@ -197,6 +258,8 @@ export default function SheetExecutionPage() {
           structure={execution.template_structure}
           executionItems={execution.items || []}
           onCheckChange={handleCheckChange}
+          onStatusChange={handleStatusChange}
+          onValueChange={handleValueChange}
           readOnly={isCompleted}
         />
       ) : (

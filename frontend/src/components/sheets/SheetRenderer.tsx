@@ -4,9 +4,13 @@
  * v3.1: column_roles 기반 체크 + 점검일시 연동, checkedMap/checkedAtMap 직접 지원
  */
 import { useMemo, useCallback, useState } from 'react';
-import { Box, Checkbox, Typography, Tooltip, TextField } from '@mui/material';
+import { Box, Checkbox, Typography, Tooltip, TextField, Select, MenuItem } from '@mui/material';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import type { SheetStructure, SheetCell, SheetExecutionItem, ColumnRoleMapping } from '../../types';
+
+// 여부성 상태 옵션 (O/X/N/A) — 단순 체크박스가 아니라 선택형 dropdown
+export const STATUS_OPTIONS = ['O', 'X', 'N/A'] as const;
+export type StatusValue = typeof STATUS_OPTIONS[number] | '';
 
 interface Props {
   structure: SheetStructure;
@@ -21,6 +25,9 @@ interface Props {
   /** v3.1: 텍스트/기타 컬럼 편집 지원 (cell_ref → value) */
   valueMap?: Map<string, string>;
   onValueChange?: (cellRef: string, value: string) => void;
+  /** v3.2: 상태(여부성) 컬럼을 O/X/N/A dropdown으로 처리할 때 호출.
+   *  onCheckChange 대신 이걸 제공하면 check_status 셀은 Select UI로 렌더된다. */
+  onStatusChange?: (cellRef: string, status: StatusValue, rowIdx: number, colIdx: number) => void;
   readOnly?: boolean;
 }
 
@@ -59,9 +66,12 @@ export default function SheetRenderer({
   checkedAtMap: propCheckedAtMap,
   valueMap: propValueMap,
   columnRoles,
-  onCheckChange, onValueChange, readOnly,
+  onCheckChange, onValueChange, onStatusChange, readOnly,
 }: Props) {
   const { cells, merges, col_widths, row_heights, total_rows, total_cols, checkable_cells } = structure;
+
+  // columnRoles prop이 없으면 structure.column_roles를 자동 사용 (v3.2)
+  const effectiveRoles: ColumnRoleMapping | null | undefined = columnRoles ?? (structure as any).column_roles;
 
   // Build cell map for O(1) lookup
   const cellMap = useMemo(() => {
@@ -125,20 +135,24 @@ export default function SheetRenderer({
   }, [propValueMap, executionItems]);
 
   // v3.1: checked_at 컬럼 인덱스 (0-based)
-  const checkedAtCol = columnRoles?.checked_at?.col ?? -1;
+  const checkedAtCol = effectiveRoles?.checked_at?.col ?? -1;
+
+  // v3.2: 상태 컬럼 (0-based). 진행일 컬럼은 editableCols에서 처리.
+  const statusCol = effectiveRoles?.check_status?.col ?? -1;
 
   // Editable columns
   const editableCols = useMemo(() => {
     const map = new Map<number, string>(); // colIdx -> editorType
-    if (columnRoles && !readOnly) {
-      if (columnRoles.assignee?.col !== undefined) map.set(columnRoles.assignee.col, columnRoles.assignee.editor_type || 'text');
-      if (columnRoles.due_date?.col !== undefined) map.set(columnRoles.due_date.col, columnRoles.due_date.editor_type || 'date');
-      if (columnRoles.planned_date?.col !== undefined) map.set(columnRoles.planned_date.col, columnRoles.planned_date.editor_type || 'date');
-      if (columnRoles.remark?.col !== undefined) map.set(columnRoles.remark.col, columnRoles.remark.editor_type || 'text');
-      if (columnRoles.cycle?.col !== undefined) map.set(columnRoles.cycle.col, columnRoles.cycle.editor_type || 'text');
+    if (effectiveRoles && !readOnly) {
+      if (effectiveRoles.assignee?.col !== undefined) map.set(effectiveRoles.assignee.col, effectiveRoles.assignee.editor_type || 'text');
+      if (effectiveRoles.due_date?.col !== undefined) map.set(effectiveRoles.due_date.col, effectiveRoles.due_date.editor_type || 'date');
+      if (effectiveRoles.planned_date?.col !== undefined) map.set(effectiveRoles.planned_date.col, effectiveRoles.planned_date.editor_type || 'date');
+      if (effectiveRoles.progress_date?.col !== undefined) map.set(effectiveRoles.progress_date.col, effectiveRoles.progress_date.editor_type || 'date');
+      if (effectiveRoles.remark?.col !== undefined) map.set(effectiveRoles.remark.col, effectiveRoles.remark.editor_type || 'text');
+      if (effectiveRoles.cycle?.col !== undefined) map.set(effectiveRoles.cycle.col, effectiveRoles.cycle.editor_type || 'text');
     }
     return map;
-  }, [columnRoles, readOnly]);
+  }, [effectiveRoles, readOnly]);
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -244,6 +258,9 @@ export default function SheetRenderer({
               const cell = cellMap.get(key);
               const isCheckable = checkableSet.has(key);
               const execItem = execItemMap.get(key);
+              const headerRowIdx = (structure as any).header_row_idx ?? 0;
+              // v3.2: 상태(여부성) 셀 — O/X/N/A dropdown 대상
+              const isStatusCell = !!onStatusChange && statusCol >= 0 && colIdx === statusCol && rowIdx > headerRowIdx;
               const rowSpan = cell?.rowSpan || 1;
               const colSpan = cell?.colSpan || 1;
 
@@ -270,9 +287,11 @@ export default function SheetRenderer({
               const isChecked = checkedMap.get(cellRef) ?? execItem?.checked ?? false;
               const cellValue = valueMap.get(cellRef) ?? execItem?.value ?? cell?.value ?? '';
 
-              // Editable 관련
+              // Editable 관련 — 상태셀은 Select로 처리하므로 inline 텍스트 에디터 제외
               const editorType = editingCell === cellRef ? editableCols.get(colIdx) : null;
-              const isEditableHoverable = editableCols.has(colIdx) && rowIdx > 0 && !isCheckable && !isCheckedAtCol;
+              const isEditableHoverable =
+                editableCols.has(colIdx) && rowIdx > headerRowIdx
+                && !isCheckable && !isCheckedAtCol && !isStatusCell;
 
               // 안전한 fontSize 계산 (Excel pt -> css px 변환 유지)
               const fontSizePx = font?.fontSize ? Math.round(font.fontSize * 1.33) : 12;
@@ -338,6 +357,52 @@ export default function SheetRenderer({
                       }}
                       sx={{ p: 0, m: 0, width: '100%' }}
                     />
+                  ) : isStatusCell ? (
+                    (() => {
+                      // 현재 상태값: execItem.value > valueMap > parsed_status > raw > ''
+                      const raw = (execItem?.value ?? valueMap.get(cellRef) ?? cell?.value ?? '').toString().trim();
+                      const upper = raw.toUpperCase().replace(/\s/g, '');
+                      let current: StatusValue = '';
+                      if (upper === 'O' || upper === '○' || upper === '●' || upper === '완료' || upper === 'OK' || upper === 'PASS' || upper === '양호' || upper === '정상') current = 'O';
+                      else if (upper === 'X' || upper === '×' || upper === '미완료' || upper === 'NG' || upper === 'FAIL' || upper === '불량' || upper === '이상') current = 'X';
+                      else if (upper === 'N/A' || upper === 'NA' || upper === '해당없음') current = 'N/A';
+                      else if (STATUS_OPTIONS.includes(raw as any)) current = raw as StatusValue;
+                      const color = current === 'O' ? '#16A34A' : current === 'X' ? '#DC2626' : current === 'N/A' ? '#9CA3AF' : '#6B7280';
+                      return (
+                        <Tooltip title={execItem?.memo || ''} placement="top" arrow>
+                          <Select
+                            size="small"
+                            value={current}
+                            disabled={readOnly}
+                            onChange={(e) => onStatusChange?.(cellRef, e.target.value as StatusValue, rowIdx, colIdx)}
+                            variant="standard"
+                            disableUnderline
+                            displayEmpty
+                            renderValue={(v) => (
+                              <Box component="span" sx={{
+                                fontSize: `${Math.max(fontSizePx, 12)}px`,
+                                fontWeight: 700,
+                                color,
+                                opacity: current === 'N/A' ? 0.7 : 1,
+                              }}>
+                                {v || '—'}
+                              </Box>
+                            )}
+                            sx={{
+                              width: '100%',
+                              '& .MuiSelect-select': { p: 0, textAlign: 'center', minHeight: 'unset' },
+                              '& .MuiSelect-icon': { display: 'none' },
+                            }}
+                            MenuProps={{ PaperProps: { sx: { mt: 0.5 } } }}
+                          >
+                            <MenuItem value=""><em style={{ color: '#9CA3AF' }}>— 선택</em></MenuItem>
+                            <MenuItem value="O" sx={{ fontWeight: 700, color: '#16A34A' }}>O</MenuItem>
+                            <MenuItem value="X" sx={{ fontWeight: 700, color: '#DC2626' }}>X</MenuItem>
+                            <MenuItem value="N/A" sx={{ fontWeight: 700, color: '#9CA3AF' }}>N/A</MenuItem>
+                          </Select>
+                        </Tooltip>
+                      );
+                    })()
                   ) : isCheckable ? (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, width: '100%', justifyContent: cell?.align === 'center' ? 'center' : 'flex-start' }}>
                       <Tooltip title={execItem?.memo || ''} placement="top" arrow>

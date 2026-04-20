@@ -269,6 +269,7 @@ export interface ColumnRoleInfo {
   header: string;    // detected header text
   confidence: number; // 0~1
   editor_type?: 'text' | 'textarea' | 'select' | 'date'; // 에디터 타입
+  virtual?: boolean; // 웹에서 가상 생성된 컬럼 여부
 }
 
 export interface ColumnRoleMapping {
@@ -277,6 +278,7 @@ export interface ColumnRoleMapping {
   assignee?: ColumnRoleInfo;
   due_date?: ColumnRoleInfo;
   planned_date?: ColumnRoleInfo;
+  progress_date?: ColumnRoleInfo;
   cycle?: ColumnRoleInfo;
   remark?: ColumnRoleInfo;
 }
@@ -340,6 +342,8 @@ export interface SheetCheckableCell {
   col: number;
   label: string;
   initial_value?: string;
+  parsed_status?: string;
+  parsed_note?: string;
 }
 
 export interface SheetExecution {

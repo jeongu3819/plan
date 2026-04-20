@@ -6200,13 +6200,18 @@ def update_sheet_execution_item(
             user_id=user_id,
         ))
 
-    # 진행률 재계산
+    # 진행률 재계산 — N/A는 모수에서 제외 (해당 없음 의미)
     total = execution.total_items or 1
+    na_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id,
+        SheetExecutionItem.value == "N/A",
+    ).count()
+    effective_total = max(1, total - na_count)
     checked_count = db.query(SheetExecutionItem).filter(
         SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
     ).count()
     execution.checked_items = checked_count
-    execution.progress = min(100, int(checked_count / total * 100))
+    execution.progress = min(100, int(checked_count / effective_total * 100))
 
     db.commit()
 
@@ -6291,12 +6296,17 @@ def upsert_sheet_execution_cell(
 
     db.commit()
     
-    # 진행률 재계산 (기존 items 기준)
+    # 진행률 재계산 — N/A는 모수에서 제외
     total = execution.total_items or 1
+    na_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id,
+        SheetExecutionItem.value == "N/A",
+    ).count()
+    effective_total = max(1, total - na_count)
     checked_count = db.query(SheetExecutionItem).filter(
         SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
     ).count()
-    progress = min(100, int((checked_count / total) * 100)) if total > 0 else 0
+    progress = min(100, int((checked_count / effective_total) * 100))
     execution.checked_items = checked_count
     execution.progress = progress
     db.commit()

@@ -36,8 +36,14 @@ CHECK_STATE_VALUES = {"완료", "미완료", "진행", "진행 중", "진행중"
 
 COLUMN_ROLE_HEADER_CANDIDATES: Dict[str, List[str]] = {
     "check_status": [
-        "체크 여부", "체크여부", "점검 여부", "점검여부", "확인 여부", "확인여부",
-        "완료 여부", "완료여부", "완료", "상태", "결과", "점검결과", "판정",
+        # 직접적 체크/점검 여부
+        "체크 여부", "체크여부", "체크 유/무", "체크유무", "체크 유무",
+        "점검 여부", "점검여부", "확인 여부", "확인여부",
+        # 진행/수행/완료 여부
+        "진행 여부", "진행여부", "진행 유/무", "진행유무", "진행 유무",
+        "수행 여부", "수행여부", "완료 여부", "완료여부", "완료", "수행",
+        # 상태/결과/판정
+        "상태", "결과", "점검결과", "판정", "점검 결과",
         "Check", "Checked", "Status", "Result", "OK/NG", "Pass/Fail",
     ],
     "checked_at": [
@@ -46,9 +52,16 @@ COLUMN_ROLE_HEADER_CANDIDATES: Dict[str, List[str]] = {
         "실제점검일", "수행일시", "수행일",
         "Checked At", "Completed At", "Inspected At", "Done At",
     ],
+    "progress_date": [
+        # 진행일 전용 role — checked_at과 분리해서 상태-진행일 짝으로 다루기 위함
+        "진행일", "진행 일자", "진행일자", "진행 일시", "진행일시",
+        "실시일", "실시일자", "이행일", "이행일자",
+        "Progress Date", "Done Date",
+    ],
     "assignee": [
-        "담당자", "작업자", "점검자", "확인자", "수행자", "실시자",
-        "Operator", "Inspector", "Assignee", "Checker",
+        "담당자", "근무자", "작업자", "점검자", "확인자", "수행자", "실시자",
+        "책임자", "관리자",
+        "Operator", "Inspector", "Assignee", "Checker", "Owner",
     ],
     "due_date": [
         "점검예정일", "예정일", "점검일정", "계획일", "목표일",
@@ -56,7 +69,7 @@ COLUMN_ROLE_HEADER_CANDIDATES: Dict[str, List[str]] = {
         "Due Date", "Scheduled", "Planned",
     ],
     "remark": [
-        "비고", "메모", "특이사항", "이상내용", "조치사항", "조치내용",
+        "비고", "메모", "특이사항", "참고사항", "이상내용", "조치사항", "조치내용",
         "기타", "참고", "코멘트", "의견",
         "Note", "Remark", "Comment", "Memo",
     ],
@@ -130,6 +143,16 @@ def _value_pattern_score(values: List[str], role: str) -> float:
         date_count = sum(1 for v in non_empty if _DATE_RE.match(v.strip()))
         if filled > 0 and date_count / filled >= 0.5:
             return 0.7
+        return 0.0
+
+    elif role == "progress_date":
+        # 진행일: 날짜 또는 비어있는 셀이 많음 (아직 진행 안 된 행이 있을 수 있으니까)
+        date_count = sum(1 for v in non_empty if _DATE_RE.match(v.strip()))
+        empty_ratio = 1 - (filled / total) if total > 0 else 0
+        if filled > 0 and date_count / filled >= 0.5:
+            return 0.8
+        if empty_ratio >= 0.3 and date_count >= 1:
+            return 0.5
         return 0.0
 
     elif role == "remark":
@@ -604,8 +627,24 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
     # 헤더 행 자동 감지 + 체크/라벨 컬럼 식별
     header_row = _detect_header_row(ws) if total_rows > 0 else 1
     col_headers = _build_column_headers(ws, header_row)
+
+    # v3.2: 컬럼 역할 자동 추정을 셀 파싱 전에 수행하여
+    #       "담당자/진행일/비고" 등 명시적 역할 컬럼은 체크 대상에서 제외할 수 있도록 한다.
+    column_roles = detect_column_roles(col_headers, ws, header_row, total_rows)
+
     check_cols = {col for col, h in col_headers.items() if _header_matches(h, CHECK_HEADER_KEYWORDS)}
+    # 역할이 check_status로 판정된 컬럼도 체크 컬럼으로 포함 (1-based)
+    if "check_status" in column_roles:
+        check_cols.add(column_roles["check_status"]["col"] + 1)
     label_cols_list = [col for col, h in col_headers.items() if _header_matches(h, LABEL_HEADER_KEYWORDS)]
+
+    # 체크 대상에서 제외해야 할 역할 컬럼 (담당자/비고/진행일/예정일/점검일시 등)
+    # 1-based col index 집합
+    non_check_role_cols = set()
+    for role_name in ("assignee", "remark", "progress_date", "due_date", "planned_date", "checked_at", "cycle"):
+        info = column_roles.get(role_name)
+        if info is not None:
+            non_check_role_cols.add(info["col"] + 1)
 
     for r in range(1, total_rows + 1):
         for c in range(1, total_cols + 1):
@@ -671,6 +710,9 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
                 if c in check_cols:
                     # 명시적 체크 컬럼: 빈 칸도, "완료"/"미완료"/"OK" 도 전부 체크 항목
                     is_check = True
+                elif c in non_check_role_cols:
+                    # 담당자/비고/진행일 같은 역할 컬럼은 값이 "-"든 "O"든 체크로 잡지 않는다.
+                    is_check = False
                 else:
                     # 헤더 단서 없는 컬럼은 값 패턴으로만 판단
                     is_check = _is_checkable_cell(value)
@@ -699,18 +741,42 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
     for col, text in col_headers.items():
         headers.append({"col": col - 1, "value": text})
 
-    # v3.1: 컬럼 역할 자동 추정
-    column_roles = detect_column_roles(col_headers, ws, header_row, total_rows)
+    # column_roles는 셀 파싱 전에 이미 계산함
     structure_hash = compute_structure_hash(col_headers)
 
     # ───────────────────────────────────────────────────────────
-    # 비고(remark) 컬럼이 없는데 상태값에서 추출된 note가 있다면
-    # 가상 비고 컬럼을 시트 끝에 1개 추가하여 노트를 별도로 노출.
+    # v3.2: 가상 컬럼 자동 생성 (진행일 → 비고 순으로 끝에 붙임)
+    #   - 상태(check_status) 컬럼이 있는데 진행일/점검일시가 없으면 "진행일" 추가
+    #   - 상태값에서 추출된 note가 있는데 비고 컬럼이 없으면 "비고" 추가
     # ───────────────────────────────────────────────────────────
+    # 1) 진행일 가상 컬럼
+    if ("check_status" in column_roles
+            and "progress_date" not in column_roles
+            and "checked_at" not in column_roles):
+        virtual_col_idx = total_cols
+        cells.append({
+            "row": header_row - 1,
+            "col": virtual_col_idx,
+            "value": "진행일 (자동)",
+            "type": "text",
+            "font": {"bold": True, "fontColor": "#6B7280"},
+            "align": "center",
+        })
+        headers.append({"col": virtual_col_idx, "value": "진행일 (자동)"})
+        col_widths.append(14.0)  # ~100px
+        column_roles["progress_date"] = {
+            "col": virtual_col_idx,
+            "header": "진행일 (자동)",
+            "confidence": 1.0,
+            "virtual": True,
+            "editor_type": "date",
+        }
+        total_cols += 1
+
+    # 2) 비고 가상 컬럼
     extracted_notes = [(cc["row"], cc.get("parsed_note")) for cc in checkable_cells if cc.get("parsed_note")]
     if extracted_notes and "remark" not in column_roles:
-        virtual_col_idx = total_cols  # 0-based 새 컬럼 인덱스
-        # 헤더 셀
+        virtual_col_idx = total_cols
         cells.append({
             "row": header_row - 1,
             "col": virtual_col_idx,
@@ -719,7 +785,6 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
             "font": {"bold": True, "fontColor": "#6B7280"},
             "align": "center",
         })
-        # 노트 셀
         for r0, note in extracted_notes:
             cells.append({
                 "row": r0,
@@ -730,12 +795,13 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
                 "wrapText": True,
             })
         headers.append({"col": virtual_col_idx, "value": "비고 (자동)"})
-        col_widths.append(20.0)  # ~150px 폭
+        col_widths.append(20.0)
         column_roles["remark"] = {
             "col": virtual_col_idx,
             "header": "비고 (자동)",
             "confidence": 1.0,
             "virtual": True,
+            "editor_type": "text",
         }
         total_cols += 1
 
