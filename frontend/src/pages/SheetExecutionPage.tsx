@@ -17,6 +17,7 @@ import { useAppStore } from '../stores/useAppStore';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../hooks/useSpaceNav';
 import SheetRenderer, { type StatusValue } from '../components/sheets/SheetRenderer';
+import AssignmentMappingBoard from '../components/sheets/AssignmentMappingBoard';
 
 // 엑셀 스타일 컬럼 letter — 가상 컬럼용 cell_ref 생성기
 function colLetter(col0: number): string {
@@ -252,8 +253,15 @@ export default function SheetExecutionPage() {
         </Box>
       </Paper>
 
-      {/* Sheet rendering with checkboxes */}
-      {execution.template_structure ? (
+      {/* Sheet rendering — 유형별 분기 */}
+      {execution.sheet_type === 'assignment_mapping' ? (
+        <AssignmentMappingBoard
+          executionId={Number(executionId)}
+          mappings={execution.mappings || []}
+          userId={currentUserId}
+          readOnly={isCompleted}
+        />
+      ) : execution.template_structure ? (
         <SheetRenderer
           structure={execution.template_structure}
           executionItems={execution.items || []}
@@ -266,8 +274,8 @@ export default function SheetExecutionPage() {
         <Typography color="text.secondary">Sheet 구조를 불러올 수 없습니다</Typography>
       )}
 
-      {/* Execution items quick view - memo capable items */}
-      {(execution.items || []).length > 0 && (
+      {/* Execution items quick view - memo capable items (inspection 유형만) */}
+      {execution.sheet_type !== 'assignment_mapping' && (execution.items || []).length > 0 && (
         <Paper variant="outlined" sx={{ mt: 2, p: 2, borderRadius: 2 }}>
           <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>
             체크 항목 ({execution.checked_items}/{execution.total_items})

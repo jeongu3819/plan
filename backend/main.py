@@ -6075,6 +6075,13 @@ def create_sheet_execution(
                         note=note.strip() if note else None,
                     )
                     db.add(mapping)
+
+        # 매핑 유형은 total_items를 실제 매핑 수로 설정
+        db.flush()
+        mapping_count = db.query(SheetExecutionMapping).filter(
+            SheetExecutionMapping.execution_id == execution.id
+        ).count()
+        execution.total_items = mapping_count
     else:
         # 기존 점검형: 템플릿의 checkable_cells로부터 실행 항목 생성
         checkable_cells = structure.get("checkable_cells", [])
@@ -6175,7 +6182,9 @@ def list_sheet_executions(
 
 @app.get("/api/sheet-executions/{execution_id}")
 def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
-    """Sheet 실행 상세 + 항목 + 템플릿 구조"""
+    """Sheet 실행 상세 + 항목 + 템플릿 구조 + (assignment_mapping 유형의 경우) 매핑 목록"""
+    from app.models import SheetExecutionMapping
+
     execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
     if not execution:
         raise HTTPException(404, "Execution not found")
@@ -6186,6 +6195,23 @@ def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
 
     template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
 
+    mappings_data = []
+    if execution.sheet_type == "assignment_mapping":
+        mappings = db.query(SheetExecutionMapping).filter(
+            SheetExecutionMapping.execution_id == execution_id
+        ).order_by(SheetExecutionMapping.master_name, SheetExecutionMapping.id).all()
+        mappings_data = [
+            {
+                "id": m.id,
+                "master_name": m.master_name,
+                "master_code": m.master_code,
+                "assigned_entity": m.assigned_entity,
+                "manager": m.manager,
+                "last_checked_at": iso(m.last_checked_at) if m.last_checked_at else None,
+                "note": m.note,
+            } for m in mappings
+        ]
+
     return {
         "id": execution.id,
         "template_id": execution.template_id,
@@ -6193,6 +6219,7 @@ def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
         "task_id": execution.task_id,
         "title": execution.title,
         "equipment_name": execution.equipment_name,
+        "sheet_type": execution.sheet_type,
         "status": execution.status,
         "total_items": execution.total_items,
         "checked_items": execution.checked_items,
@@ -6217,6 +6244,34 @@ def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
                 "checked_at": iso(item.checked_at) if item.checked_at else None,
             } for item in items
         ],
+        "mappings": mappings_data,
+    }
+
+
+@app.get("/api/sheet-executions/{execution_id}/mappings")
+def list_sheet_mappings(execution_id: int, db: Session = Depends(get_db)):
+    """assignment_mapping 유형 실행의 매핑 목록"""
+    from app.models import SheetExecutionMapping
+
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+
+    mappings = db.query(SheetExecutionMapping).filter(
+        SheetExecutionMapping.execution_id == execution_id
+    ).order_by(SheetExecutionMapping.master_name, SheetExecutionMapping.id).all()
+    return {
+        "mappings": [
+            {
+                "id": m.id,
+                "master_name": m.master_name,
+                "master_code": m.master_code,
+                "assigned_entity": m.assigned_entity,
+                "manager": m.manager,
+                "last_checked_at": iso(m.last_checked_at) if m.last_checked_at else None,
+                "note": m.note,
+            } for m in mappings
+        ]
     }
 
 

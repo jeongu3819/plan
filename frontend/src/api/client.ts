@@ -1053,13 +1053,13 @@ export const api = {
   // ========================================
   // v3.0 Sheet Templates
   // ========================================
-  inspectSheetFile: async (file: File): Promise<{ multi: boolean; sheet_names: string[]; suggested: string | null }> => {
+  inspectSheetFile: async (file: File): Promise<{ multi: boolean; sheet_names: string[]; suggested: string | null; suggested_type?: 'inspection' | 'assignment_mapping' }> => {
     const formData = new FormData();
     formData.append('file', file);
     const res = await client.post('/sheet-templates/inspect', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
     return res.data;
   },
-  uploadSheetTemplate: async (file: File, spaceId: number, userId: number, opts?: { name?: string; description?: string; category?: string; sheet_name?: string }): Promise<any> => {
+  uploadSheetTemplate: async (file: File, spaceId: number, userId: number, opts?: { name?: string; description?: string; category?: string; sheet_name?: string; sheet_type?: string }): Promise<any> => {
     const formData = new FormData();
     formData.append('file', file);
     const params: Record<string, any> = { space_id: spaceId, user_id: requireUserId(userId) };
@@ -1067,6 +1067,7 @@ export const api = {
     if (opts?.description) params.description = opts.description;
     if (opts?.category) params.category = opts.category;
     if (opts?.sheet_name) params.sheet_name = opts.sheet_name;
+    if (opts?.sheet_type) params.sheet_type = opts.sheet_type;
     const res = await client.post('/sheet-templates/upload', formData, { params, headers: { 'Content-Type': 'multipart/form-data' } });
     return res.data;
   },
@@ -1136,6 +1137,34 @@ export const api = {
   confirmSheetRoles: async (templateId: number, roles: any, userId: number): Promise<any> => {
     const res = await client.post(`/sheet-templates/${templateId}/confirm-roles`, roles, { params: { user_id: requireUserId(userId) } });
     return res.data;
+  },
+
+  // ========================================
+  // v3.2 Sheet Execution Mappings (assignment_mapping type)
+  // ========================================
+  listSheetMappings: async (executionId: number): Promise<any[]> => {
+    const res = await client.get(`/sheet-executions/${executionId}/mappings`);
+    return res.data.mappings || [];
+  },
+  addSheetMapping: async (
+    executionId: number,
+    body: { master_name: string; assigned_entity: string },
+    userId: number
+  ): Promise<any> => {
+    const res = await client.post(`/sheet-executions/${executionId}/mappings`, body, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  updateSheetMapping: async (
+    executionId: number,
+    mappingId: number,
+    body: { master_name?: string; assigned_entity?: string; manager?: string; note?: string },
+    userId: number
+  ): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/mappings/${mappingId}`, body, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  deleteSheetMapping: async (executionId: number, mappingId: number, userId: number): Promise<void> => {
+    await client.delete(`/sheet-executions/${executionId}/mappings/${mappingId}`, { params: { user_id: requireUserId(userId) } });
   },
 };
 
