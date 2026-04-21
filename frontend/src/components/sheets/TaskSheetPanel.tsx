@@ -8,14 +8,15 @@ import { useState } from 'react';
 import {
   Box, Typography, Button, Chip, LinearProgress, Dialog,
   DialogTitle, DialogContent, DialogActions, FormControl,
-  InputLabel, Select, MenuItem, alpha, Link, Tooltip,
+  InputLabel, Select, MenuItem, alpha, Link, Tooltip, IconButton,
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import AddIcon from '@mui/icons-material/Add';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import { useQuery } from '@tanstack/react-query';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
@@ -54,6 +55,18 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
     queryFn: () => api.getSheetTemplates(currentSpaceId!),
     enabled: !!currentSpaceId && pickerOpen,
   });
+
+  const unlinkMut = useMutation({
+    mutationFn: (executionId: number) => api.unlinkSheetExecutionTask(executionId, currentUserId),
+    onSuccess: () => refetch(),
+    onError: (e: any) => alert(e?.response?.data?.detail || '연결 해제 실패'),
+  });
+
+  const handleUnlink = (e: React.MouseEvent, exec: any) => {
+    e.stopPropagation();
+    if (!confirm(`'${exec.title}' 체크시트를 이 Task에서 연결 해제할까요?\n(시트 자체는 보존됩니다)`)) return;
+    unlinkMut.mutate(exec.id);
+  };
   const templates: SheetTemplate[] = templatesData?.templates || [];
 
   const active = summary?.active_executions || [];
@@ -142,6 +155,17 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
               <Tooltip title="전체 화면으로 열기">
                 <OpenInFullIcon sx={{ fontSize: 12, color: '#D97706', flexShrink: 0 }} />
               </Tooltip>
+              {canEdit && (
+                <Tooltip title="이 Task에서 연결 해제">
+                  <IconButton
+                    size="small"
+                    onClick={(e) => handleUnlink(e, exec)}
+                    sx={{ p: 0.3, ml: 0.3 }}
+                  >
+                    <LinkOffIcon sx={{ fontSize: 13, color: '#9CA3AF' }} />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           ))}
           {completed.slice(0, 5).map((exec: any) => (
@@ -160,6 +184,17 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
               </Typography>
               <Chip label="완료" size="small"
                 sx={{ height: 16, fontSize: '0.55rem', bgcolor: alpha('#22C55E', 0.1), color: '#16A34A' }} />
+              {canEdit && (
+                <Tooltip title="이 Task에서 연결 해제">
+                  <IconButton
+                    size="small"
+                    onClick={(e) => handleUnlink(e, exec)}
+                    sx={{ p: 0.3 }}
+                  >
+                    <LinkOffIcon sx={{ fontSize: 13, color: '#9CA3AF' }} />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           ))}
         </Box>

@@ -6519,6 +6519,182 @@ def complete_sheet_execution(
     return {"message": "실행이 완료되었습니다", "progress": execution.progress}
 
 
+@app.patch("/api/sheet-executions/{execution_id}/unlink-task")
+def unlink_sheet_execution_task(
+    execution_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행과 Task의 연결만 해제 (sheet 자체는 보존)."""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    old_task_id = execution.task_id
+    if old_task_id is None:
+        return {"message": "이미 Task와 연결되어 있지 않습니다", "task_id": None}
+    execution.task_id = None
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="unlink_task",
+        old_value=f"task_id={old_task_id}",
+        new_value="task_id=None",
+        user_id=user_id,
+    ))
+    db.commit()
+    return {"message": "Task 연결이 해제되었습니다", "task_id": None}
+
+
+@app.get("/api/sheet-executions/{execution_id}/export")
+def export_sheet_execution_xlsx(
+    execution_id: int,
+    db: Session = Depends(get_db),
+):
+    """현재 웹에서 수정된 최신 상태를 xlsx 파일로 다운로드."""
+    import io as _io
+    from urllib.parse import quote as _quote
+    from fastapi.responses import StreamingResponse
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill
+
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+    if not template:
+        raise HTTPException(404, "Template not found")
+
+    structure = template.structure or {}
+    cells = structure.get("cells", [])
+    merges = structure.get("merges", [])
+    col_widths = structure.get("col_widths", [])
+    row_heights = structure.get("row_heights", [])
+    total_rows = structure.get("total_rows", 0) or 0
+    total_cols = structure.get("total_cols", 0) or 0
+    column_roles = structure.get("column_roles") or {}
+
+    items = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id
+    ).all()
+    # cell_ref → (value, memo, checked) 맵
+    item_map = {}
+    for it in items:
+        item_map[(it.row_idx, it.col_idx)] = it
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = (template.sheet_name or template.name or "Sheet")[:31]
+
+    # 1) 원본 셀 값 + style 복원
+    for cell_data in cells:
+        r = cell_data.get("row", 0) + 1
+        c = cell_data.get("col", 0) + 1
+        if r < 1 or c < 1:
+            continue
+        # 사용자가 web에서 수정한 값이 있으면 우선 적용
+        item = item_map.get((cell_data.get("row", 0), cell_data.get("col", 0)))
+        value = cell_data.get("value", "")
+        if item is not None:
+            if item.value is not None and item.value != "":
+                value = item.value
+            elif item.checked:
+                value = "O"
+        try:
+            target = ws.cell(row=r, column=c, value=value if value != "" else None)
+        except Exception:
+            continue
+        # 폰트
+        font_info = cell_data.get("font") or {}
+        if font_info:
+            target.font = Font(
+                bold=bool(font_info.get("bold")),
+                italic=bool(font_info.get("italic")),
+                size=font_info.get("fontSize") or 11,
+                color=font_info.get("fontColor", "FF000000").lstrip("#") if font_info.get("fontColor") else None,
+            )
+        # 정렬
+        align = cell_data.get("align")
+        if align or cell_data.get("wrapText"):
+            target.alignment = Alignment(
+                horizontal=align if align in ("left", "center", "right") else None,
+                vertical="center",
+                wrap_text=bool(cell_data.get("wrapText")),
+            )
+        # 배경
+        bg = cell_data.get("bg")
+        if bg:
+            try:
+                target.fill = PatternFill(start_color=bg.lstrip("#"), end_color=bg.lstrip("#"), fill_type="solid")
+            except Exception:
+                pass
+
+    # 2) 사용자 수정값 중 원본 cell이 없던 위치(가상 컬럼 등) 추가
+    seen_positions = {(c.get("row", 0), c.get("col", 0)) for c in cells}
+    for it in items:
+        pos = (it.row_idx, it.col_idx)
+        if pos in seen_positions:
+            continue
+        try:
+            v = it.value if it.value not in (None, "") else ("O" if it.checked else None)
+            ws.cell(row=it.row_idx + 1, column=it.col_idx + 1, value=v)
+        except Exception:
+            continue
+
+    # 2-1) 가상 컬럼 헤더 보강 (원본에 없는 가상 컬럼은 헤더 cell이 있어도 다시 적용)
+    header_row_1based = (structure.get("header_row_idx") or 0) + 1
+    for role_key, role_info in column_roles.items():
+        if not role_info or not role_info.get("virtual"):
+            continue
+        col_1based = (role_info.get("col") or 0) + 1
+        header_text = role_info.get("header") or role_key
+        try:
+            ws.cell(row=header_row_1based, column=col_1based, value=header_text).font = Font(bold=True, color="FF6B7280")
+        except Exception:
+            pass
+
+    # 3) 병합셀
+    for mg in merges:
+        try:
+            ws.merge_cells(
+                start_row=mg["startRow"] + 1,
+                start_column=mg["startCol"] + 1,
+                end_row=mg["endRow"] + 1,
+                end_column=mg["endCol"] + 1,
+            )
+        except Exception:
+            continue
+
+    # 4) 컬럼 너비
+    from openpyxl.utils import get_column_letter as _col_letter
+    for idx, w in enumerate(col_widths or []):
+        if idx >= total_cols:
+            break
+        try:
+            ws.column_dimensions[_col_letter(idx + 1)].width = float(w)
+        except Exception:
+            continue
+
+    # 5) 행 높이
+    for idx, h in enumerate(row_heights or []):
+        if idx >= total_rows:
+            break
+        try:
+            ws.row_dimensions[idx + 1].height = float(h)
+        except Exception:
+            continue
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    wb.close()
+
+    fname_base = (execution.title or template.name or "sheet").replace("/", "_").replace("\\", "_")
+    encoded = _quote(f"{fname_base}.xlsx")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
+    )
+
+
 @app.get("/api/sheet-executions/{execution_id}/logs")
 def get_sheet_execution_logs(execution_id: int, db: Session = Depends(get_db)):
     """실행 이력 로그 조회"""

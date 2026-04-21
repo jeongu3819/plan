@@ -1118,6 +1118,22 @@ export const api = {
     const res = await client.patch(`/sheet-executions/${executionId}/complete`, null, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
+  unlinkSheetExecutionTask: async (executionId: number, userId: number): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/unlink-task`, null, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  /** 현재 웹에서 수정한 최신 상태를 xlsx로 받아옴. 브라우저 다운로드 트리거. */
+  downloadSheetExecutionXlsx: async (executionId: number, suggestedName?: string): Promise<void> => {
+    const res = await client.get(`/sheet-executions/${executionId}/export`, { responseType: 'blob' });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(suggestedName || 'sheet')}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
   getSheetExecutionLogs: async (executionId: number): Promise<any> => {
     const res = await client.get(`/sheet-executions/${executionId}/logs`);
     return res.data;

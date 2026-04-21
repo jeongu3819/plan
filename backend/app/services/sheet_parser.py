@@ -179,21 +179,20 @@ def detect_column_roles(
         "checked_at": {"col": 6, "header": "실제 점검일시", "confidence": 0.90},
         ...
     }
+
+    개선 사항 (v3.3):
+    - 한 컬럼이 여러 역할의 후보가 되면 가장 점수가 높은 역할만 가져감 (exclusive)
+    - 부분 매칭(0.5)만으로는 role 확정하지 않음 — 값 패턴 보강 필요 (0.5 임계)
     """
-    roles: Dict[str, Any] = {}
-
-    # 각 역할별로 모든 컬럼의 점수를 계산
+    # (col, role) → (h_score, v_score, combined) 표 작성
+    candidate_table: List[Tuple[int, str, float, float, float, str]] = []
     for role, candidates in COLUMN_ROLE_HEADER_CANDIDATES.items():
-        best_col = None
-        best_score = 0.0
-        best_header = ""
-
         for col_idx, header_text in col_headers.items():
             h_score = _header_score(header_text, candidates)
+            if h_score <= 0:
+                continue
             v_score = 0.0
-
-            if ws and h_score >= 0.3:
-                # 값 패턴도 함께 분석
+            if ws:
                 sample_values = []
                 scan_end = min(total_rows + 1, header_row + sample_limit + 1)
                 for r in range(header_row + 1, scan_end):
@@ -201,19 +200,33 @@ def detect_column_roles(
                     v = cell.value
                     sample_values.append(str(v).strip() if v is not None else "")
                 v_score = _value_pattern_score(sample_values, role)
-
             combined = h_score * 0.7 + v_score * 0.3
-            if combined > best_score:
-                best_score = combined
-                best_col = col_idx
-                best_header = header_text
+            candidate_table.append((col_idx, role, h_score, v_score, combined, header_text))
 
-        if best_col is not None and best_score >= 0.3:
-            roles[role] = {
-                "col": best_col - 1,  # 0-based
-                "header": best_header,
-                "confidence": round(best_score, 2),
-            }
+    # 점수 내림차순 정렬
+    candidate_table.sort(key=lambda x: x[4], reverse=True)
+
+    used_cols: set = set()
+    used_roles: set = set()
+    roles: Dict[str, Any] = {}
+
+    for col_idx, role, h_score, v_score, combined, header_text in candidate_table:
+        if col_idx in used_cols or role in used_roles:
+            continue
+        # 부분 매칭(0.5 미만)일 때는 값 패턴이 뒷받침될 때만 채택
+        if h_score < 0.8 and v_score < 0.4:
+            # 단, 다른 역할이 이 컬럼을 이미 가져갔거나 가져갈 가능성이 있으면 보류
+            continue
+        # 정확/포함 매칭(>=0.8)이거나 부분매칭이지만 값 패턴이 일치하면 채택
+        if combined < 0.45:
+            continue
+        roles[role] = {
+            "col": col_idx - 1,
+            "header": header_text,
+            "confidence": round(combined, 2),
+        }
+        used_cols.add(col_idx)
+        used_roles.add(role)
 
     return roles
 
@@ -432,24 +445,115 @@ def _find_label_for_cell(ws, row_idx: int, col_idx: int, label_cols=None) -> str
     return ""
 
 
+# 헤더로 자주 등장하는 키워드 (전체 컬럼 후보 합집합 + 일반 키워드)
+_HEADER_KEYWORD_BONUS = {
+    "분류", "항목", "내용", "설명", "구분", "번호", "no", "no.",
+    "담당", "담당자", "근무자", "작업자", "점검자", "확인자", "수행자",
+    "상태", "결과", "여부", "유무", "체크", "점검", "확인", "진행", "수행",
+    "일자", "일시", "날짜", "예정", "이행", "진행일", "점검일",
+    "비고", "메모", "특이", "참고", "코멘트",
+    "약품", "설비", "장비", "부품", "코드", "이름",
+    "check", "item", "status", "result", "name", "code", "date", "note", "remark",
+}
+
+# 헤더로 인식되면 안 되는 데이터값 (정규화 후 비교)
+_DATA_VALUE_TOKENS = {
+    "o", "x", "○", "●", "×", "✓", "✔", "☑", "☐", "□", "■", "△", "▲",
+    "n/a", "na", "ok", "ng", "pass", "fail", "y", "n", "true", "false",
+    "완료", "미완료", "진행", "보류", "양호", "불량", "정상", "이상", "해당없음",
+    "-",
+}
+
+
+def _is_pure_data_token(text: str) -> bool:
+    """`O`, `X`, `N/A` 같은 짧은 데이터값 토큰인지 판정. 헤더면 항상 False여야 함."""
+    if not text:
+        return False
+    t = text.strip().lower().replace(" ", "")
+    if t in _DATA_VALUE_TOKENS:
+        return True
+    # 한 글자 영문/숫자/기호만 있어도 데이터값으로 본다
+    if len(t) <= 1:
+        return True
+    return False
+
+
+def _row_header_score(ws, row: int, total_cols: int) -> Tuple[float, int, int]:
+    """
+    한 행이 '헤더 행'일 가능성 점수.
+    Returns (score, text_count, data_token_count)
+      - score: 비어있지 않은 텍스트 셀 수 + 헤더 키워드 보너스 - 데이터값 패널티
+      - text_count: 비어있지 않은 텍스트 셀 수 (가중 전)
+      - data_token_count: O/X/N/A 같은 데이터값 토큰 수
+    """
+    text_count = 0
+    keyword_hits = 0
+    data_hits = 0
+    long_text_count = 0
+    numeric_count = 0
+    for c in range(1, total_cols + 1):
+        v = ws.cell(row=row, column=c).value
+        if v is None:
+            continue
+        if isinstance(v, (int, float)):
+            numeric_count += 1
+            continue
+        if not isinstance(v, str):
+            continue
+        s = v.strip()
+        if not s:
+            continue
+        text_count += 1
+        if _is_pure_data_token(s):
+            data_hits += 1
+            continue
+        s_lower = s.lower()
+        # 키워드 가산
+        if any(kw in s_lower for kw in _HEADER_KEYWORD_BONUS):
+            keyword_hits += 1
+        # 긴 한글/영문 텍스트 (헤더보다는 데이터인 경우가 많음)
+        if len(s) > 20:
+            long_text_count += 1
+    # 점수: 텍스트 셀 수 기본값에 키워드 보너스 큰 가중, 데이터값/긴문장은 패널티
+    score = text_count + keyword_hits * 2.5 - data_hits * 1.5 - long_text_count * 0.5 - numeric_count * 0.3
+    return score, text_count, data_hits
+
+
 def _detect_header_row(ws, max_scan: int = 10) -> int:
     """
     헤더 행(1-based) 자동 감지:
-    - 첫 10행 내에서 '문자열 비어있지 않은 셀 개수'가 최대인 행을 헤더 후보로
-    - 동률이면 더 아래 행 선호 (보통 제목/요약 이후에 헤더가 옴)
+    - 키워드 가중 점수가 가장 높은 행을 선택
+    - 'O', 'X', 'N/A' 같은 데이터값 토큰이 다수면 헤더 후보에서 감점
+    - 동률이면 더 아래 행 선호 (제목 행 다음에 실제 헤더가 오는 패턴)
     """
+    total_cols = ws.max_column or 0
+    if total_cols == 0:
+        return 1
     best_row = 1
-    best_count = -1
+    best_score = -1e9
     scan_to = min(max_scan, ws.max_row or 0)
     for r in range(1, scan_to + 1):
-        count = 0
-        for c in range(1, (ws.max_column or 0) + 1):
-            v = ws.cell(row=r, column=c).value
-            if v is not None and isinstance(v, str) and v.strip():
-                count += 1
-        if count >= best_count:
-            best_count = count
+        score, text_count, data_hits = _row_header_score(ws, r, total_cols)
+        # 텍스트가 거의 없으면 후보에서 제외 (제목 한 줄짜리 행)
+        if text_count < 2:
+            continue
+        # 데이터값이 텍스트의 절반 이상이면 데이터 행으로 간주 → 후보 제외
+        if data_hits > 0 and data_hits >= max(2, text_count // 2):
+            continue
+        if score >= best_score:
+            best_score = score
             best_row = r
+    # 만약 모든 행이 제외됐으면 fallback: 텍스트 셀 가장 많은 행
+    if best_score == -1e9:
+        for r in range(1, scan_to + 1):
+            count = 0
+            for c in range(1, total_cols + 1):
+                v = ws.cell(row=r, column=c).value
+                if v is not None and isinstance(v, str) and v.strip():
+                    count += 1
+            if count > 0:
+                return r
+        return 1
     return best_row
 
 
@@ -745,37 +849,39 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
     structure_hash = compute_structure_hash(col_headers)
 
     # ───────────────────────────────────────────────────────────
-    # v3.2: 가상 컬럼 자동 생성 (진행일 → 비고 순으로 끝에 붙임)
-    #   - 상태(check_status) 컬럼이 있는데 진행일/점검일시가 없으면 "진행일" 추가
-    #   - 상태값에서 추출된 note가 있는데 비고 컬럼이 없으면 "비고" 추가
+    # v3.3: 운영 기록용 가상 컬럼 자동 생성 (진행일자 → 비고 순으로 끝에 붙임)
+    #   - inspection 시트에는 무조건 두 컬럼이 있어야 함 (사용자 요구)
+    #   - 원본에 이미 있으면 (column_roles에 등록됨) 추가하지 않음
+    #   - 진행일자: progress_date 또는 checked_at 둘 중 하나라도 있으면 OK
+    #   - 비고: remark가 있으면 OK
     # ───────────────────────────────────────────────────────────
-    # 1) 진행일 가상 컬럼
-    if ("check_status" in column_roles
-            and "progress_date" not in column_roles
-            and "checked_at" not in column_roles):
+    has_status = "check_status" in column_roles
+
+    # 1) 진행일자 가상 컬럼 — check_status가 없어도 항상 생성 (사용자가 직접 기록 가능하게)
+    if "progress_date" not in column_roles and "checked_at" not in column_roles:
         virtual_col_idx = total_cols
         cells.append({
             "row": header_row - 1,
             "col": virtual_col_idx,
-            "value": "진행일 (자동)",
+            "value": "진행일자 (자동)",
             "type": "text",
             "font": {"bold": True, "fontColor": "#6B7280"},
             "align": "center",
         })
-        headers.append({"col": virtual_col_idx, "value": "진행일 (자동)"})
-        col_widths.append(14.0)  # ~100px
+        headers.append({"col": virtual_col_idx, "value": "진행일자 (자동)"})
+        col_widths.append(14.0)
         column_roles["progress_date"] = {
             "col": virtual_col_idx,
-            "header": "진행일 (자동)",
+            "header": "진행일자 (자동)",
             "confidence": 1.0,
             "virtual": True,
             "editor_type": "date",
         }
         total_cols += 1
 
-    # 2) 비고 가상 컬럼
+    # 2) 비고 가상 컬럼 — 항상 생성 (특이사항 기록용)
     extracted_notes = [(cc["row"], cc.get("parsed_note")) for cc in checkable_cells if cc.get("parsed_note")]
-    if extracted_notes and "remark" not in column_roles:
+    if "remark" not in column_roles:
         virtual_col_idx = total_cols
         cells.append({
             "row": header_row - 1,
@@ -785,6 +891,7 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
             "font": {"bold": True, "fontColor": "#6B7280"},
             "align": "center",
         })
+        # 상태 컬럼에서 분리된 note가 있으면 자동으로 채워줌
         for r0, note in extracted_notes:
             cells.append({
                 "row": r0,
@@ -804,6 +911,9 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
             "editor_type": "text",
         }
         total_cols += 1
+
+    # has_status는 추후 metadata 표시용으로 reserved (현재 미사용 경고 회피)
+    _ = has_status
 
     wb.close()
 

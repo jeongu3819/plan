@@ -8,9 +8,17 @@ import { Box, Checkbox, Typography, Tooltip, TextField, Select, MenuItem } from 
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import type { SheetStructure, SheetCell, SheetExecutionItem, ColumnRoleMapping } from '../../types';
 
-// 여부성 상태 옵션 (O/X/N/A) — 단순 체크박스가 아니라 선택형 dropdown
+// 여부성 상태 옵션 (내부값은 O/X/N/A 유지, UI 라벨은 진행/미진행/N/A)
 export const STATUS_OPTIONS = ['O', 'X', 'N/A'] as const;
 export type StatusValue = typeof STATUS_OPTIONS[number] | '';
+
+/** 내부 상태값 → 사용자에게 보여줄 라벨 */
+export function statusLabel(v: StatusValue): string {
+  if (v === 'O') return '진행';
+  if (v === 'X') return '미진행';
+  if (v === 'N/A') return 'N/A';
+  return '';
+}
 
 interface Props {
   structure: SheetStructure;
@@ -385,7 +393,7 @@ export default function SheetRenderer({
                                 color,
                                 opacity: current === 'N/A' ? 0.7 : 1,
                               }}>
-                                {v || '—'}
+                                {statusLabel(v as StatusValue) || '—'}
                               </Box>
                             )}
                             sx={{
@@ -396,8 +404,8 @@ export default function SheetRenderer({
                             MenuProps={{ PaperProps: { sx: { mt: 0.5 } } }}
                           >
                             <MenuItem value=""><em style={{ color: '#9CA3AF' }}>— 선택</em></MenuItem>
-                            <MenuItem value="O" sx={{ fontWeight: 700, color: '#16A34A' }}>O</MenuItem>
-                            <MenuItem value="X" sx={{ fontWeight: 700, color: '#DC2626' }}>X</MenuItem>
+                            <MenuItem value="O" sx={{ fontWeight: 700, color: '#16A34A' }}>진행</MenuItem>
+                            <MenuItem value="X" sx={{ fontWeight: 700, color: '#DC2626' }}>미진행</MenuItem>
                             <MenuItem value="N/A" sx={{ fontWeight: 700, color: '#9CA3AF' }}>N/A</MenuItem>
                           </Select>
                         </Tooltip>

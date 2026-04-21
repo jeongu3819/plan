@@ -11,6 +11,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import AssignmentIcon from '@mui/icons-material/Assignment';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import SheetRenderer from './SheetRenderer';
@@ -41,15 +43,7 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     },
   });
 
-  const copyMut = useMutation({
-    mutationFn: ({ title, includeData }: { title: string; includeData: boolean }) =>
-      api.copySheetExecution(executionId!, title, includeData, userId),
-    onSuccess: () => {
-      alert('체크시트가 복제되었습니다.');
-      queryClient.invalidateQueries(); // 목록 새로고침
-      onClose(); // 복제 후 팝업 닫기 (새 시트가 리스트에 보여짐)
-    },
-  });
+  const [downloading, setDownloading] = useState(false);
 
   const handleCheckChange = useCallback((cellRef: string, checked: boolean) => {
     upsertMut.mutate({ cellRef, data: { checked } });
@@ -59,12 +53,19 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     upsertMut.mutate({ cellRef, data: { value } });
   }, [upsertMut]);
 
-  const handleCopyClick = () => {
-    const title = prompt('새로운 체크시트 이름을 입력하세요:', (execution?.title || '') + ' (복사본)');
-    if (!title) return;
-    const includeData = confirm('기존 체크 내역과 입력값을 포함해서 복사하시겠습니까?\n(취소 시 양식만 복사됩니다)');
-    copyMut.mutate({ title, includeData });
+  const handleDownloadClick = async () => {
+    if (!executionId || downloading) return;
+    setDownloading(true);
+    try {
+      await api.downloadSheetExecutionXlsx(executionId, execution?.title || 'sheet');
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || '엑셀 다운로드 실패');
+    } finally {
+      setDownloading(false);
+    }
   };
+  // queryClient referenced to keep mutation hook patterns consistent (no-op)
+  void queryClient;
 
   const structure = execution?.template_structure;
   const progress = execution?.progress ?? 0;
@@ -142,18 +143,20 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             />
           </Box>
 
-          {(upsertMut.isPending || copyMut.isPending) && (
+          {(upsertMut.isPending || downloading) && (
             <Chip
-              label={copyMut.isPending ? "복사 중..." : "저장 중..."}
+              label={downloading ? "다운로드 중..." : "저장 중..."}
               size="small"
               sx={{ bgcolor: alpha('#F59E0B', 0.15), color: '#F59E0B', height: 22, fontSize: '0.62rem' }}
             />
           )}
-          
+
           <Chip
-            label="복제하기"
-            onClick={handleCopyClick}
+            icon={<FileDownloadIcon sx={{ fontSize: 14, color: '#fff !important' }} />}
+            label="엑셀 다운로드"
+            onClick={handleDownloadClick}
             size="small"
+            disabled={downloading}
             sx={{
               bgcolor: 'rgba(255,255,255,0.1)', color: '#fff',
               fontWeight: 600, fontSize: '0.72rem', height: 26, cursor: 'pointer',
