@@ -102,7 +102,7 @@ def backup_database() -> dict:
     - MySQL: mysqldump 실행
     반환: {"success": bool, "local_path": str, "s3_result": dict}
     """
-    from utils.s3_utils import upload_local_file_to_s3, is_s3_configured
+    from utils.s3.s3_utils import upload_local_file_to_s3, is_s3_configured
 
     database_url = _get_database_url()
     now = _now_kst()
@@ -234,7 +234,7 @@ def sync_uploads_to_s3() -> dict:
     로컬 uploads/ 디렉토리의 모든 파일을 S3에 동기화.
     이미 업로드된 파일은 건너뜀 (S3 key 존재 여부로 판단).
     """
-    from utils.s3_utils import is_s3_configured, list_s3_files, upload_attachment_bytes_to_s3, get_attachment_s3_key
+    from utils.s3.s3_utils import is_s3_configured, list_s3_files, upload_attachment_bytes_to_s3, get_attachment_s3_key
 
     if not is_s3_configured():
         _log_backup_result("FILES", False, "S3 미설정, 파일 동기화 스킵")
@@ -331,7 +331,7 @@ def start_backup_scheduler():
     """APScheduler 시작 (FastAPI startup에서 호출)"""
     global _scheduler
 
-    from utils.s3_utils import is_s3_configured
+    from utils.s3.s3_utils import is_s3_configured
 
     if not is_s3_configured():
         logger.warning("S3 미설정 → 백업 스케줄러 시작하지 않음")
