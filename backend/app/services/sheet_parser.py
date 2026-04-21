@@ -863,16 +863,16 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
         cells.append({
             "row": header_row - 1,
             "col": virtual_col_idx,
-            "value": "진행일자 (자동)",
+            "value": "진행일자",
             "type": "text",
             "font": {"bold": True, "fontColor": "#6B7280"},
             "align": "center",
         })
-        headers.append({"col": virtual_col_idx, "value": "진행일자 (자동)"})
+        headers.append({"col": virtual_col_idx, "value": "진행일자"})
         col_widths.append(14.0)
         column_roles["progress_date"] = {
             "col": virtual_col_idx,
-            "header": "진행일자 (자동)",
+            "header": "진행일자",
             "confidence": 1.0,
             "virtual": True,
             "editor_type": "date",
@@ -886,7 +886,7 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
         cells.append({
             "row": header_row - 1,
             "col": virtual_col_idx,
-            "value": "비고 (자동)",
+            "value": "비고",
             "type": "text",
             "font": {"bold": True, "fontColor": "#6B7280"},
             "align": "center",
@@ -901,11 +901,11 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
                 "font": {"fontColor": "#374151", "italic": True},
                 "wrapText": True,
             })
-        headers.append({"col": virtual_col_idx, "value": "비고 (자동)"})
+        headers.append({"col": virtual_col_idx, "value": "비고"})
         col_widths.append(20.0)
         column_roles["remark"] = {
             "col": virtual_col_idx,
-            "header": "비고 (자동)",
+            "header": "비고",
             "confidence": 1.0,
             "virtual": True,
             "editor_type": "text",

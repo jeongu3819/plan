@@ -15,8 +15,29 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
-import SheetRenderer from './SheetRenderer';
+import SheetRenderer, { type StatusValue } from './SheetRenderer';
 import type { SheetExecution } from '../../types';
+
+/** 0-based col index → Excel A1 column letter */
+function colToLetter(col: number): string {
+  let s = '';
+  let n = col + 1;
+  while (n > 0) {
+    n--;
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26);
+  }
+  return s;
+}
+function refOf(rowIdx: number, colIdx: number): string {
+  return `${colToLetter(colIdx)}${rowIdx + 1}`;
+}
+function todayYmd(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
 
 interface Props {
   open: boolean;
@@ -52,6 +73,25 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   const handleValueChange = useCallback((cellRef: string, value: string) => {
     upsertMut.mutate({ cellRef, data: { value } });
   }, [upsertMut]);
+
+  // v3.4: 상태 select 변경 — value/checked 동시 갱신 + 진행일자 자동 연동
+  //   진행(O) → checked=true, 진행일자에 오늘 날짜
+  //   미진행(X) → checked=false, 진행일자 비움
+  //   N/A     → checked=false (모수 제외), 진행일자 비움
+  //   '' (선택 해제) → checked=false, value 비움
+  const progressDateCol = execution?.template_structure?.column_roles?.progress_date?.col;
+  const handleStatusChange = useCallback(
+    (cellRef: string, status: StatusValue, rowIdx: number, _colIdx: number) => {
+      const checked = status === 'O';
+      upsertMut.mutate({ cellRef, data: { value: status, checked } });
+      if (progressDateCol !== undefined && progressDateCol >= 0) {
+        const dateRef = refOf(rowIdx, progressDateCol);
+        const dateValue = status === 'O' ? todayYmd() : '';
+        upsertMut.mutate({ cellRef: dateRef, data: { value: dateValue } });
+      }
+    },
+    [upsertMut, progressDateCol],
+  );
 
   const handleDownloadClick = async () => {
     if (!executionId || downloading) return;
@@ -192,6 +232,7 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
               columnRoles={columnRoles}
               onCheckChange={handleCheckChange}
               onValueChange={handleValueChange}
+              onStatusChange={handleStatusChange}
               readOnly={execution?.status === 'completed'}
             />
           </Box>
