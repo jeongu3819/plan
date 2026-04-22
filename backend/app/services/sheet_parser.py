@@ -736,19 +736,14 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
     #       "담당자/진행일/비고" 등 명시적 역할 컬럼은 체크 대상에서 제외할 수 있도록 한다.
     column_roles = detect_column_roles(col_headers, ws, header_row, total_rows)
 
-    check_cols = {col for col, h in col_headers.items() if _header_matches(h, CHECK_HEADER_KEYWORDS)}
-    # 역할이 check_status로 판정된 컬럼도 체크 컬럼으로 포함 (1-based)
+    # v3.4: 체크 가능 컬럼은 명시적 check_status 역할로 판정된 컬럼만 사용한다.
+    #   이전에는 CHECK_HEADER_KEYWORDS 부분 매칭("check 항목" 등)도 포함시켜
+    #   설명 컬럼에까지 체크박스가 생성되고, 모수가 2배로 잡히는 문제가 있었다.
     if "check_status" in column_roles:
-        check_cols.add(column_roles["check_status"]["col"] + 1)
+        check_cols = {column_roles["check_status"]["col"] + 1}
+    else:
+        check_cols = set()
     label_cols_list = [col for col, h in col_headers.items() if _header_matches(h, LABEL_HEADER_KEYWORDS)]
-
-    # 체크 대상에서 제외해야 할 역할 컬럼 (담당자/비고/진행일/예정일/점검일시 등)
-    # 1-based col index 집합
-    non_check_role_cols = set()
-    for role_name in ("assignee", "remark", "progress_date", "due_date", "planned_date", "checked_at", "cycle"):
-        info = column_roles.get(role_name)
-        if info is not None:
-            non_check_role_cols.add(info["col"] + 1)
 
     for r in range(1, total_rows + 1):
         for c in range(1, total_cols + 1):
@@ -809,36 +804,25 @@ def _parse_xlsx(file_bytes: bytes, target_sheet: Optional[str] = None) -> Tuple[
             cells.append(cell_data)
 
             # 체크 가능 셀 감지 (헤더 행 이후만)
-            if r > header_row:
-                is_check = False
-                if c in check_cols:
-                    # 명시적 체크 컬럼: 빈 칸도, "완료"/"미완료"/"OK" 도 전부 체크 항목
-                    is_check = True
-                elif c in non_check_role_cols:
-                    # 담당자/비고/진행일 같은 역할 컬럼은 값이 "-"든 "O"든 체크로 잡지 않는다.
-                    is_check = False
-                else:
-                    # 헤더 단서 없는 컬럼은 값 패턴으로만 판단
-                    is_check = _is_checkable_cell(value)
-                if is_check:
-                    label = _find_label_for_cell(ws, r, c, label_cols_list)
-                    col_letter = get_column_letter(c)
-                    entry = {
-                        "ref": f"{col_letter}{r}",
-                        "row": r - 1,
-                        "col": c - 1,
-                        "label": label,
-                        "initial_value": value,  # 기존 "완료"/"미완료" 등 상태값 보존
-                    }
-                    # 명시적 상태 컬럼인 경우만 분리 시도
-                    # (값 패턴으로만 잡힌 셀은 보존)
-                    if c in check_cols and value:
-                        parsed_status, parsed_note = _normalize_status_value(value)
-                        if parsed_status:
-                            entry["parsed_status"] = parsed_status
-                        if parsed_note:
-                            entry["parsed_note"] = parsed_note
-                    checkable_cells.append(entry)
+            #   v3.4: check_status 역할로 명시 판정된 컬럼만 체크 대상.
+            #         설명/항목 컬럼이나 값 패턴만으로 잡히는 셀은 절대 체크 대상이 아니다.
+            if r > header_row and c in check_cols:
+                label = _find_label_for_cell(ws, r, c, label_cols_list)
+                col_letter = get_column_letter(c)
+                entry = {
+                    "ref": f"{col_letter}{r}",
+                    "row": r - 1,
+                    "col": c - 1,
+                    "label": label,
+                    "initial_value": value,  # 기존 "완료"/"미완료" 등 상태값 보존
+                }
+                if value:
+                    parsed_status, parsed_note = _normalize_status_value(value)
+                    if parsed_status:
+                        entry["parsed_status"] = parsed_status
+                    if parsed_note:
+                        entry["parsed_note"] = parsed_note
+                checkable_cells.append(entry)
 
     # 헤더 정보 (감지된 헤더 행 기준)
     headers = []

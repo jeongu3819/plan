@@ -206,10 +206,21 @@ export default function SheetRenderer({
 
   const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
-  // Helper: get cell ref from checkable_cells
+  // Helper: get cell ref. v3.4 — 항상 A1 형식 통일.
+  //   기존엔 checkable이 아닌 셀에 대해 `${row}-${col}` 폴백을 썼지만,
+  //   백엔드는 A1 형식만 row_idx/col_idx로 정확히 파싱한다. 가상 컬럼(진행일자/비고)에
+  //   값을 저장해도 위치를 잃지 않도록 항상 A1 형식으로 계산한다.
   const getCellRef = useCallback((row: number, col: number): string => {
     const c = (checkable_cells || []).find(cc => cc.row === row && cc.col === col);
-    return c?.ref || `${row}-${col}`;
+    if (c?.ref) return c.ref;
+    let s = '';
+    let n = col + 1;
+    while (n > 0) {
+      n--;
+      s = String.fromCharCode(65 + (n % 26)) + s;
+      n = Math.floor(n / 26);
+    }
+    return `${s}${row + 1}`;
   }, [checkable_cells]);
 
   // Helper: find if row has a checked item (for auto-fill checked_at column)
@@ -398,8 +409,24 @@ export default function SheetRenderer({
                             )}
                             sx={{
                               width: '100%',
-                              '& .MuiSelect-select': { p: 0, textAlign: 'center', minHeight: 'unset' },
-                              '& .MuiSelect-icon': { display: 'none' },
+                              border: readOnly ? 'none' : '1px dashed rgba(41, 85, 255, 0.35)',
+                              borderRadius: 1,
+                              bgcolor: readOnly ? 'transparent' : 'rgba(41, 85, 255, 0.03)',
+                              transition: 'all 0.15s',
+                              '&:hover': readOnly ? {} : {
+                                bgcolor: 'rgba(41, 85, 255, 0.08)',
+                                borderColor: 'rgba(41, 85, 255, 0.6)',
+                              },
+                              '& .MuiSelect-select': {
+                                p: '2px 22px 2px 6px !important',
+                                textAlign: 'center',
+                                minHeight: 'unset',
+                              },
+                              '& .MuiSelect-icon': {
+                                color: '#2955FF',
+                                right: 2,
+                                fontSize: 18,
+                              },
                             }}
                             MenuProps={{ PaperProps: { sx: { mt: 0.5 } } }}
                           >
