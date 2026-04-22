@@ -246,7 +246,10 @@ export default function SheetRenderer({
         {Array.from({ length: total_rows }, (_, rowIdx) => (
           <Box
             key={rowIdx}
-            sx={{ display: 'flex', height: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT }}
+            // v3.4: row height를 minHeight로 변경 — 긴 텍스트(예: "check 항목")가
+            //       wrap되면서 밑부분이 잘리던 문제 해결. 짧은 텍스트는 기존
+            //       행 높이를 유지하고, 긴 텍스트는 셀이 자라면 행도 같이 자란다.
+            sx={{ display: 'flex', minHeight: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT, alignItems: 'stretch' }}
           >
             {Array.from({ length: total_cols }, (_, colIdx) => {
               const key = `${rowIdx}-${colIdx}`;
@@ -325,9 +328,10 @@ export default function SheetRenderer({
                     }
                   }}
                   sx={{
-                    width, height,
+                    width,
                     minWidth: width, minHeight: height,
-                    maxWidth: width, maxHeight: height,
+                    maxWidth: width,
+                    // v3.4: maxHeight 제거 — 긴 텍스트 셀이 자라도록 허용 (행도 함께 자람)
                     boxSizing: 'border-box',
                     display: 'flex', 
                     flexDirection: 'column',
@@ -409,26 +413,34 @@ export default function SheetRenderer({
                             )}
                             sx={{
                               width: '100%',
-                              border: readOnly ? 'none' : '1px dashed rgba(41, 85, 255, 0.35)',
-                              borderRadius: 1,
-                              bgcolor: readOnly ? 'transparent' : 'rgba(41, 85, 255, 0.03)',
-                              transition: 'all 0.15s',
+                              border: readOnly ? 'none' : '1px solid #E5E7EB',
+                              borderRadius: '6px',
+                              bgcolor: readOnly ? 'transparent' : '#FAFAFA',
+                              transition: 'border-color 0.15s, background-color 0.15s, box-shadow 0.15s',
                               '&:hover': readOnly ? {} : {
-                                bgcolor: 'rgba(41, 85, 255, 0.08)',
-                                borderColor: 'rgba(41, 85, 255, 0.6)',
+                                bgcolor: '#F3F4F6',
+                                borderColor: '#9CA3AF',
+                              },
+                              '&.Mui-focused, &:focus-within': readOnly ? {} : {
+                                borderColor: '#2955FF',
+                                bgcolor: '#fff',
+                                boxShadow: '0 0 0 2px rgba(41, 85, 255, 0.12)',
                               },
                               '& .MuiSelect-select': {
-                                p: '2px 22px 2px 6px !important',
+                                p: '3px 22px 3px 8px !important',
                                 textAlign: 'center',
                                 minHeight: 'unset',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
                               },
                               '& .MuiSelect-icon': {
-                                color: '#2955FF',
-                                right: 2,
-                                fontSize: 18,
+                                color: '#6B7280',
+                                right: 4,
+                                fontSize: 16,
                               },
                             }}
-                            MenuProps={{ PaperProps: { sx: { mt: 0.5 } } }}
+                            MenuProps={{ PaperProps: { sx: { mt: 0.5, borderRadius: 1.5, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' } } }}
                           >
                             <MenuItem value=""><em style={{ color: '#9CA3AF' }}>— 선택</em></MenuItem>
                             <MenuItem value="O" sx={{ fontWeight: 700, color: '#16A34A' }}>진행</MenuItem>
@@ -487,24 +499,27 @@ export default function SheetRenderer({
                       </Typography>
                     </Box>
                   ) : (
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        fontSize: `${fontSizePx}px`,
-                        fontWeight: font?.bold ? 700 : 400,
-                        fontStyle: font?.italic ? 'italic' : 'normal',
-                        color: font?.fontColor || '#111827',
-                        whiteSpace: cell?.wrapText ? 'pre-wrap' : 'nowrap',
-                        wordBreak: cell?.wrapText ? 'break-word' : 'normal',
-                        overflow: 'hidden',
-                        textOverflow: cell?.wrapText ? 'clip' : 'ellipsis',
-                        lineHeight: 1.3,
-                        width: '100%',
-                        textAlign: (cell?.align as any) || 'left',
-                      }}
-                    >
-                      {cellValue}
-                    </Typography>
+                    <Tooltip title={String(cellValue || '').length > 60 ? cellValue : ''} placement="top" arrow enterDelay={500}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontSize: `${fontSizePx}px`,
+                          fontWeight: font?.bold ? 700 : 400,
+                          fontStyle: font?.italic ? 'italic' : 'normal',
+                          color: font?.fontColor || '#111827',
+                          // v3.4: 항상 줄바꿈 허용 — 긴 텍스트가 잘리지 않게
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          overflowWrap: 'anywhere',
+                          lineHeight: 1.35,
+                          width: '100%',
+                          textAlign: (cell?.align as any) || 'left',
+                          py: 0.2,
+                        }}
+                      >
+                        {cellValue}
+                      </Typography>
+                    </Tooltip>
                   )}
                 </Box>
               );

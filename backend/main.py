@@ -3369,13 +3369,30 @@ def _sync_task_progress(db: Session, task_id: int):
     """Recalculate task progress from checkbox activities and auto-sync status.
 
     진행률/파생 status 정책은 _derive_task_status/_compute_task_progress 참고.
-    이 함수는 체크박스가 하나라도 있을 때만 동작한다 (체크박스가 없으면
-    사용자가 직접 관리하는 task이므로 건드리지 않음).
+    체크박스 활동이 있으면 그 기준으로 동기화한다.
+    v3.4: 체크박스가 없고 연결된 SheetExecution이 있으면 그 시트들의 진행률
+          평균으로 task progress를 동기화한다 (점검표만 수행하는 task 케이스).
     """
+    if task_id is None:
+        return
     activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
     progress, cb_total = _compute_task_progress(activities)
+
     if cb_total == 0:
-        return
+        # 체크박스 활동이 없을 때만 시트 진행률로 폴백
+        sheets = db.query(SheetExecution).filter(
+            SheetExecution.task_id == task_id,
+            SheetExecution.status.in_(("in_progress", "completed")),
+        ).all()
+        if not sheets:
+            return
+        total = 0
+        for s in sheets:
+            if s.status == "completed":
+                total += 100
+            else:
+                total += int(s.progress or 0)
+        progress = round(total / len(sheets))
 
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -6340,6 +6357,14 @@ def update_sheet_execution_item(
 
     db.commit()
 
+    # v3.4: 시트가 task에 연결되어 있고 task에 체크박스 활동이 없으면
+    #       시트 진행률로 task.progress 자동 동기화
+    if execution.task_id:
+        try:
+            _sync_task_progress(db, execution.task_id)
+        except Exception:
+            pass
+
     return {
         "id": item.id,
         "checked": item.checked,
@@ -6436,6 +6461,13 @@ def upsert_sheet_execution_cell(
     execution.progress = progress
     db.commit()
 
+    # v3.4: task progress 동기화 (시트만 있는 task 대응)
+    if execution.task_id:
+        try:
+            _sync_task_progress(db, execution.task_id)
+        except Exception:
+            pass
+
     return {"status": "ok", "progress": progress}
 
 @app.post("/api/sheet-executions/{execution_id}/copy")
@@ -6516,6 +6548,14 @@ def complete_sheet_execution(
     ))
 
     db.commit()
+
+    # v3.4: task progress 동기화 (시트만 있는 task의 경우 100%로 반영)
+    if execution.task_id:
+        try:
+            _sync_task_progress(db, execution.task_id)
+        except Exception:
+            pass
+
     return {"message": "실행이 완료되었습니다", "progress": execution.progress}
 
 
@@ -6540,6 +6580,13 @@ def unlink_sheet_execution_task(
         user_id=user_id,
     ))
     db.commit()
+
+    # v3.4: 연결 해제된 task의 progress도 재계산 (다른 시트가 남았는지 등)
+    try:
+        _sync_task_progress(db, old_task_id)
+    except Exception:
+        pass
+
     return {"message": "Task 연결이 해제되었습니다", "task_id": None}
 
 
