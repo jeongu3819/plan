@@ -61,6 +61,10 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
       api.upsertSheetExecutionCell(executionId!, cellRef, data, userId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
+      // v3.5: 시트가 task에 연결돼 있으면 백엔드가 task.progress/status를 동기화한다.
+      //       Board/List/Calendar/Kanban 등이 즉시 반영되도록 task 쿼리도 무효화.
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['taskSheetSummary'] });
     },
   });
 

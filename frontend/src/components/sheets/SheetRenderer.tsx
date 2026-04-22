@@ -39,7 +39,6 @@ interface Props {
   readOnly?: boolean;
 }
 
-const DEFAULT_COL_WIDTH = 64; // ~8.43 in Excel
 const DEFAULT_ROW_HEIGHT = 22; // ~15pt in Excel
 const MIN_COL_WIDTH = 24;
 
@@ -165,23 +164,25 @@ export default function SheetRenderer({
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
 
-  // Build hidden cells set + reverse map to merge origin
-  // hiddenMergeMap[key] = merge that hides this cell; needed to decide if a horizontal placeholder is required
-  const { hiddenCells, hiddenMergeMap } = useMemo(() => {
+  // Build hidden cells set + merge origin lookup
+  //  v3.5: HTML <table> + rowSpan/colSpan으로 렌더링하므로 hidden 셀은 그냥 skip하면 됨
+  //        (브라우저 table layout이 자동으로 병합 영역을 처리)
+  const { hiddenCells, mergeAt } = useMemo(() => {
     const set = new Set<string>();
-    const map = new Map<string, { startRow: number; startCol: number; endRow: number; endCol: number }>();
+    const originMap = new Map<string, { rowSpan: number; colSpan: number }>();
     for (const merge of (merges || [])) {
+      const rs = merge.endRow - merge.startRow + 1;
+      const cs = merge.endCol - merge.startCol + 1;
+      originMap.set(`${merge.startRow}-${merge.startCol}`, { rowSpan: rs, colSpan: cs });
       for (let r = merge.startRow; r <= merge.endRow; r++) {
         for (let c = merge.startCol; c <= merge.endCol; c++) {
           if (r !== merge.startRow || c !== merge.startCol) {
-            const key = `${r}-${c}`;
-            set.add(key);
-            map.set(key, merge);
+            set.add(`${r}-${c}`);
           }
         }
       }
     }
-    return { hiddenCells: set, hiddenMergeMap: map };
+    return { hiddenCells: set, mergeAt: originMap };
   }, [merges]);
 
   const colWidths = useMemo(() => {
@@ -234,121 +235,114 @@ export default function SheetRenderer({
     return undefined;
   }, [checkable_cells, checkedAtMap]);
 
+  // v3.5: 헤더 행 인덱스
+  const headerRowIdx = (structure as any).header_row_idx ?? 0;
+
   return (
     <Box sx={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 1, bgcolor: '#f3f4f6', p: 2 }}>
-      <Box sx={{ 
-        display: 'inline-block', 
-        minWidth: totalWidth, 
-        bgcolor: '#fff', 
+      <Box sx={{
+        display: 'inline-block',
+        minWidth: totalWidth,
+        bgcolor: '#fff',
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
         fontFamily: '"Pretendard", "Noto Sans KR", sans-serif',
       }}>
-        {Array.from({ length: total_rows }, (_, rowIdx) => (
-          <Box
-            key={rowIdx}
-            // v3.4: row height를 minHeight로 변경 — 긴 텍스트(예: "check 항목")가
-            //       wrap되면서 밑부분이 잘리던 문제 해결. 짧은 텍스트는 기존
-            //       행 높이를 유지하고, 긴 텍스트는 셀이 자라면 행도 같이 자란다.
-            sx={{ display: 'flex', minHeight: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT, alignItems: 'stretch' }}
-          >
-            {Array.from({ length: total_cols }, (_, colIdx) => {
-              const key = `${rowIdx}-${colIdx}`;
-              if (hiddenCells.has(key)) {
-                // 세로 병합으로 위 행에서 시작된 셀이 아래 행을 가릴 때
-                // 같은 행 컬럼 위치를 비워두면 그 다음 컬럼들이 왼쪽으로 밀려
-                // 병합 영역 위로 텍스트가 겹쳐 보이게 됨. → 폭만 차지하는 placeholder 렌더링.
-                const mg = hiddenMergeMap.get(key);
-                if (mg && mg.startRow < rowIdx) {
-                  const phWidth = colWidths[colIdx] || DEFAULT_COL_WIDTH;
-                  return (
-                    <Box
-                      key={key}
-                      aria-hidden
-                      sx={{
-                        width: phWidth,
-                        minWidth: phWidth,
-                        maxWidth: phWidth,
-                        flexShrink: 0,
-                        height: '100%',
-                      }}
-                    />
-                  );
-                }
-                return null;
-              }
+        {/*
+          v3.5: HTML <table> 로 전환.
+          이전 flex Box 구조는 병합셀 높이 = sum(static rowHeights)로 계산해서,
+          긴 텍스트로 인해 한 행이 minHeight 이상으로 자라면 왼쪽 병합 셀과
+          높이가 어긋났다. <table> + rowSpan/colSpan을 쓰면 브라우저 table layout
+          알고리즘이 모든 셀의 높이를 함께 맞춰주기 때문에 어긋남이 사라진다.
+        */}
+        <table
+          style={{
+            borderCollapse: 'collapse',
+            tableLayout: 'fixed',
+            width: totalWidth,
+            margin: 0,
+          }}
+        >
+          <colgroup>
+            {colWidths.map((w, i) => (
+              <col key={i} style={{ width: w }} />
+            ))}
+          </colgroup>
+          <tbody>
+            {Array.from({ length: total_rows }, (_, rowIdx) => (
+              <tr key={rowIdx} style={{ height: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT }}>
+                {Array.from({ length: total_cols }, (_, colIdx) => {
+                  const key = `${rowIdx}-${colIdx}`;
+                  // hidden cells are absorbed by their merge origin's rowSpan/colSpan
+                  if (hiddenCells.has(key)) return null;
 
-              const cell = cellMap.get(key);
-              const isCheckable = checkableSet.has(key);
-              const execItem = execItemMap.get(key);
-              const headerRowIdx = (structure as any).header_row_idx ?? 0;
-              // v3.2: 상태(여부성) 셀 — O/X/N/A dropdown 대상
-              const isStatusCell = !!onStatusChange && statusCol >= 0 && colIdx === statusCol && rowIdx > headerRowIdx;
-              const rowSpan = cell?.rowSpan || 1;
-              const colSpan = cell?.colSpan || 1;
+                  const cell = cellMap.get(key);
+                  const isCheckable = checkableSet.has(key);
+                  const execItem = execItemMap.get(key);
+                  // v3.2: 상태(여부성) 셀 — O/X/N/A dropdown 대상
+                  const isStatusCell = !!onStatusChange && statusCol >= 0 && colIdx === statusCol && rowIdx > headerRowIdx;
 
-              // Calculate width/height for merged cells
-              let width = 0;
-              for (let c = colIdx; c < colIdx + colSpan && c < total_cols; c++) {
-                width += colWidths[c] || DEFAULT_COL_WIDTH;
-              }
-              let height = 0;
-              for (let r = rowIdx; r < rowIdx + rowSpan && r < total_rows; r++) {
-                height += rowHeights[r] || DEFAULT_ROW_HEIGHT;
-              }
+                  // 병합 origin 우선, 그다음 cell 자체의 span 사용
+                  const merge = mergeAt.get(key);
+                  const rowSpan = merge?.rowSpan ?? cell?.rowSpan ?? 1;
+                  const colSpan = merge?.colSpan ?? cell?.colSpan ?? 1;
 
-              const bg = cell?.bg || 'transparent';
-              const font = cell?.font;
-              const borders = cell?.borders;
+                  const bg = cell?.bg || 'transparent';
+                  const font = cell?.font;
+                  const borders = cell?.borders;
 
-              // v3.1: 점검일시 컬럼이면 자동으로 체크 시간을 표시
-              const isCheckedAtCol = checkedAtCol >= 0 && colIdx === checkedAtCol;
-              const rowCheckedAt = isCheckedAtCol ? getRowCheckedAt(rowIdx) : undefined;
+                  // v3.1: 점검일시 컬럼이면 자동으로 체크 시간을 표시
+                  const isCheckedAtCol = checkedAtCol >= 0 && colIdx === checkedAtCol;
+                  const rowCheckedAt = isCheckedAtCol ? getRowCheckedAt(rowIdx) : undefined;
 
-              // 현재 체크 상태 및 기타 수정값
-              const cellRef = getCellRef(rowIdx, colIdx);
-              const isChecked = checkedMap.get(cellRef) ?? execItem?.checked ?? false;
-              const cellValue = valueMap.get(cellRef) ?? execItem?.value ?? cell?.value ?? '';
+                  // 현재 체크 상태 및 기타 수정값
+                  const cellRef = getCellRef(rowIdx, colIdx);
+                  const isChecked = checkedMap.get(cellRef) ?? execItem?.checked ?? false;
+                  const cellValue = valueMap.get(cellRef) ?? execItem?.value ?? cell?.value ?? '';
 
-              // Editable 관련 — 상태셀은 Select로 처리하므로 inline 텍스트 에디터 제외
-              const editorType = editingCell === cellRef ? editableCols.get(colIdx) : null;
-              const isEditableHoverable =
-                editableCols.has(colIdx) && rowIdx > headerRowIdx
-                && !isCheckable && !isCheckedAtCol && !isStatusCell;
+                  // Editable 관련 — 상태셀은 Select로 처리하므로 inline 텍스트 에디터 제외
+                  const editorType = editingCell === cellRef ? editableCols.get(colIdx) : null;
+                  const isEditableHoverable =
+                    editableCols.has(colIdx) && rowIdx > headerRowIdx
+                    && !isCheckable && !isCheckedAtCol && !isStatusCell;
 
-              // 안전한 fontSize 계산 (Excel pt -> css px 변환 유지)
-              const fontSizePx = font?.fontSize ? Math.round(font.fontSize * 1.33) : 12;
+                  // 안전한 fontSize 계산 (Excel pt -> css px 변환 유지)
+                  const fontSizePx = font?.fontSize ? Math.round(font.fontSize * 1.33) : 12;
 
-              return (
-                <Box
-                  key={key}
-                  onClick={() => {
-                    if (isEditableHoverable && !readOnly) {
-                      setEditingCell(cellRef);
-                      setEditValue(cellValue);
-                    }
-                  }}
-                  sx={{
-                    width,
-                    minWidth: width, minHeight: height,
-                    maxWidth: width,
-                    // v3.4: maxHeight 제거 — 긴 텍스트 셀이 자라도록 허용 (행도 함께 자람)
-                    boxSizing: 'border-box',
-                    display: 'flex', 
-                    flexDirection: 'column',
-                    alignItems: cell?.align === 'center' ? 'center' : cell?.align === 'right' ? 'flex-end' : 'flex-start',
-                    justifyContent: 'center', // 수직 중앙 정렬 기본 (Excel 기본은 bottom이지만, center가 웹에선 깔끔함)
-                    py: 0.2, px: 0.5,
-                    bgcolor: bg,
+                  const tdStyle: React.CSSProperties = {
+                    padding: '2px 4px',
+                    backgroundColor: bg,
                     borderRight: borderStyle(borders?.right || 'thin'),
                     borderBottom: borderStyle(borders?.bottom || 'thin'),
-                    borderLeft: colIdx === 0 ? borderStyle(borders?.left || 'thick') : 'none',
-                    borderTop: rowIdx === 0 ? borderStyle(borders?.top || 'thick') : 'none',
-                    overflow: 'hidden',
+                    borderLeft: colIdx === 0 ? borderStyle(borders?.left || 'thick') : undefined,
+                    borderTop: rowIdx === 0 ? borderStyle(borders?.top || 'thick') : undefined,
+                    verticalAlign: 'middle',
+                    textAlign: (cell?.align as any) || 'left',
                     cursor: isEditableHoverable ? 'text' : 'default',
-                    '&:hover': isEditableHoverable ? { bgcolor: 'rgba(41, 85, 255, 0.04)' } : {}, // editable hover 표시
-                  }}
-                >
-                  {editorType ? (
+                    overflow: 'hidden',
+                    wordBreak: 'break-word',
+                    overflowWrap: 'anywhere',
+                  };
+
+                  return (
+                    <td
+                      key={key}
+                      rowSpan={rowSpan}
+                      colSpan={colSpan}
+                      onClick={() => {
+                        if (isEditableHoverable && !readOnly) {
+                          setEditingCell(cellRef);
+                          setEditValue(cellValue);
+                        }
+                      }}
+                      onMouseEnter={(e) => {
+                        if (isEditableHoverable) (e.currentTarget as HTMLTableCellElement).style.backgroundColor = 'rgba(41, 85, 255, 0.04)';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (isEditableHoverable) (e.currentTarget as HTMLTableCellElement).style.backgroundColor = bg;
+                      }}
+                      style={tdStyle}
+                    >
+                      {editorType ? (
                     <TextField
                       autoFocus
                       variant="standard"
@@ -521,11 +515,13 @@ export default function SheetRenderer({
                       </Typography>
                     </Tooltip>
                   )}
-                </Box>
-              );
-            })}
-          </Box>
-        ))}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </Box>
     </Box>
   );
