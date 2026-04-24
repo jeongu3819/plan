@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import Lottie from 'lottie-react';
-import pandaAnimation from '../assets/lottie/panda-waving.json';
+import pandaAnimation from '../assets/lottie/panda-select.json';
 import {
   Box,
   List,
@@ -488,7 +488,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 letterSpacing: '-0.02em',
               }}
             >
-              PLAN-A
+              PLAN-AI
             </Typography>
             <Typography
               variant="caption"
@@ -501,7 +501,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 display: 'block',
               }}
             >
-              Schedule Platform from A-FAB
+              Schedule Platform from PlanAI
             </Typography>
           </Box>
         </Box>
