@@ -1362,7 +1362,7 @@ const HomePage: React.FC = () => {
               transform: introPhase === 'shrinking' ? 'translateY(-20px)' : 'translateY(0)',
             }}
           >
-            PLAN-A
+            PLAN-AI
           </Typography>
           <Typography
             variant="body1"
@@ -1419,7 +1419,7 @@ const HomePage: React.FC = () => {
                 variant="h4"
                 sx={{ fontWeight: 900, color: '#1A1D29', letterSpacing: '-0.03em' }}
               >
-                PLAN-A
+                PLAN-AI
               </Typography>
               <Typography
                 variant="caption"
