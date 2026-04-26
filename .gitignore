@@ -52,3 +52,9 @@ docker-compose.override.yml
 frontend/.env
 frontend/.env.*
 backend/.env
+
+# Python 가상환경 (추가)
+lib/
+Lib/
+site/
+site-packages/
