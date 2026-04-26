@@ -78,4 +78,15 @@ CORS_ORIGINS = _parse_origins(
     os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 )
 
+# ===== S3 / Backup =====
+# S3 호환 스토리지 (MinIO 등)
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")
+S3_REGION_NAME = os.getenv("S3_REGION_NAME", "us-east-1")
+BUCKET_NAME = os.getenv("BUCKET_NAME", "fdc-portal")
+BASE_S3_PATH = os.getenv("BASE_S3_PATH", "s3://fdc-portal/FDC/plan-a")
 
+# 자동 백업 스케줄 (KST 기준)
+BACKUP_HOUR = int(os.getenv("BACKUP_HOUR", "3"))
+BACKUP_MINUTE = int(os.getenv("BACKUP_MINUTE", "0"))

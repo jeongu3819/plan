@@ -26,6 +26,7 @@ import { api } from '../../api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../stores/useAppStore';
 import { Task, SubProject } from '../../types';
+import { getStatusDisplay } from '../../utils/taskStatus';
 import QuickAdd from '../../components/QuickAdd';
 import EditIcon from '@mui/icons-material/Edit';
 import FlagIcon from '@mui/icons-material/Flag';
@@ -61,12 +62,8 @@ interface ListViewProps {
   projectId: number;
 }
 
-const statusConfig: Record<string, { label: string; color: string; bgcolor: string }> = {
-  todo: { label: 'To Do', color: '#6B7280', bgcolor: '#F3F4F6' },
-  in_progress: { label: 'In Progress', color: '#2955FF', bgcolor: '#EEF2FF' },
-  done: { label: 'Done', color: '#22C55E', bgcolor: '#F0FDF4' },
-  hold: { label: 'Hold', color: '#F59E0B', bgcolor: '#FFFBEB' },
-};
+// statusConfig lives in utils/taskStatus.ts (getStatusDisplay) so the
+// `in_progress` vs `in_progress ≥50%` distinction is rendered consistently.
 
 const priorityConfig: Record<string, { label: string; color: string }> = {
   low: { label: 'Low', color: '#6B7280' },
@@ -105,7 +102,7 @@ const SortableTaskRow: React.FC<{
     opacity: isDragging ? 0.5 : 1,
   };
 
-  const status = statusConfig[task.status] || statusConfig.todo;
+  const status = getStatusDisplay(task);
   const priority = task.priority ? priorityConfig[task.priority] : null;
 
   return (
@@ -151,7 +148,7 @@ const SortableTaskRow: React.FC<{
       </TableCell>
       <TableCell>
         <Chip
-          label={status.label}
+          label={status.sublabel ? `${status.label} · ${status.sublabel}` : status.label}
           size="small"
           sx={{
             height: 24,
@@ -502,7 +499,7 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
   if (isLoading) return <Typography>Loading...</Typography>;
 
   const renderTaskRow = (task: Task, indent: boolean = false) => {
-    const status = statusConfig[task.status] || statusConfig.todo;
+    const status = getStatusDisplay(task);
     const priority = task.priority ? priorityConfig[task.priority] : null;
     return (
       <TableRow
@@ -536,7 +533,7 @@ const ListView: React.FC<ListViewProps> = ({ projectId }) => {
         </TableCell>
         <TableCell>
           <Chip
-            label={status.label}
+            label={status.sublabel ? `${status.label} · ${status.sublabel}` : status.label}
             size="small"
             sx={{
               height: 24,

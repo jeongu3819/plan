@@ -62,7 +62,13 @@ const MentionsPage: React.FC = () => {
           {mentions.map(note => (
             <Paper
               key={note.id}
-              onClick={() => navigate(sp(`/project/${note.project_id}?tab=messenger`))}
+              onClick={() => {
+                if ((note as any).source === 'activity' && (note as any).task_id) {
+                  navigate(sp(`/project/${note.project_id}?openTask=${(note as any).task_id}&openWorkNote=1`));
+                } else {
+                  navigate(sp(`/project/${note.project_id}?tab=messenger`));
+                }
+              }}
               sx={{
                 p: 2.5,
                 borderRadius: 2,
@@ -116,6 +122,19 @@ const MentionsPage: React.FC = () => {
                         color: '#2955FF',
                       }}
                     />
+                    {(note as any).source === 'activity' && (
+                      <Chip
+                        label="작업노트"
+                        size="small"
+                        sx={{
+                          height: 20,
+                          fontSize: '0.6rem',
+                          fontWeight: 600,
+                          bgcolor: '#F3E8FF',
+                          color: '#7C3AED',
+                        }}
+                      />
+                    )}
                     <Typography
                       variant="caption"
                       sx={{ color: '#9CA3AF', fontSize: '0.7rem', ml: 'auto' }}

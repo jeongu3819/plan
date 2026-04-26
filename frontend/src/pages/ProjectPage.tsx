@@ -14,7 +14,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SettingsIcon from '@mui/icons-material/Settings';
 import AddIcon from '@mui/icons-material/Add';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Project } from '../api/client';
 import { Task } from '../types';
 import { useAppStore } from '../stores/useAppStore';
@@ -51,6 +51,7 @@ const ProjectPage: React.FC = () => {
     const tabParam = searchParams.get('tab');
     const [view, setView] = useState(tabParam ? (TAB_MAP[tabParam] ?? 0) : 0);
     const { openDrawer, filterSearch, setFilterSearch, currentUserId } = useAppStore();
+    const queryClient = useQueryClient();
 
     // Onboarding tour — only for template-created projects (URL has ?onboarding=1)
     const onboardingParam = searchParams.get('onboarding');
@@ -81,6 +82,18 @@ const ProjectPage: React.FC = () => {
     });
 
     const project = projects.find(p => p.id === projectId);
+
+    // Open task drawer + work note from @mention link
+    const openTaskParam = searchParams.get('openTask');
+    useEffect(() => {
+        if (openTaskParam && tasks.length > 0) {
+            const taskId = parseInt(openTaskParam, 10);
+            const task = tasks.find(t => t.id === taskId);
+            if (task) {
+                openDrawer(task, projectId);
+            }
+        }
+    }, [openTaskParam, tasks, projectId, openDrawer]);
 
     const handleSearch = (val: string) => {
         setFilterSearch(val);
@@ -219,6 +232,173 @@ const ProjectPage: React.FC = () => {
                 <OnboardingTour
                     onComplete={() => setShowOnboarding(false)}
                     onTabChange={(tabIndex) => setView(tabIndex)}
+                    onAction={(action) => {
+                        const { closeDrawer: cd } = useAppStore.getState();
+                        const click = (sel: string, delay = 0) => setTimeout(() => {
+                            const el = document.querySelector(`[data-tour="${sel}"]`) as HTMLElement;
+                            if (el) el.click();
+                        }, delay);
+
+                        switch (action) {
+                            case 'openFirstTask': {
+                                const t = tasks.find(t => t.status !== 'done') || tasks[0];
+                                if (t) openDrawer(t, projectId);
+                                break;
+                            }
+                            case 'closeDrawer':
+                                cd();
+                                break;
+                            case 'openSelectsSequence': {
+                                // Status → Priority → Sub Project 순차: 열기 → 닫기
+                                const openMuiSelect = (tourAttr: string, delay: number) => {
+                                    setTimeout(() => {
+                                        const sel = document.querySelector(`[data-tour="${tourAttr}"]`);
+                                        const trigger = sel?.querySelector('[role="combobox"], .MuiSelect-select') as HTMLElement;
+                                        if (trigger) trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                    }, delay);
+                                };
+                                const closeMuiSelect = (delay: number) => {
+                                    setTimeout(() => {
+                                        // MUI Popover/Menu backdrop에 mousedown → click 시뮬레이션
+                                        const backdrop = document.querySelector('.MuiPopover-root .MuiBackdrop-root') as HTMLElement
+                                            || document.querySelector('.MuiModal-backdrop') as HTMLElement;
+                                        if (backdrop) {
+                                            backdrop.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                                            backdrop.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                                            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                        }
+                                    }, delay);
+                                };
+                                openMuiSelect('status-select', 600);
+                                closeMuiSelect(2100);
+                                openMuiSelect('priority-select', 2600);
+                                closeMuiSelect(4100);
+                                openMuiSelect('subproject-select', 4600);
+                                closeMuiSelect(6100);
+                                break;
+                            }
+                            case 'demoUrlAttach':
+                                // 1) "+" 버튼 클릭 → 폼 열기
+                                setTimeout(() => {
+                                    const addBtn = document.querySelector('[data-tour="url-add-btn"]') as HTMLElement;
+                                    if (addBtn) addBtn.click();
+                                }, 400);
+                                // 2) URL 입력
+                                setTimeout(() => {
+                                    const urlInput = document.querySelector('[data-tour="url-input"] input') as HTMLInputElement;
+                                    const nameInput = document.querySelector('[data-tour="url-name-input"] input') as HTMLInputElement;
+                                    const setVal = (el: HTMLInputElement, val: string) => {
+                                        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                                        if (setter) { setter.call(el, val); el.dispatchEvent(new Event('input', { bubbles: true })); }
+                                    };
+                                    if (urlInput) setVal(urlInput, 'www.naver.com');
+                                    if (nameInput) setTimeout(() => setVal(nameInput, '네이버'), 300);
+                                }, 1200);
+                                // 3) Add 버튼 클릭
+                                setTimeout(() => {
+                                    const submitBtn = document.querySelector('[data-tour="url-add-submit"]') as HTMLElement;
+                                    if (submitBtn) submitBtn.click();
+                                }, 2800);
+                                break;
+                            case 'openWorkNote':
+                                click('work-note-btn', 600);
+                                break;
+                            case 'checkHalfItems':
+                                // 체크박스 절반만 체크 (50% 이상 시연)
+                                setTimeout(() => {
+                                    const unchecked = document.querySelectorAll('.MuiDialog-root [data-testid="RadioButtonUncheckedIcon"]');
+                                    const half = Math.ceil(unchecked.length / 2);
+                                    for (let i = 0; i < Math.min(half, unchecked.length); i++) {
+                                        const btn = unchecked[i]?.closest('button');
+                                        if (btn) setTimeout(() => (btn as HTMLElement).click(), i * 500);
+                                    }
+                                }, 600);
+                                break;
+                            case 'closeAllAndShowBoard': {
+                                const dlgClose = document.querySelector('.MuiDialog-root .MuiIconButton-root') as HTMLElement;
+                                if (dlgClose) dlgClose.click();
+                                setTimeout(() => cd(), 300);
+                                break;
+                            }
+                            case 'showWeeklyProgress':
+                                cd();
+                                click('weekly-progress-btn', 500);
+                                break;
+                            case 'backToBoard':
+                                click('board-view-btn');
+                                break;
+                            // ── Roadmap actions ──
+                            case 'roadmapWeek':
+                                click('roadmap-week', 500);
+                                break;
+                            case 'roadmapMonth':
+                                click('roadmap-month', 500);
+                                break;
+                            case 'roadmapQuarter':
+                                click('roadmap-quarter', 500);
+                                break;
+                            case 'roadmapToggleHideDone':
+                                click('roadmap-hide-done', 500);
+                                break;
+                            // ── Messenger @멘션 데모 ──
+                            case 'messengerMentionDemo':
+                                setTimeout(() => {
+                                    const input = document.querySelector('[data-tour="messenger-input"] textarea, [data-tour="messenger-input"] input') as HTMLInputElement;
+                                    if (input) {
+                                        const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+                                            || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                                        if (nativeSet) {
+                                            nativeSet.call(input, '@개발자1 이 부분 확인 부탁드립니다!');
+                                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                                        }
+                                        input.focus();
+                                    }
+                                }, 800);
+                                break;
+                            // ── Graph: Task를 Sub Project에 실제 연결 ──
+                            case 'graphAssignTaskToSubProject': {
+                                // 첫 번째 task를 최신 subproject에 연결
+                                setTimeout(async () => {
+                                    try {
+                                        const subs = await api.getSubProjects(projectId);
+                                        const firstTask = tasks[0];
+                                        if (subs.length > 0 && firstTask) {
+                                            const latestSub = subs[subs.length - 1];
+                                            await api.updateTask(firstTask.id, { sub_project_id: latestSub.id } as any);
+                                            queryClient.invalidateQueries({ queryKey: ['graph', projectId] });
+                                            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+                                        }
+                                    } catch (e) { /* ignore */ }
+                                }, 800);
+                                break;
+                            }
+                            // ── Graph: Sub Project 생성 (다이얼로그 열기 + 입력 + Create) ──
+                            case 'graphCreateSubProject': {
+                                // 1) 다이얼로그 열기
+                                click('graph-add-subproject', 600);
+                                const setInput = (sel: string, val: string, delay: number) => {
+                                    setTimeout(() => {
+                                        const el = document.querySelector(`[data-tour="${sel}"] input, [data-tour="${sel}"] textarea`) as HTMLInputElement;
+                                        if (!el) return;
+                                        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+                                            || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+                                        if (setter) { setter.call(el, val); el.dispatchEvent(new Event('input', { bubbles: true })); }
+                                        el.focus();
+                                    }, delay);
+                                };
+                                // 2) Name 입력
+                                setInput('graph-sp-name', '데모 서브프로젝트', 1200);
+                                // 3) Description 입력
+                                setInput('graph-sp-desc', '온보딩 투어에서 생성한 예시입니다', 1800);
+                                // 4) Create 버튼 클릭
+                                setTimeout(() => {
+                                    const btn = document.querySelector('[data-tour="graph-sp-create-btn"]') as HTMLElement;
+                                    if (btn) btn.click();
+                                }, 3200);
+                                break;
+                            }
+                        }
+                    }}
                 />
             )}
         </Box>

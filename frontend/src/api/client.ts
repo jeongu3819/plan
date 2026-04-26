@@ -991,7 +991,7 @@ export const api = {
     const res = await client.get('/users/search', { params: { q: query, user_id: requireUserId(userId) } });
     return res.data.users || [];
   },
-  createSpace: async (data: { name: string; slug?: string; description?: string; member_user_ids?: number[] }, userId: number): Promise<any> => {
+  createSpace: async (data: { name: string; slug?: string; description?: string; member_user_ids?: number[]; purpose?: string }, userId: number): Promise<any> => {
     const res = await client.post('/spaces', data, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
@@ -1007,7 +1007,7 @@ export const api = {
     const res = await client.patch(`/projects/${projectId}/move-space`, null, { params: { space_id: spaceId, user_id: requireUserId(userId) } });
     return res.data;
   },
-  updateSpace: async (spaceId: number, data: { name?: string; description?: string }, userId: number): Promise<any> => {
+  updateSpace: async (spaceId: number, data: { name?: string; description?: string; purpose?: string }, userId: number): Promise<any> => {
     const res = await client.patch(`/spaces/${spaceId}`, data, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
@@ -1034,12 +1034,153 @@ export const api = {
     return res.data;
   },
   getSpaceJoinRequests: async (spaceId: number, userId: number): Promise<any[]> => {
-    const res = await client.get(`/spaces/${spaceId}/join-requests`, { params: { user_id: requireUserId(userId) } });
+    const res = await client.get(`/spaces/${spaceId}/join-requests-safe`, { params: { user_id: requireUserId(userId) } });
     return res.data.requests || [];
   },
   approveSpaceJoinRequest: async (spaceId: number, requestId: number, action: string, userId: number): Promise<any> => {
     const res = await client.post(`/spaces/${spaceId}/join-requests/${requestId}/approve`, null, { params: { user_id: requireUserId(userId), action } });
     return res.data;
+  },
+
+  // ========================================
+  // v3.0 공간 목적 + Overview
+  // ========================================
+  getSpaceOverview: async (spaceId: number, userId: number): Promise<any> => {
+    const res = await client.get(`/spaces/${spaceId}/overview`, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  // ========================================
+  // v3.0 Sheet Templates
+  // ========================================
+  inspectSheetFile: async (file: File): Promise<{ multi: boolean; sheet_names: string[]; suggested: string | null; suggested_type?: 'inspection' | 'assignment_mapping' }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await client.post('/sheet-templates/inspect', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return res.data;
+  },
+  uploadSheetTemplate: async (file: File, spaceId: number, userId: number, opts?: { name?: string; description?: string; category?: string; sheet_name?: string; sheet_type?: string }): Promise<any> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const params: Record<string, any> = { space_id: spaceId, user_id: requireUserId(userId) };
+    if (opts?.name) params.name = opts.name;
+    if (opts?.description) params.description = opts.description;
+    if (opts?.category) params.category = opts.category;
+    if (opts?.sheet_name) params.sheet_name = opts.sheet_name;
+    if (opts?.sheet_type) params.sheet_type = opts.sheet_type;
+    const res = await client.post('/sheet-templates/upload', formData, { params, headers: { 'Content-Type': 'multipart/form-data' } });
+    return res.data;
+  },
+  getSheetTemplates: async (spaceId: number, category?: string): Promise<any> => {
+    const params: Record<string, any> = { space_id: spaceId };
+    if (category) params.category = category;
+    const res = await client.get('/sheet-templates', { params });
+    return res.data;
+  },
+  getSheetTemplate: async (templateId: number): Promise<any> => {
+    const res = await client.get(`/sheet-templates/${templateId}`);
+    return res.data;
+  },
+  deleteSheetTemplate: async (templateId: number, userId: number): Promise<any> => {
+    const res = await client.delete(`/sheet-templates/${templateId}`, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  // ========================================
+  // v3.0 Sheet Executions
+  // ========================================
+  createSheetExecution: async (body: { template_id: number; project_id?: number; task_id?: number; title?: string; equipment_name?: string }, spaceId: number, userId: number): Promise<any> => {
+    const res = await client.post('/sheet-executions', body, { params: { space_id: spaceId, user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  getSheetExecutions: async (spaceId: number, filters?: { project_id?: number; task_id?: number; template_id?: number; status?: string; user_id?: number; equipment_name?: string; date_from?: string; date_to?: string }): Promise<any> => {
+    const params: Record<string, any> = { space_id: spaceId, ...filters };
+    const res = await client.get('/sheet-executions', { params });
+    return res.data;
+  },
+  getSheetExecution: async (executionId: number): Promise<any> => {
+    const res = await client.get(`/sheet-executions/${executionId}`);
+    return res.data;
+  },
+  updateSheetExecutionItem: async (executionId: number, itemId: number, body: { checked?: boolean; value?: string; memo?: string }, userId: number): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/items/${itemId}`, body, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  upsertSheetExecutionCell: async (executionId: number, cellRef: string, body: { checked?: boolean; value?: string; memo?: string }, userId: number): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/cells/${cellRef}`, body, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  copySheetExecution: async (executionId: number, title: string, includeData: boolean, userId: number): Promise<any> => {
+    const res = await client.post(`/sheet-executions/${executionId}/copy`, null, { params: { title, include_data: includeData, user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  completeSheetExecution: async (executionId: number, userId: number): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/complete`, null, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  unlinkSheetExecutionTask: async (executionId: number, userId: number): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/unlink-task`, null, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  /** 현재 웹에서 수정한 최신 상태를 xlsx로 받아옴. 브라우저 다운로드 트리거. */
+  downloadSheetExecutionXlsx: async (executionId: number, suggestedName?: string): Promise<void> => {
+    const res = await client.get(`/sheet-executions/${executionId}/export`, { responseType: 'blob' });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(suggestedName || 'sheet')}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+  getSheetExecutionLogs: async (executionId: number): Promise<any> => {
+    const res = await client.get(`/sheet-executions/${executionId}/logs`);
+    return res.data;
+  },
+  getProjectSheetSummary: async (projectId: number): Promise<any> => {
+    const res = await client.get(`/projects/${projectId}/sheet-summary`);
+    return res.data;
+  },
+  getTaskSheetSummary: async (taskId: number): Promise<any> => {
+    const res = await client.get(`/tasks/${taskId}/sheet-summary`);
+    return res.data;
+  },
+
+  // ========================================
+  // v3.1 Sheet Column Roles
+  // ========================================
+  confirmSheetRoles: async (templateId: number, roles: any, userId: number): Promise<any> => {
+    const res = await client.post(`/sheet-templates/${templateId}/confirm-roles`, roles, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+
+  // ========================================
+  // v3.2 Sheet Execution Mappings (assignment_mapping type)
+  // ========================================
+  listSheetMappings: async (executionId: number): Promise<any[]> => {
+    const res = await client.get(`/sheet-executions/${executionId}/mappings`);
+    return res.data.mappings || [];
+  },
+  addSheetMapping: async (
+    executionId: number,
+    body: { master_name: string; assigned_entity: string },
+    userId: number
+  ): Promise<any> => {
+    const res = await client.post(`/sheet-executions/${executionId}/mappings`, body, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  updateSheetMapping: async (
+    executionId: number,
+    mappingId: number,
+    body: { master_name?: string; assigned_entity?: string; manager?: string; note?: string },
+    userId: number
+  ): Promise<any> => {
+    const res = await client.patch(`/sheet-executions/${executionId}/mappings/${mappingId}`, body, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  deleteSheetMapping: async (executionId: number, mappingId: number, userId: number): Promise<void> => {
+    await client.delete(`/sheet-executions/${executionId}/mappings/${mappingId}`, { params: { user_id: requireUserId(userId) } });
   },
 };
 

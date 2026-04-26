@@ -225,6 +225,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ projectId }) => {
             fullWidth
             multiline
             maxRows={4}
+            data-tour="messenger-input"
             placeholder="메시지를 입력하세요... (Ctrl+Enter)"
             value={content}
             onChange={e => setContent(e.target.value)}

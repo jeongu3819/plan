@@ -21,6 +21,9 @@ import MentionsPage from './pages/MentionsPage';
 import AccessDeniedPage from './pages/AccessDeniedPage';
 import GroupPage from './pages/GroupPage';
 import SpaceManagePage from './pages/SpaceManagePage';
+import SheetTemplatePage from './pages/SheetTemplatePage';
+import SheetExecutionPage from './pages/SheetExecutionPage';
+import SheetHistoryPage from './pages/SheetHistoryPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -142,6 +145,9 @@ const App: React.FC = () => {
               <Route path="/space/:spaceSlug/admin" element={withMainLayout(<AdminPage />)} />
               <Route path="/space/:spaceSlug/groups" element={withMainLayout(<GroupPage />)} />
               <Route path="/space/:spaceSlug/spaces" element={withMainLayout(<SpaceManagePage />)} />
+              <Route path="/space/:spaceSlug/sheets" element={withMainLayout(<SheetTemplatePage />)} />
+              <Route path="/space/:spaceSlug/sheets/execution/:executionId" element={withMainLayout(<SheetExecutionPage />)} />
+              <Route path="/space/:spaceSlug/sheets/history" element={withMainLayout(<SheetHistoryPage />)} />
 
               {/* 레거시 루트 — space 없이 접근 시 기본 공간으로 리다이렉트 */}
               <Route path="/" element={withMainLayout(<HomePage />)} />

@@ -53,8 +53,11 @@ frontend/.env
 frontend/.env.*
 backend/.env
 
-# Python 가상환경 (추가)
 lib/
 Lib/
 site/
-site-packages/
+Lib/site-packages/
+lib/site-packages/
+Scripts/
+Include/
+pyvenv.cfg

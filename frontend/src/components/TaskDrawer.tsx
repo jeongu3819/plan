@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     Drawer, Box, Typography, TextField, Button, MenuItem,
     Stack, IconButton, Divider, Chip, Avatar, Autocomplete,
@@ -16,11 +17,15 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import DownloadIcon from '@mui/icons-material/Download';
+import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import SubdirectoryArrowRightIcon from '@mui/icons-material/SubdirectoryArrowRight';
 import { useAppStore } from '../stores/useAppStore';
 import { Task, Attachment, TaskActivity, SubProject } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, User, API_URL } from '../api/client';
 import WorkNoteModal from './WorkNoteModal';
+import TaskSheetPanel from './sheets/TaskSheetPanel';
 import { parseTaskInput } from '../utils/magicInputParser';
 
 const icon = <CheckBoxOutlineBlankIcon fontSize="small" />;
@@ -34,8 +39,9 @@ const formatFileSize = (bytes?: number): string => {
 };
 
 const TaskDrawer: React.FC = () => {
-    const { isDrawerOpen, closeDrawer, selectedTask, drawerProjectId, currentUserId } = useAppStore();
+    const { isDrawerOpen, closeDrawer, openDrawer, selectedTask, drawerProjectId, currentUserId } = useAppStore();
     const queryClient = useQueryClient();
+    const pendingFollowUpRef = useRef<{ title: string; projectId: number } | null>(null);
     const [formData, setFormData] = useState<Partial<Task>>({});
     const [selectedAssignees, setSelectedAssignees] = useState<User[]>([]);
     const [newAttachmentUrl, setNewAttachmentUrl] = useState('');
@@ -110,6 +116,10 @@ const TaskDrawer: React.FC = () => {
         setShowAttachmentForm(false);
         setNewAttachmentUrl('');
         setNewAttachmentName('');
+        const tags = selectedTask?.tags || [];
+        setIsIssue(tags.includes('이슈'));
+        setIsSpecial(tags.includes('특이사항'));
+        setCreateFollowUp(false);
     }, [selectedTask, isDrawerOpen, drawerProjectId]);
 
     // Sync assignees when users load (separate effect to avoid infinite loop)
@@ -137,7 +147,14 @@ const TaskDrawer: React.FC = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
-            closeDrawer();
+            const followUp = pendingFollowUpRef.current;
+            pendingFollowUpRef.current = null;
+            if (followUp) {
+                openDrawer(null, followUp.projectId);
+                setTimeout(() => setFormData(prev => ({ ...prev, title: followUp.title })), 30);
+            } else {
+                closeDrawer();
+            }
         },
     });
 
@@ -185,6 +202,22 @@ const TaskDrawer: React.FC = () => {
     });
 
     const [workNoteOpen, setWorkNoteOpen] = useState(false);
+    const [isIssue, setIsIssue] = useState(false);
+    const [isSpecial, setIsSpecial] = useState(false);
+    const [createFollowUp, setCreateFollowUp] = useState(false);
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    // @멘션 링크에서 작업노트 자동 열기
+    useEffect(() => {
+        if (searchParams.get('openWorkNote') === '1' && selectedTask && isDrawerOpen) {
+            setWorkNoteOpen(true);
+            // 파라미터 정리
+            const newParams = new URLSearchParams(searchParams);
+            newParams.delete('openWorkNote');
+            newParams.delete('openTask');
+            setSearchParams(newParams, { replace: true });
+        }
+    }, [selectedTask, isDrawerOpen, searchParams, setSearchParams]);
 
     const checkboxActivities = activities.filter(a => (a.block_type || 'checkbox') === 'checkbox');
     const activityProgress = checkboxActivities.length > 0
@@ -227,24 +260,37 @@ const TaskDrawer: React.FC = () => {
         }
     };
 
+    const buildTags = (base: string[]) => {
+        const t = new Set(base);
+        if (isIssue) t.add('이슈'); else t.delete('이슈');
+        if (isSpecial) t.add('특이사항'); else t.delete('특이사항');
+        return Array.from(t);
+    };
+
     const handleSave = () => {
         const assigneeIds = selectedAssignees.map(u => u.id);
+        const tags = buildTags(formData.tags || []);
         if (selectedTask && selectedTask.id) {
-            updateMutation.mutate({ ...formData, assignee_ids: assigneeIds });
+            updateMutation.mutate({ ...formData, assignee_ids: assigneeIds, tags });
         } else {
+            const currentTitle = formData.title || 'Untitled Task';
+            const pid = formData.project_id || drawerProjectId;
             const newTask: Omit<Task, 'id'> = {
-                title: formData.title || 'Untitled Task',
-                project_id: formData.project_id || drawerProjectId,
+                title: currentTitle,
+                project_id: pid,
                 status: (formData.status as Task['status']) || 'todo',
                 description: formData.description || '',
                 priority: (formData.priority as Task['priority']) || 'medium',
                 start_date: formData.start_date || null,
                 due_date: formData.due_date || null,
                 assignee_ids: assigneeIds,
-                tags: formData.tags || [],
+                tags,
                 progress: formData.progress || 0,
                 sub_project_id: formData.sub_project_id || null,
             };
+            if (createFollowUp) {
+                pendingFollowUpRef.current = { title: `[후속] ${currentTitle}`, projectId: pid };
+            }
             createMutation.mutate(newTask);
         }
     };
@@ -326,12 +372,13 @@ const TaskDrawer: React.FC = () => {
                     <Divider />
 
                     {/* Status & Priority */}
-                    <Box>
+                    <Box data-tour="status-priority-section">
                         <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
                             Status & Priority
                         </Typography>
                         <Box sx={{ display: 'flex', gap: 2 }}>
                             <TextField
+                                data-tour="status-select"
                                 select label="Status" fullWidth size="small"
                                 value={formData.status || 'todo'}
                                 onChange={(e) => handleChange('status', e.target.value)}
@@ -347,6 +394,7 @@ const TaskDrawer: React.FC = () => {
                                 ))}
                             </TextField>
                             <TextField
+                                data-tour="priority-select"
                                 select label="Priority" fullWidth size="small"
                                 value={formData.priority || 'medium'}
                                 onChange={(e) => handleChange('priority', e.target.value)}
@@ -371,6 +419,7 @@ const TaskDrawer: React.FC = () => {
                             Sub Project
                         </Typography>
                         <TextField
+                            data-tour="subproject-select"
                             select
                             fullWidth
                             size="small"
@@ -403,6 +452,7 @@ const TaskDrawer: React.FC = () => {
                             {selectedTask?.id && (
                                 <Tooltip title="작업노트 열기" arrow>
                                     <Button
+                                        data-tour="work-note-btn"
                                         size="small"
                                         startIcon={<EditNoteIcon sx={{ fontSize: '0.9rem' }} />}
                                         onClick={() => setWorkNoteOpen(true)}
@@ -564,6 +614,75 @@ const TaskDrawer: React.FC = () => {
                         />
                     </Box>
 
+                    {/* Quick actions (new task only) */}
+                    {!selectedTask && canEdit && (
+                        <Box>
+                            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
+                                추가 액션 (선택)
+                            </Typography>
+                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                                <Chip
+                                    icon={<BugReportOutlinedIcon sx={{ fontSize: '0.9rem !important' }} />}
+                                    label="이슈로 등록"
+                                    size="small"
+                                    clickable
+                                    onClick={() => setIsIssue(v => !v)}
+                                    sx={{
+                                        fontSize: '0.72rem', height: 28,
+                                        bgcolor: isIssue ? '#FEF2F2' : '#F3F4F6',
+                                        color: isIssue ? '#DC2626' : '#6B7280',
+                                        borderColor: isIssue ? '#FCA5A5' : 'transparent',
+                                        border: '1px solid',
+                                        fontWeight: isIssue ? 700 : 400,
+                                    }}
+                                />
+                                <Chip
+                                    icon={<WarningAmberIcon sx={{ fontSize: '0.9rem !important' }} />}
+                                    label="특이사항 표시"
+                                    size="small"
+                                    clickable
+                                    onClick={() => setIsSpecial(v => !v)}
+                                    sx={{
+                                        fontSize: '0.72rem', height: 28,
+                                        bgcolor: isSpecial ? '#FFFBEB' : '#F3F4F6',
+                                        color: isSpecial ? '#D97706' : '#6B7280',
+                                        borderColor: isSpecial ? '#FCD34D' : 'transparent',
+                                        border: '1px solid',
+                                        fontWeight: isSpecial ? 700 : 400,
+                                    }}
+                                />
+                                <Chip
+                                    icon={<SubdirectoryArrowRightIcon sx={{ fontSize: '0.9rem !important' }} />}
+                                    label="후속 Task 생성"
+                                    size="small"
+                                    clickable
+                                    onClick={() => setCreateFollowUp(v => !v)}
+                                    sx={{
+                                        fontSize: '0.72rem', height: 28,
+                                        bgcolor: createFollowUp ? '#EEF2FF' : '#F3F4F6',
+                                        color: createFollowUp ? '#2955FF' : '#6B7280',
+                                        borderColor: createFollowUp ? '#BFDBFE' : 'transparent',
+                                        border: '1px solid',
+                                        fontWeight: createFollowUp ? 700 : 400,
+                                    }}
+                                />
+                            </Box>
+                            {createFollowUp && (
+                                <Typography variant="caption" sx={{ color: '#6B7280', fontSize: '0.68rem', mt: 0.5, display: 'block' }}>
+                                    저장 후 제목에 "[후속]"이 붙은 새 Task 입력창이 열립니다
+                                </Typography>
+                            )}
+                        </Box>
+                    )}
+
+                    {/* Issue/Special badges for existing tasks */}
+                    {selectedTask && (isIssue || isSpecial) && (
+                        <Box sx={{ display: 'flex', gap: 1 }}>
+                            {isIssue && <Chip icon={<BugReportOutlinedIcon sx={{ fontSize: '0.85rem !important' }} />} label="이슈" size="small" sx={{ fontSize: '0.7rem', height: 24, bgcolor: '#FEF2F2', color: '#DC2626' }} />}
+                            {isSpecial && <Chip icon={<WarningAmberIcon sx={{ fontSize: '0.85rem !important' }} />} label="특이사항" size="small" sx={{ fontSize: '0.7rem', height: 24, bgcolor: '#FFFBEB', color: '#D97706' }} />}
+                        </Box>
+                    )}
+
                     {/* URL Attachments (only for existing tasks) */}
                     {selectedTask?.id && (
                         <Box>
@@ -573,7 +692,7 @@ const TaskDrawer: React.FC = () => {
                                     URL 첨부 ({urlAttachments.length})
                                 </Typography>
                                 {canEdit && (
-                                    <IconButton size="small" onClick={() => setShowAttachmentForm(!showAttachmentForm)} sx={{ color: '#2955FF' }}>
+                                    <IconButton data-tour="url-add-btn" size="small" onClick={() => setShowAttachmentForm(!showAttachmentForm)} sx={{ color: '#2955FF' }}>
                                         <AddIcon sx={{ fontSize: '1rem' }} />
                                     </IconButton>
                                 )}
@@ -583,6 +702,7 @@ const TaskDrawer: React.FC = () => {
                             {showAttachmentForm && canEdit && (
                                 <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1.5, bgcolor: '#F8F9FF', borderRadius: 1.5, border: '1px solid #E8EDFF' }}>
                                     <TextField
+                                        data-tour="url-input"
                                         size="small" placeholder="URL..." fullWidth
                                         value={newAttachmentUrl}
                                         onChange={e => setNewAttachmentUrl(e.target.value)}
@@ -590,11 +710,12 @@ const TaskDrawer: React.FC = () => {
                                         sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
                                     />
                                     <TextField
+                                        data-tour="url-name-input"
                                         size="small" placeholder="Name..." sx={{ minWidth: 120, '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
                                         value={newAttachmentName}
                                         onChange={e => setNewAttachmentName(e.target.value)}
                                     />
-                                    <Button size="small" variant="contained"
+                                    <Button data-tour="url-add-submit" size="small" variant="contained"
                                         disabled={!newAttachmentUrl.trim()}
                                         onClick={() => addAttachmentMutation.mutate({ url: newAttachmentUrl.trim(), filename: newAttachmentName.trim() || undefined })}
                                         sx={{ bgcolor: '#2955FF', minWidth: 'auto', px: 2 }}
@@ -717,6 +838,15 @@ const TaskDrawer: React.FC = () => {
                                 <Typography variant="caption" sx={{ color: '#9CA3AF' }}>첨부 파일 없음</Typography>
                             )}
                         </Box>
+                    )}
+
+                    {/* Check Sheets (only for existing tasks) */}
+                    {selectedTask?.id && (
+                        <TaskSheetPanel
+                            taskId={selectedTask.id}
+                            projectId={selectedTask.project_id || drawerProjectId || undefined}
+                            canEdit={canEdit}
+                        />
                     )}
                 </Stack>
             </Box>

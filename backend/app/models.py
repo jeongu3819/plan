@@ -35,6 +35,10 @@ class Space(Base):
     created_at = Column(DateTime, server_default=func.now())
     warned_at = Column(DateTime, nullable=True)  # 빈 공간 경고 발송 시점
 
+    # ✅ v3.0 공간 목적 프리셋
+    purpose = Column(String(50), nullable=True, default="project_management")
+    # project_management / equipment_ops / process_change / sw_dev / integrated_ops / custom
+
 
 class SpaceMember(Base):
     __tablename__ = "space_members"
@@ -240,6 +244,19 @@ class NoteMention(Base):
 
     __table_args__ = (
         UniqueConstraint("note_id", "user_id", name="uq_note_mention"),
+    )
+
+
+class TaskActivityMention(Base):
+    __tablename__ = "task_activity_mentions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    activity_id = Column(Integer, ForeignKey("task_activities.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("activity_id", "user_id", name="uq_activity_mention"),
     )
 
 
@@ -465,4 +482,153 @@ class ProjectAiQuery(Base):
     __table_args__ = (
         Index("ix_project_ai_queries_project_created", "project_id", "created_at"),
         Index("ix_project_ai_queries_user_created", "user_id", "created_at"),
+    )
+
+
+# =========================================================
+# v3.0 Sheet 운영 기능 (Excel 기반 Check Sheet / 운영 Sheet)
+# =========================================================
+
+class SheetTemplate(Base):
+    """업로드된 Excel 원본 구조 (템플릿)"""
+    __tablename__ = "sheet_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    space_id = Column(Integer, ForeignKey("spaces.id"), nullable=False, index=True)
+
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), nullable=True, default="general")
+    # check_sheet / chemical_mgmt / equipment_inspect / work_log / standard_form / general
+
+    original_filename = Column(String(255), nullable=True)
+    sheet_name = Column(String(100), nullable=True)  # 엑셀 시트 이름
+
+    sheet_type = Column(String(50), nullable=False, default="inspection")
+    # inspection / assignment_mapping
+
+    # 파싱된 구조 (셀 데이터 + 병합/색상/수식 정보)
+    structure = Column(JSON, nullable=False, default=dict)
+    # {
+    #   "rows": [...], "cols": [...],
+    #   "merges": [...], "col_widths": [...], "row_heights": [...],
+    #   "header_rows": [...], "checkable_cells": [...]
+    # }
+
+    row_count = Column(Integer, nullable=False, default=0)
+    col_count = Column(Integer, nullable=False, default=0)
+    checkable_count = Column(Integer, nullable=False, default=0)  # 체크 가능 항목 수
+
+    # v3.1: 자동 인식된 컬럼 역할 매핑 (사용자 확인 후 저장)
+    column_role_mapping = Column(JSON, nullable=True)
+    structure_hash = Column(String(32), nullable=True, index=True)  # 같은 양식 인식용 해시
+
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_sheet_templates_space", "space_id", "created_at"),
+    )
+
+
+class SheetExecution(Base):
+    """시트 실행본 (누가, 언제, 어떤 프로젝트에서 실행했는지)"""
+    __tablename__ = "sheet_executions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    template_id = Column(Integer, ForeignKey("sheet_templates.id"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True, index=True)
+    space_id = Column(Integer, ForeignKey("spaces.id"), nullable=False, index=True)
+
+    title = Column(String(300), nullable=True)  # 실행 제목 (예: "2026-04-17 PM Check")
+    equipment_name = Column(String(200), nullable=True)  # 관련 설비명 (선택)
+
+    sheet_type = Column(String(50), nullable=False, default="inspection")
+
+    status = Column(String(30), nullable=False, default="in_progress")
+    # in_progress / completed / cancelled
+
+    total_items = Column(Integer, nullable=False, default=0)
+    checked_items = Column(Integer, nullable=False, default=0)
+    progress = Column(Integer, nullable=False, default=0)  # 0~100
+
+    started_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    started_at = Column(DateTime, server_default=func.now())
+    completed_at = Column(DateTime, nullable=True)
+    completed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    __table_args__ = (
+        Index("ix_sheet_exec_template", "template_id", "started_at"),
+        Index("ix_sheet_exec_project", "project_id", "started_at"),
+        Index("ix_sheet_exec_task", "task_id", "started_at"),
+        Index("ix_sheet_exec_space", "space_id", "started_at"),
+    )
+
+
+class SheetExecutionItem(Base):
+    """실행본의 항목별 체크 상태/메모"""
+    __tablename__ = "sheet_execution_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    execution_id = Column(Integer, ForeignKey("sheet_executions.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    cell_ref = Column(String(20), nullable=False)  # 셀 좌표 (예: "C5", "D12")
+    row_idx = Column(Integer, nullable=False, default=0)
+    col_idx = Column(Integer, nullable=False, default=0)
+
+    label = Column(Text, nullable=True)  # 항목 라벨 (인접 셀 텍스트)
+    checked = Column(Boolean, nullable=False, default=False)
+    value = Column(String(100), nullable=True)  # O / X / 수치 등 체크값
+    memo = Column(Text, nullable=True)  # 특이사항/메모
+
+    checked_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    checked_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_sheet_exec_item_exec", "execution_id", "row_idx", "col_idx"),
+    )
+
+
+class SheetExecutionLog(Base):
+    """항목별 체크/변경 이력 (감사 로그)"""
+    __tablename__ = "sheet_execution_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    execution_id = Column(Integer, ForeignKey("sheet_executions.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("sheet_execution_items.id", ondelete="CASCADE"), nullable=True, index=True)
+
+    action = Column(String(50), nullable=False)  # check / uncheck / memo / complete / start
+    old_value = Column(String(200), nullable=True)
+    new_value = Column(String(200), nullable=True)
+    memo = Column(Text, nullable=True)
+
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_sheet_exec_log_exec", "execution_id", "created_at"),
+    )
+
+class SheetExecutionMapping(Base):
+    """assignment_mapping 유형 시트의 매핑 관계 저장"""
+    __tablename__ = "sheet_execution_mappings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    execution_id = Column(Integer, ForeignKey("sheet_executions.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    master_name = Column(String(200), nullable=False)  # 예: 약품명, 마스터 항목
+    master_code = Column(String(100), nullable=True)   # 예: 약품코드
+    assigned_entity = Column(String(200), nullable=False)  # 예: 설비명, 연결될 항목
+    
+    manager = Column(String(100), nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_sheet_exec_mapping_exec", "execution_id", "master_name"),
     )

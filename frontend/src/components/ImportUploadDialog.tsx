@@ -26,6 +26,7 @@ interface ImportUploadDialogProps {
   open: boolean;
   onClose: () => void;
   currentUserId: number;
+  spaceId?: number | null;
 }
 
 type Step = 'upload' | 'preview' | 'executing' | 'result';
@@ -44,7 +45,7 @@ const statusLabels: Record<string, { label: string; color: string }> = {
   hold: { label: 'Hold', color: '#F59E0B' },
 };
 
-const ImportUploadDialog: React.FC<ImportUploadDialogProps> = ({ open, onClose, currentUserId }) => {
+const ImportUploadDialog: React.FC<ImportUploadDialogProps> = ({ open, onClose, currentUserId, spaceId }) => {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>('upload');
@@ -110,6 +111,7 @@ const ImportUploadDialog: React.FC<ImportUploadDialogProps> = ({ open, onClose, 
           const project = await api.createProject({
             name: row.project,
             owner_id: currentUserId,
+            space_id: spaceId || undefined,
           });
           projectMap.set(row.project, project.id);
           createdProjects++;

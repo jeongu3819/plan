@@ -30,6 +30,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Project } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
+import SpacePurposeSelector from '../components/space/SpacePurposeSelector';
+import type { SpacePurpose } from '../types';
 
 const SPACES_PER_PAGE = 24;
 
@@ -66,6 +68,7 @@ const SpaceManagePage: React.FC = () => {
   const [editingSpace, setEditingSpace] = useState<any>(null);
   const [spaceName, setSpaceName] = useState('');
   const [spaceDesc, setSpaceDesc] = useState('');
+  const [spacePurpose, setSpacePurpose] = useState<SpacePurpose>('project_management');
   const [createMemberSearch, setCreateMemberSearch] = useState('');
   const [createMemberResults, setCreateMemberResults] = useState<any[]>([]);
   const [createSelectedUserIds, setCreateSelectedUserIds] = useState<number[]>([]);
@@ -121,7 +124,7 @@ const SpaceManagePage: React.FC = () => {
   const pageSpaces = filtered.slice(page * SPACES_PER_PAGE, (page + 1) * SPACES_PER_PAGE);
 
   const favSpaces = allSpaces.filter((s: any) => favoriteIds.includes(s.id));
-  const recentSpaces = recentIds.map(id => allSpaces.find((s: any) => s.id === id)).filter(Boolean).slice(0, 8);
+  const recentSpaces = recentIds.map(id => allSpaces.find((s: any) => s.id === id)).filter((s: any) => s && s.is_member).slice(0, 8);
 
   // Search users for member addition
   const handleMemberSearch = useCallback(async (query: string) => {
@@ -201,6 +204,7 @@ const SpaceManagePage: React.FC = () => {
     setEditingSpace(null);
     setSpaceName('');
     setSpaceDesc('');
+    setSpacePurpose('project_management');
     setCreateMemberSearch('');
     setCreateMemberResults([]);
     setCreateSelectedUserIds([]);
@@ -212,6 +216,7 @@ const SpaceManagePage: React.FC = () => {
     setEditingSpace(s);
     setSpaceName(s.name);
     setSpaceDesc(s.description || '');
+    setSpacePurpose((s.purpose as SpacePurpose) || 'project_management');
     setSpaceDialogOpen(true);
   };
 
@@ -226,7 +231,7 @@ const SpaceManagePage: React.FC = () => {
     if (!spaceName.trim()) return;
     try {
       const created = await api.createSpace(
-        { name: spaceName.trim(), description: spaceDesc.trim() || undefined, member_user_ids: createSelectedUserIds },
+        { name: spaceName.trim(), description: spaceDesc.trim() || undefined, purpose: spacePurpose, member_user_ids: createSelectedUserIds },
         currentUserId
       );
       queryClient.invalidateQueries({ queryKey: ['allSpaces'] });
@@ -242,7 +247,7 @@ const SpaceManagePage: React.FC = () => {
     try {
       const updated = await api.updateSpace(
         editingSpace.id,
-        { name: spaceName.trim(), description: spaceDesc.trim() || undefined },
+        { name: spaceName.trim(), description: spaceDesc.trim() || undefined, purpose: spacePurpose },
         currentUserId
       );
       queryClient.invalidateQueries({ queryKey: ['allSpaces'] });
@@ -576,6 +581,10 @@ const SpaceManagePage: React.FC = () => {
             value={spaceDesc} onChange={e => setSpaceDesc(e.target.value)}
             sx={{ mb: 2 }}
           />
+
+          <Box sx={{ mb: 2 }}>
+            <SpacePurposeSelector value={spacePurpose} onChange={setSpacePurpose} />
+          </Box>
 
           {/* 멤버 추가 — 생성 모드에서만 */}
           {dialogMode === 'create' && (

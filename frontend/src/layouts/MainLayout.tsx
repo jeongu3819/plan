@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import Lottie from 'lottie-react';
-import pandaAnimation from '../assets/lottie/panda-waving.json';
+import pandaAnimation from '../assets/lottie/panda-select.json';
 import {
   Box,
   List,
@@ -36,14 +36,11 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import TimelineIcon from '@mui/icons-material/Timeline';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import PaletteIcon from '@mui/icons-material/Palette';
-import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
-import SettingsIcon from '@mui/icons-material/Settings';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import SearchIcon from '@mui/icons-material/Search';
@@ -53,6 +50,7 @@ import AlternateEmailIcon from '@mui/icons-material/AlternateEmail';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import GroupsIcon from '@mui/icons-material/Groups';
+import DescriptionIcon from '@mui/icons-material/Description';
 
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import TemplateLibraryDialog from '../components/TemplateLibraryDialog';
@@ -69,6 +67,7 @@ import {
 } from '../utils/colorUtils';
 import { useUser } from '../context/UserContext';
 import { useAppStore } from '../stores/useAppStore';
+import SpacePurposeSelector from '../components/space/SpacePurposeSelector';
 
 const BG_PALETTE = [
   // Light
@@ -222,6 +221,8 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     queryFn: () => api.getSpaceJoinRequests(currentSpaceId!, effectiveUserId),
     enabled: !!currentSpaceId && effectiveUserId > 0,
     retry: false,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   // Sync space from URL or auto-select first space
@@ -243,6 +244,14 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       setCurrentSpace(null, null, null);
     }
   }, [spaces, urlSpaceSlug, spaceAccess, currentSpaceId, setCurrentSpace]);
+
+  // fetch spaceOverview for purpose
+  const { data: overviewData } = useQuery({
+    queryKey: ['spaceOverview', currentSpaceId, effectiveUserId],
+    queryFn: () => api.getSpaceOverview(currentSpaceId!, effectiveUserId),
+    enabled: !!currentSpaceId && effectiveUserId > 0,
+  });
+  const spacePurpose = overviewData?.purpose || 'project_management';
 
   // projects (filtered by current space)
   const { data: allProjects = [] } = useQuery<Project[]>({
@@ -301,10 +310,11 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
   const [spaceDialogOpen, setSpaceDialogOpen] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceDesc, setNewSpaceDesc] = useState('');
+  const [newSpacePurpose, setNewSpacePurpose] = useState<import('../types').SpacePurpose>('project_management');
   const [spaceSelectedUserIds, setSpaceSelectedUserIds] = useState<number[]>([]);
   const [spaceUserSearch, setSpaceUserSearch] = useState('');
   const [spaceManageMode, setSpaceManageMode] = useState<'create' | 'manage'>('create');
-  const [managingSpace, setManagingSpace] = useState<any>(null);
+  const [managingSpace, _setManagingSpace] = useState<any>(null); void managingSpace;
   const [spacePickerAnchor, setSpacePickerAnchor] = useState<HTMLElement | null>(null);
   const [spaceSearchQuery, setSpaceSearchQuery] = useState('');
   const [spaceListPage, setSpaceListPage] = useState(0);
@@ -354,6 +364,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
     file_download: 'all',
   });
   const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([]);
+  const [memberSearchQuery, setMemberSearchQuery] = useState('');
 
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null);
 
@@ -392,6 +403,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
       setRequireApproval(false);
       setAdvancedOpen(false);
       setSelectedMemberIds([]);
+      setMemberSearchQuery('');
       setPermissions({
         post_write: 'all',
         post_edit: 'all',
@@ -476,7 +488,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 letterSpacing: '-0.02em',
               }}
             >
-              PLAN-A
+              PLAN-AI
             </Typography>
             <Typography
               variant="caption"
@@ -489,7 +501,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 display: 'block',
               }}
             >
-              Schedule Platform from A-FAB
+              Schedule Platform from PlanAI
             </Typography>
           </Box>
         </Box>
@@ -645,6 +657,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             { text: '공간 관리', icon: <WorkspacesIcon />, path: sp('/spaces') },
             { text: '@나를 언급', icon: <AlternateEmailIcon />, path: sp('/mentions') },
             { text: '그룹', icon: <GroupsIcon />, path: sp('/groups') },
+            { text: 'Sheets', icon: <DescriptionIcon />, path: sp('/sheets'), excludePurpose: 'project_management' },
             {
               text: 'AI Settings',
               icon: <AutoAwesomeIcon />,
@@ -653,6 +666,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             },
           ]
             .filter(item => !(item as any).superAdminOnly || isSuperAdmin)
+            .filter(item => !(item as any).excludePurpose || (item as any).excludePurpose !== spacePurpose)
             .map(item => {
               const isActive = location.pathname === item.path;
               return (
@@ -767,7 +781,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             <List sx={{ px: 1, pb: 1 }}>
               {projects.map((project, index) => {
                 const isActive = location.pathname === `/project/${project.id}`;
-                const dotColor = PROJECT_COLORS[index % PROJECT_COLORS.length];
+                void PROJECT_COLORS[index % PROJECT_COLORS.length];
                 return (
                   <ListItem
                     key={project.id}
@@ -1343,72 +1357,103 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
               </Box>
             )}
 
-            <Box
-              sx={{
-                maxHeight: 160,
-                overflowY: 'auto',
-                border: '1px solid #E5E7EB',
-                borderRadius: 2,
-                p: 0.5,
-              }}
-            >
-              {usersForMemberSelection.map(user => (
-                <Box
-                  key={user.id}
-                  onClick={() =>
-                    setSelectedMemberIds(prev =>
-                      prev.includes(user.id)
-                        ? prev.filter(id => id !== user.id)
-                        : [...prev, user.id]
-                    )
-                  }
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    py: 0.5,
-                    px: 1,
-                    borderRadius: 1.5,
-                    cursor: 'pointer',
-                    '&:hover': { bgcolor: '#F3F4F6' },
-                    bgcolor: selectedMemberIds.includes(user.id) ? '#EEF2FF' : 'transparent',
-                  }}
-                >
-                  <Checkbox
-                    size="small"
-                    checked={selectedMemberIds.includes(user.id)}
-                    sx={{ p: 0.3 }}
-                  />
-                  <Avatar
+            <TextField
+              size="small"
+              fullWidth
+              placeholder="이름 또는 아이디로 검색"
+              value={memberSearchQuery}
+              onChange={e => setMemberSearchQuery(e.target.value)}
+              sx={{ mb: 1, '& .MuiOutlinedInput-root': { fontSize: '0.85rem', borderRadius: 2 } }}
+            />
+            {/* 선택된 멤버 표시 */}
+            {selectedMemberIds.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+                {selectedMemberIds.map(uid => {
+                  const u = usersForMemberSelection.find(x => x.id === uid);
+                  if (!u) return null;
+                  return (
+                    <Chip
+                      key={uid}
+                      label={u.username}
+                      size="small"
+                      onDelete={() => setSelectedMemberIds(prev => prev.filter(id => id !== uid))}
+                      sx={{ height: 24, fontSize: '0.72rem', fontWeight: 600, bgcolor: '#EEF2FF', color: '#2955FF' }}
+                    />
+                  );
+                })}
+              </Box>
+            )}
+            {/* 검색어 입력 시에만 결과 표시 */}
+            {memberSearchQuery.trim() && (
+              <Box
+                sx={{
+                  maxHeight: 160,
+                  overflowY: 'auto',
+                  border: '1px solid #E5E7EB',
+                  borderRadius: 2,
+                  p: 0.5,
+                }}
+              >
+                {usersForMemberSelection
+                  .filter(u => {
+                    const q = memberSearchQuery.trim().toLowerCase();
+                    return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+                  })
+                  .map(user => (
+                  <Box
+                    key={user.id}
+                    onClick={() =>
+                      setSelectedMemberIds(prev =>
+                        prev.includes(user.id)
+                          ? prev.filter(id => id !== user.id)
+                          : [...prev, user.id]
+                      )
+                    }
                     sx={{
-                      width: 22,
-                      height: 22,
-                      fontSize: '0.55rem',
-                      bgcolor: user.avatar_color || '#2955FF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      py: 0.5,
+                      px: 1,
+                      borderRadius: 1.5,
+                      cursor: 'pointer',
+                      '&:hover': { bgcolor: '#F3F4F6' },
+                      bgcolor: selectedMemberIds.includes(user.id) ? '#EEF2FF' : 'transparent',
                     }}
                   >
-                    {user.username.charAt(0).toUpperCase()}
-                  </Avatar>
-                  <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
-                    {user.username}
-                  </Typography>
+                    <Checkbox
+                      size="small"
+                      checked={selectedMemberIds.includes(user.id)}
+                      sx={{ p: 0.3 }}
+                    />
+                    <Avatar
+                      sx={{
+                        width: 22,
+                        height: 22,
+                        fontSize: '0.55rem',
+                        bgcolor: user.avatar_color || '#2955FF',
+                      }}
+                    >
+                      {user.username.charAt(0).toUpperCase()}
+                    </Avatar>
+                    <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                      {user.username}
+                    </Typography>
+                  </Box>
+                ))}
+                {usersForMemberSelection.filter(u => {
+                  const q = memberSearchQuery.trim().toLowerCase();
+                  return (u.username || '').toLowerCase().includes(q) || (u.loginid || '').toLowerCase().includes(q);
+                }).length === 0 && (
                   <Typography
-                    variant="caption"
-                    sx={{ color: '#9CA3AF', fontSize: '0.65rem', ml: 'auto' }}
+                    variant="body2"
+                    sx={{ color: '#9CA3AF', fontSize: '0.8rem', textAlign: 'center', py: 2 }}
                   >
-                    {user.role || 'member'}
+                    검색 결과가 없습니다
                   </Typography>
-                </Box>
-              ))}
-              {usersForMemberSelection.length === 0 && (
-                <Typography
-                  variant="body2"
-                  sx={{ color: '#9CA3AF', fontSize: '0.8rem', textAlign: 'center', py: 2 }}
-                >
-                  추가할 수 있는 사용자가 없습니다
-                </Typography>
-              )}
-            </Box>
+                )}
+              </Box>
+            )}
           </Box>}
 
           {isAdminLike && <>
@@ -1620,6 +1665,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
         open={importDialogOpen}
         onClose={() => setImportDialogOpen(false)}
         currentUserId={effectiveUserId}
+        spaceId={currentSpaceId}
       />
 
       {/* ─── Space Create/Manage Dialog ─── */}
@@ -1653,6 +1699,13 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
             onChange={e => setNewSpaceDesc(e.target.value)}
             sx={{ mb: 2 }}
           />
+
+          {/* 공간 운영 목적 선택 (생성 모드에서만) */}
+          {spaceManageMode === 'create' && (
+            <Box sx={{ mb: 2 }}>
+              <SpacePurposeSelector value={newSpacePurpose} onChange={setNewSpacePurpose} />
+            </Box>
+          )}
 
           {/* Member selection — 검색 기반 */}
           <Typography variant="caption" sx={{ fontWeight: 700, color: '#374151', mb: 0.5, display: 'block' }}>
@@ -1806,7 +1859,7 @@ export const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }
                 try {
                   const isFirstSpace = spaces.length === 0;
                   const created = await api.createSpace(
-                    { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined, member_user_ids: spaceSelectedUserIds },
+                    { name: newSpaceName.trim(), description: newSpaceDesc.trim() || undefined, member_user_ids: spaceSelectedUserIds, purpose: newSpacePurpose },
                     effectiveUserId
                   );
                   queryClient.invalidateQueries({ queryKey: ['spaces'] });

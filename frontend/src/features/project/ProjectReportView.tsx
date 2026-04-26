@@ -169,7 +169,18 @@ const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
           current = { title: cleanText(m[1]), lines: [] };
           result.push(current);
         } else if (current) {
-          current.lines.push(cleanText(line));
+          const cleaned = cleanText(line);
+          // 한 줄에 여러 문장이 이어져 있으면 분리
+          if (cleaned.length > 80) {
+            const sentences = cleaned.split(/(?<=\.)\s+/).filter(Boolean);
+            if (sentences.length > 1) {
+              current.lines.push(...sentences);
+            } else {
+              current.lines.push(cleaned);
+            }
+          } else {
+            current.lines.push(cleaned);
+          }
         } else {
           current = { title: '', lines: [cleanText(line)] };
           result.push(current);
@@ -178,10 +189,20 @@ const TaskAnalysisBlock: React.FC<{ text: string }> = ({ text }) => {
       return result;
     }
 
-    // [Task: ...] 기준 블록 → lines 변환
+    // [Task: ...] 기준 블록 → lines 변환 (문장 단위 분리)
     return taskBlocks.map(b => ({
       title: cleanText(b.title),
-      lines: b.body.split('\n').map(l => cleanText(l.trim())).filter(Boolean),
+      lines: b.body.split('\n')
+        .map(l => cleanText(l.trim()))
+        .filter(Boolean)
+        .flatMap(line => {
+          // 한 줄에 여러 문장이 이어져 있으면 '. ' 기준으로 분리
+          if (line.length > 80) {
+            const sentences = line.split(/(?<=\.)\s+/).filter(Boolean);
+            if (sentences.length > 1) return sentences;
+          }
+          return [line];
+        }),
     }));
   }, [text]);
 
@@ -424,15 +445,119 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
     return <NumberedListBlock text={text} />;
   }
 
+  // 과제 단위로 그룹핑: "과제"부터 다음 "과제" 전까지가 한 블록
+  // 같은 블록 안에서 동일 라벨(완료 항목 등)은 합침
+  type TaskGroup = { label: string; content: string[] }[];
+  const taskGroups: TaskGroup[] = [];
+  let currentGroup: TaskGroup = [];
+
+  const workNoteSubLabels = new Set(['작업노트', '완료 항목', '미완료 항목', '주의사항']);
+
+  for (const section of sections) {
+    if (section.label === '과제' && currentGroup.length > 0) {
+      taskGroups.push(currentGroup);
+      currentGroup = [];
+    }
+    // 같은 그룹 안에서 동일 라벨이면 내용만 합침
+    const existing = currentGroup.find(s => s.label === section.label);
+    if (existing && workNoteSubLabels.has(section.label)) {
+      existing.content.push(...section.content);
+    } else {
+      currentGroup.push({ label: section.label, content: [...section.content] });
+    }
+  }
+  if (currentGroup.length > 0) taskGroups.push(currentGroup);
+
+  // 그룹들을 flat하게 펼치되, 과제 경계에 구분 마커 삽입
+  const mergedSections: (typeof sections[0] & { isGroupStart?: boolean })[] = [];
+  for (let gi = 0; gi < taskGroups.length; gi++) {
+    const group = taskGroups[gi];
+    for (let si = 0; si < group.length; si++) {
+      const section = group[si];
+      // 작업노트/완료항목/미완료항목/주의사항은 작업노트 하위 서브로 표시
+      if (workNoteSubLabels.has(section.label) && section.label !== '작업노트') {
+        mergedSections.push({ ...section, label: `_sub_${section.label}` });
+      } else {
+        mergedSections.push({
+          ...section,
+          isGroupStart: si === 0 && gi > 0, // 과제 그룹 경계
+        } as any);
+      }
+    }
+  }
+
+  const splitDetailItems = (lines: string[]): string[] => {
+    const joined = lines.join(' ').replace(/\s+/g, ' ').trim();
+    if (!joined) return [];
+    const parts = joined.split(/\s+(?=\d+\.\s)/);
+    if (parts.length >= 2) {
+      return parts.map(s => s.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
+    }
+    const statusParts = joined.split(/(?<=\((?:완료|미완료)\))\s+(?=\S)/);
+    if (statusParts.length >= 2) {
+      return statusParts.map(s => s.trim()).filter(Boolean);
+    }
+    const commaItems: string[] = [];
+    let buf = '';
+    let depth = 0;
+    for (const ch of joined) {
+      if (ch === '(' || ch === '（') depth++;
+      else if (ch === ')' || ch === '）') depth = Math.max(0, depth - 1);
+      if ((ch === ',' || ch === '，') && depth === 0) {
+        const t = buf.trim();
+        if (t) commaItems.push(t);
+        buf = '';
+      } else { buf += ch; }
+    }
+    const last = buf.trim();
+    if (last) commaItems.push(last);
+    if (commaItems.length === 1 && commaItems[0].length > 100) {
+      const sentences = commaItems[0].split(/(?<=\.)\s+/).filter(Boolean);
+      if (sentences.length > 1) return sentences;
+    }
+    return commaItems;
+  };
+
+  const renderNumberedItems = (items: string[], color: string) => (
+    items.map((item, ni) => (
+      <Box key={ni} sx={{ display: 'flex', gap: 0.8, alignItems: 'flex-start', mb: 0.3 }}>
+        <Typography sx={{ fontSize: '0.83rem', fontWeight: 700, color: '#6B7280', minWidth: 22, textAlign: 'right', flexShrink: 0 }}>
+          {ni + 1}.
+        </Typography>
+        <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.7, color, overflowWrap: 'break-word' }}>
+          {item}
+        </Typography>
+      </Box>
+    ))
+  );
+
   return (
     <Box sx={{ borderRadius: 2, border: '1px solid #E5E7EB', overflow: 'hidden' }}>
-      {sections.map((section, idx) => {
-        if (section.content.length === 0) return null;
+      {mergedSections.map((section, idx) => {
+        if (section.content.length === 0 && !section.label.startsWith('_sub_')) return null;
+
+        // 작업노트 하위 섹션 — 작업노트 박스 안에서 서브그룹으로 렌더링
+        if (section.label.startsWith('_sub_')) {
+          const realLabel = section.label.replace('_sub_', '');
+          const subColor = DETAIL_SECTION_COLORS[realLabel] || '#374151';
+          const items = splitDetailItems(section.content);
+          if (items.length === 0) return null;
+          return (
+            <Box key={idx} sx={{ px: 1.5, pb: 1 }}>
+              <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: subColor, mb: 0.3, mt: 0.5 }}>
+                {realLabel}
+              </Typography>
+              {renderNumberedItems(items, '#374151')}
+            </Box>
+          );
+        }
+
         const isLabeled = DETAIL_SECTION_LABELS.includes(section.label);
         const color = DETAIL_SECTION_COLORS[section.label] || '#374151';
+        const numberedSections = ['과제', '작업노트', '완료 항목', '미완료 항목', '참고자료', '주의사항'];
 
         return (
-          <Box key={idx} sx={{ borderTop: idx > 0 ? '1px solid #F3F4F6' : 'none' }}>
+          <Box key={idx} sx={{ borderTop: (section as any).isGroupStart ? '2px solid #E5E7EB' : 'none' }}>
             {isLabeled && (
               <Box sx={{ px: 1.5, pt: 0.8, pb: 0.2 }}>
                 <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color, letterSpacing: '0.02em' }}>
@@ -441,65 +566,15 @@ const StructuredDetailBlock: React.FC<{ text: string }> = ({ text }) => {
               </Box>
             )}
             <Box sx={{ px: 1.5, pb: 0.8, pt: isLabeled ? 0.2 : 0.8 }}>
-              {(() => {
-                // 과제, 작업노트, 완료/미완료 항목, 참고자료, 주의사항: 스마트 분리 + 번호 매기기
-                const numberedSections = ['과제', '작업노트', '완료 항목', '미완료 항목', '참고자료', '주의사항'];
-                if (numberedSections.includes(section.label)) {
-                  const splitDetailItems = (lines: string[]): string[] => {
-                    const joined = lines.join(' ').replace(/\s+/g, ' ').trim();
-                    if (!joined) return [];
-                    // Strategy 1: inline numbered items (e.g. "1. xxx 2. yyy 3. zzz")
-                    const parts = joined.split(/\s+(?=\d+\.\s)/);
-                    if (parts.length >= 2) {
-                      return parts.map(s => s.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
-                    }
-                    // Strategy 2: split by (완료)/(미완료) status markers
-                    // e.g. "Task A (완료) Task B (미완료)" → ["Task A (완료)", "Task B (미완료)"]
-                    const statusParts = joined.split(/(?<=\((?:완료|미완료)\))\s+(?=\S)/);
-                    if (statusParts.length >= 2) {
-                      return statusParts.map(s => s.trim()).filter(Boolean);
-                    }
-                    // Strategy 3: comma split respecting parentheses
-                    const commaItems: string[] = [];
-                    let buf = '';
-                    let depth = 0;
-                    for (const ch of joined) {
-                      if (ch === '(' || ch === '（') depth++;
-                      else if (ch === ')' || ch === '）') depth = Math.max(0, depth - 1);
-                      if ((ch === ',' || ch === '，') && depth === 0) {
-                        const t = buf.trim();
-                        if (t) commaItems.push(t);
-                        buf = '';
-                      } else { buf += ch; }
-                    }
-                    const last = buf.trim();
-                    if (last) commaItems.push(last);
-                    // Long single items: try sentence splitting
-                    if (commaItems.length === 1 && commaItems[0].length > 100) {
-                      const sentences = commaItems[0].split(/(?<=\.)\s+/).filter(Boolean);
-                      if (sentences.length > 1) return sentences;
-                    }
-                    return commaItems;
-                  };
-                  const items = splitDetailItems(section.content);
-                  return items.map((item, ni) => (
-                    <Box key={ni} sx={{ display: 'flex', gap: 0.8, alignItems: 'flex-start', mb: 0.5 }}>
-                      <Typography sx={{ fontSize: '0.83rem', fontWeight: 700, color: '#6B7280', minWidth: 22, textAlign: 'right', flexShrink: 0 }}>
-                        {ni + 1}.
-                      </Typography>
-                      <Typography sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151', overflowWrap: 'break-word' }}>
-                        {item}
-                      </Typography>
-                    </Box>
-                  ));
-                }
-                // 기간, 담당자 등 기타 섹션: 기존 방식
-                return section.content.map((line, li) => (
+              {numberedSections.includes(section.label) ? (
+                renderNumberedItems(splitDetailItems(section.content), '#374151')
+              ) : (
+                section.content.map((line, li) => (
                   <Typography key={li} sx={{ fontSize: '0.83rem', lineHeight: 1.7, color: '#374151', mb: 0.2 }}>
                     {line}
                   </Typography>
-                ));
-              })()}
+                ))
+              )}
             </Box>
           </Box>
         );

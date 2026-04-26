@@ -30,10 +30,11 @@ from app.db_connections.sqlalchemy import SessionLocal, engine, Base
 from app.models import (
     Project, User, Task, UserPreference, VisitLog, GroupMembership, Group,
     ProjectAiReport, ProjectAiQuery, AiSetting, SubProject as SubProjectModel, Note as NoteModel,
-    NoteMention, ProjectMember as ProjectMemberModel, UserShortcut,
+    NoteMention, TaskActivityMention, ProjectMember as ProjectMemberModel, UserShortcut,
     MemberGroup, MemberGroupUser,
     TaskActivity as TaskActivityModel, Attachment as AttachmentModel,
     Space, SpaceMember, SpaceJoinRequest,
+    SheetTemplate, SheetExecution, SheetExecutionItem, SheetExecutionLog,
 )
 from app.environment import CORS_ORIGINS, SUPER_ADMIN_LOGINIDS, KST
 from app.llm.dsllm_adapter import chat as dsllm_chat
@@ -70,6 +71,10 @@ def _run_migrations():
         t = Base.metadata.tables.get("space_join_requests")
         if t is not None:
             Base.metadata.create_all(bind=engine, tables=[t])
+    if "task_activity_mentions" not in insp.get_table_names():
+        t = Base.metadata.tables.get("task_activity_mentions")
+        if t is not None:
+            Base.metadata.create_all(bind=engine, tables=[t])
     if "projects" in insp.get_table_names():
         cols = [c["name"] for c in insp.get_columns("projects")]
         if "space_id" not in cols:
@@ -93,6 +98,52 @@ def _run_migrations():
         if "warned_at" not in cols:
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE spaces ADD COLUMN warned_at DATETIME'))
+        if "purpose" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE spaces ADD COLUMN purpose VARCHAR(50) DEFAULT 'project_management'"))
+
+    # ── v3.0 Sheet 운영 테이블 자동 생성 ──
+    for tname in ["sheet_templates", "sheet_executions", "sheet_execution_items", "sheet_execution_logs"]:
+        if tname not in insp.get_table_names():
+            t = Base.metadata.tables.get(tname)
+            if t is not None:
+                Base.metadata.create_all(bind=engine, tables=[t])
+
+    # sheet_executions.task_id (Task Details 에서 Check Sheet 연결)
+    if "sheet_executions" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_executions")]
+        if "task_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_executions ADD COLUMN task_id INTEGER'))
+
+    # v3.1: sheet_templates.column_role_mapping (자동 인식 결과 저장)
+    if "sheet_templates" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_templates")]
+        if "column_role_mapping" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_templates ADD COLUMN column_role_mapping JSON'))
+        if "structure_hash" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_templates ADD COLUMN structure_hash VARCHAR(32)'))
+
+    # v3.2: sheet_type 및 sheet_execution_mappings 테이블
+    if "sheet_templates" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_templates")]
+        if "sheet_type" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_templates ADD COLUMN sheet_type VARCHAR(50) NOT NULL DEFAULT "inspection"'))
+
+    if "sheet_executions" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("sheet_executions")]
+        if "sheet_type" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text('ALTER TABLE sheet_executions ADD COLUMN sheet_type VARCHAR(50) NOT NULL DEFAULT "inspection"'))
+
+    if "sheet_execution_mappings" not in insp.get_table_names():
+        from app.models import SheetExecutionMapping
+        t = Base.metadata.tables.get("sheet_execution_mappings")
+        if t is not None:
+            Base.metadata.create_all(bind=engine, tables=[t])
 
 _run_migrations()
 
@@ -192,6 +243,22 @@ def startup_ensure_super_admin():
     finally:
         db.close()
 
+    # S3 백업 스케줄러 시작
+    try:
+        from app.services.backup_scheduler import start_backup_scheduler
+        start_backup_scheduler()
+    except Exception as e:
+        import logging
+        logging.getLogger("main").warning(f"백업 스케줄러 시작 실패 (무시): {e}")
+
+@app.on_event("shutdown")
+def shutdown_backup_scheduler():
+    try:
+        from app.services.backup_scheduler import stop_backup_scheduler
+        stop_backup_scheduler()
+    except Exception:
+        pass
+
 def _backfill_team_nodes(db: Session):
     """deptname 값을 기반으로 groups 테이블에 TEAM 타입 노드를 자동 생성하고 users.primary_team_id를 매핑"""
     try:
@@ -282,7 +349,19 @@ def _parse_time_window_from_query(q: str, today: date) -> tuple[date, date] | No
     if not q:
         return None
 
-    # 상대 표현
+    # ── 주 단위 상대 표현 ──
+    if re.search(r"(이번\s*주|이번주|금주)", q):
+        # 이번주: 월요일~일요일
+        monday = today - timedelta(days=today.weekday())
+        return monday, monday + timedelta(days=7)
+    if re.search(r"(다음\s*주|다음주|차주)", q):
+        monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        return monday, monday + timedelta(days=7)
+    if re.search(r"(지난\s*주|지난주|저번\s*주|저번주)", q):
+        monday = today - timedelta(days=today.weekday()) - timedelta(days=7)
+        return monday, monday + timedelta(days=7)
+
+    # ── 월 단위 상대 표현 ──
     if re.search(r"(이번\s*달|이번달)", q):
         return _month_window(today.year, today.month)
     if re.search(r"(다음\s*달|다음달)", q):
@@ -291,6 +370,16 @@ def _parse_time_window_from_query(q: str, today: date) -> tuple[date, date] | No
     if re.search(r"(지난\s*달|지난달|저번\s*달|저번달)", q):
         d = _add_months(date(today.year, today.month, 1), -1)
         return _month_window(d.year, d.month)
+
+    # ── "오늘", "내일", "모레" ──
+    if re.search(r"(오늘)", q):
+        return today, today + timedelta(days=1)
+    if re.search(r"(내일)", q):
+        t = today + timedelta(days=1)
+        return t, t + timedelta(days=1)
+    if re.search(r"(모레)", q):
+        t = today + timedelta(days=2)
+        return t, t + timedelta(days=1)
 
     # "2026년 2월"
     m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월", q)
@@ -656,6 +745,76 @@ def set_task_meta(state: dict, task_id: int, values: dict):
             curr["progress"] = 0
     state["task_meta"][str(task_id)] = curr
 
+# ── status 파생 단일 소스 ──
+# 체크박스 진행률 기반 자동 status 승격 규칙을 한 곳으로 모은다.
+# 규칙:
+#   - hold: 수동 지정이므로 절대 자동 변경하지 않음
+#   - progress >= 100 → done
+#   - progress > 0 && status == todo → in_progress
+#   - 그 외: 현재 status 유지 (사용자가 직접 정한 값 보존)
+#   - "In Progress 50% 이상 진행"은 별도 status 값이 아니라 (status=in_progress
+#     AND progress>=50) 조합으로 프론트에서 파생 표시한다. 이 함수는 해당
+#     조합을 파괴하지 않는다.
+def _derive_task_status(current_status: str, progress: int) -> str:
+    if current_status == "hold":
+        return current_status
+    if progress >= 100:
+        return "done"
+    if progress > 0 and current_status == "todo":
+        return "in_progress"
+    return current_status
+
+
+def _compute_task_progress(activities) -> tuple[int, int]:
+    """Return (progress_percent, checkbox_count) for a task's activities."""
+    checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
+    total = len(checkboxes)
+    if total == 0:
+        return 0, 0
+    checked = sum(1 for a in checkboxes if a.checked)
+    return round(checked / total * 100), total
+
+
+# ── 서버 시작 시 기존 task progress/status 일괄 동기화 ──
+def _sync_all_task_progress():
+    """기존 task들의 checkbox progress 기반 status를 일괄 보정."""
+    db = SessionLocal()
+    try:
+        task_ids_with_cb = (
+            db.query(TaskActivityModel.task_id)
+            .filter(TaskActivityModel.block_type.in_(["checkbox", None]))
+            .distinct()
+            .all()
+        )
+        task_ids = {r[0] for r in task_ids_with_cb}
+        if not task_ids:
+            return
+        state = load_state()
+        fixed = 0
+        for tid in task_ids:
+            task = db.query(Task).filter(Task.id == tid, Task.archived_at.is_(None)).first()
+            if not task or task.status == "hold":
+                continue
+            activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == tid).all()
+            progress, cb_total = _compute_task_progress(activities)
+            if cb_total == 0:
+                continue
+            expected_status = _derive_task_status(task.status, progress)
+            meta = get_task_meta(state, tid)
+            if task.status != expected_status or meta.get("progress", 0) != progress:
+                task.status = expected_status
+                task.progress = progress
+                set_task_meta(state, tid, {"progress": progress})
+                fixed += 1
+        if fixed > 0:
+            db.commit()
+            save_state(state)
+            print(f"[startup] Synced {fixed} task(s) progress/status")
+    finally:
+        db.close()
+
+_sync_all_task_progress()
+
 def get_user_meta(state: dict, user_id: int) -> dict:
     return state.get("user_meta", {}).get(str(user_id), {})
 
@@ -861,6 +1020,27 @@ def get_user_project_ids(db: Session, state: dict, user_id: int) -> set:
 
     return pids
 
+def get_user_public_project_ids(db: Session, state: dict, user_id: int) -> set:
+    """사용자가 속한 space의 공개 프로젝트 ID 집합 반환"""
+    # 사용자가 속한 space 목록
+    user_space_ids = {
+        sm.space_id for sm in
+        db.query(SpaceMember).filter(SpaceMember.user_id == int(user_id)).all()
+    }
+    if not user_space_ids:
+        return set()
+    # 해당 space에 속한 공개 프로젝트
+    public_projects = db.query(Project).filter(
+        Project.space_id.in_(user_space_ids),
+        Project.archived_at.is_(None),
+    ).all()
+    pids = set()
+    for p in public_projects:
+        meta = get_project_meta(state, p.id)
+        if meta.get("visibility") == "public":
+            pids.add(p.id)
+    return pids
+
 def check_project_access(db: Session, state: dict, project_id: int, user_id: int):
     # admin pass
     if is_admin_like_role(get_user_role(db, user_id)):
@@ -886,8 +1066,14 @@ def check_project_access(db: Session, state: dict, project_id: int, user_id: int
     if any(int(m.get("project_id")) == int(project_id) and int(m.get("user_id")) == int(user_id) for m in state.get("project_members", [])):
         return True
 
-    if meta.get("visibility") == "public":
-        return True
+    # 공개 프로젝트: 같은 space 소속 사용자만 조회 허용
+    if meta.get("visibility") == "public" and p.space_id:
+        is_space_member = db.query(SpaceMember).filter(
+            SpaceMember.space_id == p.space_id,
+            SpaceMember.user_id == int(user_id),
+        ).first()
+        if is_space_member:
+            return True
 
     raise HTTPException(status_code=403, detail="Access denied: you are not a member of this project")
 
@@ -1012,9 +1198,8 @@ def get_all_data(user_id: Optional[int] = None, db: Session = Depends(get_db)):
         is_admin = is_admin_like_role(role)
         if not is_admin:
             authorized_pids = get_user_project_ids(db, state, user_id)
-            # public 프로젝트도 허용
-            public_pids = {p["id"] for p in projects if p.get("visibility") == "public"}
-            authorized_pids |= public_pids
+            # 같은 space 소속 공개 프로젝트도 허용
+            authorized_pids |= get_user_public_project_ids(db, state, user_id)
 
             projects = [p for p in projects if p["id"] in authorized_pids]
             tasks = [
@@ -1237,9 +1422,10 @@ def get_projects(user_id: Optional[int] = None, space_id: Optional[int] = None, 
 
     if user_id:
         accessible_project_ids = get_user_project_ids(db, state, user_id)
+        accessible_project_ids |= get_user_public_project_ids(db, state, user_id)
         projects = [
             p for p in projects
-            if p["id"] in accessible_project_ids or p.get("visibility") == "public"
+            if p["id"] in accessible_project_ids
         ]
 
     return {"projects": projects}
@@ -1762,12 +1948,7 @@ def get_tasks(
     # user 권한 기반 필터: 멤버인 프로젝트의 모든 task + public 프로젝트 task
     if user_id:
         user_project_ids = get_user_project_ids(db, state, user_id)
-        public_pids = {
-            p.id
-            for p in db.query(Project).filter(Project.archived_at.is_(None)).all()
-            if get_project_meta(state, p.id).get("visibility") == "public"
-        }
-        user_project_ids |= public_pids
+        user_project_ids |= get_user_public_project_ids(db, state, user_id)
 
         tasks = [
             t for t in tasks
@@ -1847,6 +2028,14 @@ def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: 
         if k in data:
             setattr(t, k, data[k])
 
+    # progress도 DB 컬럼과 사이드카 meta에 함께 쓴다 (두 곳의 진실이
+    # 어긋나서 체크박스/드래그 간 진행률이 튀는 현상 방지).
+    if "progress" in data and data["progress"] is not None:
+        try:
+            t.progress = max(0, min(100, int(data["progress"])))
+        except Exception:
+            pass
+
     t.updated_at = datetime.now()
 
     # sidecar fields
@@ -1861,6 +2050,14 @@ def update_task(task_id: int, updates: TaskUpdate, request: Request = None, db: 
 
     db.commit()
     db.refresh(t)
+    # 사용자가 직접 status 또는 progress를 변경한 경우 자동 동기화를
+    # 건너뛰어 수동 변경(드래그/명시적 진행률 입력)을 우선한다. 이렇게 해야
+    # 드래그 직후 _sync_task_progress가 체크박스 기준으로 다시 덮어써서
+    # 상태가 되돌아가는 현상이 발생하지 않는다.
+    if "status" not in data and "progress" not in data:
+        _sync_task_progress(db, task_id)
+        db.refresh(t)
+    state = load_state()
     return task_dict(t, state)
 
 @app.delete("/api/tasks/{task_id}")
@@ -1917,12 +2114,28 @@ def create_attachment(task_id: int, attachment: AttachmentCreate, db: Session = 
     return new_att
 
 @app.delete("/api/attachments/{attachment_id}")
-def delete_attachment(attachment_id: int):
+def delete_attachment(attachment_id: int, db: Session = Depends(get_db)):
+    """첨부파일 삭제. S3 + 로컬 + DB + sidecar 모두에서 삭제."""
     state = load_state()
-    # If it's a file attachment, delete the physical file too
     att = next((a for a in state.get("attachments", []) if int(a.get("id")) == attachment_id), None)
+
+    # file 타입일 때만 S3/로컬 파일 정리 (S3 import를 여기서만 수행)
     if att and att.get("type") == "file" and att.get("stored_name"):
         task_id = att.get("task_id")
+        try:
+            from backend.app.utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
+            if is_s3_configured():
+                s3_key = att.get("s3_key", "")
+                if not s3_key and task_id:
+                    s3_key = get_attachment_s3_key(
+                        att.get("filename", ""), att["stored_name"], "task", int(task_id)
+                    )
+                if s3_key:
+                    delete_from_s3(s3_key)
+        except Exception as e:
+            logging.getLogger("main").warning(f"S3 파일 삭제 실패 (무시): {e}")
+
+        # 로컬 파일도 있으면 삭제
         if task_id:
             file_path = os.path.join(UPLOAD_DIR, f"tasks/{task_id}", att["stored_name"])
             if os.path.exists(file_path):
@@ -1930,8 +2143,18 @@ def delete_attachment(attachment_id: int):
                     os.remove(file_path)
                 except Exception:
                     pass
+
+    # sidecar에서 삭제
     state["attachments"] = [a for a in state.get("attachments", []) if int(a.get("id")) != attachment_id]
     save_state(state)
+
+    # DB에서도 삭제 (URL 첨부 등 DB에 레코드가 있을 수 있음)
+    try:
+        db.query(AttachmentModel).filter(AttachmentModel.id == attachment_id).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+
     return {"message": "Attachment deleted"}
 
 
@@ -1943,7 +2166,10 @@ async def upload_task_file(
     request: Request = None,
     db: Session = Depends(get_db),
 ):
-    """Upload a file attachment to a task."""
+    """Upload a file attachment to a task. S3 우선, S3 실패 시 로컬 저장."""
+    from backend.app.utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
+    import logging as _logging
+
     state = load_state()
     t = db.query(Task).filter(Task.id == task_id).first()
     if not t:
@@ -1953,27 +2179,52 @@ async def upload_task_file(
     if user_id and user_id > 0:
         check_task_edit_permission(db, state, t.project_id, user_id)
 
-    task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
-    os.makedirs(task_dir, exist_ok=True)
-
     ext = os.path.splitext(file.filename or "")[1]
     stored_name = f"{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(task_dir, stored_name)
+    original_filename = file.filename or stored_name
 
     contents = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    s3_key = ""
+    saved_to_local = False
+
+    if is_s3_configured():
+        # S3 업로드 시도
+        s3_result = upload_attachment_bytes_to_s3(
+            data=contents,
+            original_filename=original_filename,
+            stored_name=stored_name,
+            context_type="task",
+            context_id=task_id,
+        )
+        if s3_result["success"]:
+            s3_key = s3_result["s3_key"]
+        else:
+            # S3 실패 → 로컬에 저장 (데이터 유실 방지)
+            _logging.getLogger("main").warning(f"S3 업로드 실패, 로컬 저장으로 전환: {s3_result['error']}")
+            task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, stored_name), "wb") as f:
+                f.write(contents)
+            saved_to_local = True
+    else:
+        # S3 미설정 → 로컬 저장
+        task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
+        os.makedirs(task_dir, exist_ok=True)
+        with open(os.path.join(task_dir, stored_name), "wb") as f:
+            f.write(contents)
+        saved_to_local = True
 
     attachments = state.get("attachments", [])
     new_att = {
         "id": next_id(attachments),
         "task_id": task_id,
         "url": f"/api/tasks/{task_id}/files/{stored_name}/download",
-        "filename": file.filename or stored_name,
+        "filename": original_filename,
         "stored_name": stored_name,
         "type": "file",
         "size": len(contents),
         "created_at": datetime.now().isoformat(),
+        "s3_key": s3_key,
     }
     attachments.append(new_att)
     state["attachments"] = attachments
@@ -1983,7 +2234,10 @@ async def upload_task_file(
 
 @app.get("/api/tasks/{task_id}/files/{stored_name}/download")
 def download_task_file(task_id: int, stored_name: str):
-    """Download a file attachment from a task."""
+    """Download a file attachment from a task. S3 우선, 없으면 로컬 fallback."""
+    from fastapi.responses import Response
+    from backend.app.utils.s3.s3_utils import download_from_s3, is_s3_configured
+
     state = load_state()
     att = next(
         (a for a in state.get("attachments", [])
@@ -1993,15 +2247,52 @@ def download_task_file(task_id: int, stored_name: str):
     if not att:
         raise HTTPException(status_code=404, detail="File not found")
 
-    file_path = os.path.join(UPLOAD_DIR, "tasks", str(task_id), stored_name)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found on disk")
+    filename = att.get("filename", stored_name)
+    s3_key = att.get("s3_key", "")
 
-    return FileResponse(
-        path=file_path,
-        filename=att.get("filename", stored_name),
-        media_type="application/octet-stream",
-    )
+    # 1) S3에서 다운로드 시도
+    if s3_key and is_s3_configured():
+        data = download_from_s3(s3_key)
+        if data is not None:
+            # RFC 5987 인코딩으로 한글 파일명 지원
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 2) s3_key가 없지만 S3 설정 + 메타데이터로 key 재구성 시도
+    if not s3_key and is_s3_configured():
+        from backend.app.utils.s3.s3_utils import get_attachment_s3_key
+        reconstructed_key = get_attachment_s3_key(filename, stored_name, "task", task_id)
+        data = download_from_s3(reconstructed_key)
+        if data is not None:
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 3) 로컬 fallback
+    file_path = os.path.join(UPLOAD_DIR, "tasks", str(task_id), stored_name)
+    if os.path.exists(file_path):
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="application/octet-stream",
+        )
+
+    raise HTTPException(status_code=404, detail="File not found")
 
 # =========================
 # Project Files (실파일 업로드 / sidecar metadata)
@@ -2028,32 +2319,61 @@ async def upload_project_file(
     user_id: int = Query(default=1),
     db: Session = Depends(get_db),
 ):
+    """프로젝트 파일 업로드. S3 우선, S3 실패 시 로컬 저장."""
+    from backend.app.utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
+    import logging as _logging
+
     state = load_state()
 
     p = db.query(Project).filter(Project.id == project_id, Project.archived_at.is_(None)).first()
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    project_dir = os.path.join(UPLOAD_DIR, str(project_id))
-    os.makedirs(project_dir, exist_ok=True)
-
     ext = os.path.splitext(file.filename or "")[1]
     stored_name = f"{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(project_dir, stored_name)
+    original_filename = file.filename or stored_name
 
     contents = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    s3_key = ""
+    saved_to_local = False
+
+    if is_s3_configured():
+        # S3 업로드 시도
+        s3_result = upload_attachment_bytes_to_s3(
+            data=contents,
+            original_filename=original_filename,
+            stored_name=stored_name,
+            context_type="project",
+            context_id=project_id,
+        )
+        if s3_result["success"]:
+            s3_key = s3_result["s3_key"]
+        else:
+            # S3 실패 → 로컬에 저장 (데이터 유실 방지)
+            _logging.getLogger("main").warning(f"S3 업로드 실패, 로컬 저장으로 전환: {s3_result['error']}")
+            project_dir = os.path.join(UPLOAD_DIR, str(project_id))
+            os.makedirs(project_dir, exist_ok=True)
+            with open(os.path.join(project_dir, stored_name), "wb") as f:
+                f.write(contents)
+            saved_to_local = True
+    else:
+        # S3 미설정 → 로컬 저장
+        project_dir = os.path.join(UPLOAD_DIR, str(project_id))
+        os.makedirs(project_dir, exist_ok=True)
+        with open(os.path.join(project_dir, stored_name), "wb") as f:
+            f.write(contents)
+        saved_to_local = True
 
     project_files = state.get("project_files", [])
     new_file = {
         "id": next_id(project_files),
         "project_id": project_id,
-        "filename": file.filename or stored_name,
+        "filename": original_filename,
         "stored_name": stored_name,
         "size": len(contents),
         "uploader_id": user_id,
         "created_at": datetime.now().isoformat(),
+        "s3_key": s3_key,
     }
     project_files.append(new_file)
     state["project_files"] = project_files
@@ -2063,6 +2383,10 @@ async def upload_project_file(
 
 @app.get("/api/projects/{project_id}/files/{file_id}/download")
 def download_project_file(project_id: int, file_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """프로젝트 파일 다운로드. S3 우선, 없으면 로컬 fallback."""
+    from fastapi.responses import Response
+    from backend.app.utils.s3.s3_utils import download_from_s3, is_s3_configured, get_attachment_s3_key
+
     state = load_state()
 
     if user_id:
@@ -2075,18 +2399,57 @@ def download_project_file(project_id: int, file_id: int, user_id: Optional[int] 
     if not pf:
         raise HTTPException(status_code=404, detail="File not found")
 
-    file_path = os.path.join(UPLOAD_DIR, str(project_id), pf["stored_name"])
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found on disk")
+    filename = pf["filename"]
+    stored_name = pf["stored_name"]
+    s3_key = pf.get("s3_key", "")
 
-    return FileResponse(
-        path=file_path,
-        filename=pf["filename"],
-        media_type="application/octet-stream",
-    )
+    # 1) S3에서 다운로드 시도
+    if s3_key and is_s3_configured():
+        data = download_from_s3(s3_key)
+        if data is not None:
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 2) s3_key 없지만 S3 설정 시 key 재구성
+    if not s3_key and is_s3_configured():
+        reconstructed_key = get_attachment_s3_key(filename, stored_name, "project", project_id)
+        data = download_from_s3(reconstructed_key)
+        if data is not None:
+            import urllib.parse
+            encoded_filename = urllib.parse.quote(filename)
+            return Response(
+                content=data,
+                media_type="application/octet-stream",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+    # 3) 로컬 fallback
+    file_path = os.path.join(UPLOAD_DIR, str(project_id), stored_name)
+    if os.path.exists(file_path):
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="application/octet-stream",
+        )
+
+    raise HTTPException(status_code=404, detail="File not found")
 
 @app.delete("/api/projects/{project_id}/files/{file_id}")
 def delete_project_file(project_id: int, file_id: int):
+    """프로젝트 파일 삭제. S3 + 로컬 모두에서 삭제."""
+    from backend.app.utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
+
     state = load_state()
     project_files = state.get("project_files", [])
 
@@ -2094,6 +2457,15 @@ def delete_project_file(project_id: int, file_id: int):
     if not pf:
         raise HTTPException(status_code=404, detail="File not found")
 
+    # S3 삭제
+    if is_s3_configured():
+        s3_key = pf.get("s3_key", "")
+        if not s3_key:
+            s3_key = get_attachment_s3_key(pf["filename"], pf["stored_name"], "project", project_id)
+        if s3_key:
+            delete_from_s3(s3_key)
+
+    # 로컬 파일도 있으면 삭제 (기존 파일 정리)
     file_path = os.path.join(UPLOAD_DIR, str(project_id), pf["stored_name"])
     if os.path.exists(file_path):
         try:
@@ -2460,6 +2832,40 @@ def get_mentions(user_id: int = Query(...), db: Session = Depends(get_db)):
                 "project_name": project.name if project else "Unknown",
             })
 
+    # ── TaskActivity 멘션 추가 (체크 완료된 항목은 제외) ──
+    activity_mentions = db.query(TaskActivityMention).filter(TaskActivityMention.user_id == user_id).all()
+    for am in activity_mentions:
+        activity = db.query(TaskActivityModel).filter(TaskActivityModel.id == am.activity_id).first()
+        if not activity:
+            continue
+        # 체크박스 타입이고 완료된 항목은 멘션에서 제외
+        if (activity.block_type or "checkbox") == "checkbox" and activity.checked:
+            continue
+        task = db.query(Task).filter(Task.id == activity.task_id, Task.archived_at.is_(None)).first()
+        if not task:
+            continue
+        project = projects_map.get(task.project_id)
+        if not project:
+            continue
+        # Strip HTML for display
+        import re as _re_html
+        plain_content = _re_html.sub(r'<[^>]+>', '', activity.content or '')
+        author_id = task.project_id  # 작업노트는 author가 없으므로 task 정보로 대체
+        result.append({
+            "id": f"activity-{activity.id}",
+            "project_id": task.project_id,
+            "author_id": 0,
+            "content": plain_content,
+            "created_at": activity.created_at.isoformat() if activity.created_at else "",
+            "author_name": f"작업노트 [{task.title}]",
+            "author_color": "#7C3AED",
+            "project_name": project.name if project else "Unknown",
+            "mentioned_user_ids": [user_id],
+            "source": "activity",
+            "task_id": task.id,
+            "task_title": task.title,
+        })
+
     result.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return {"mentions": result}
 
@@ -2521,7 +2927,7 @@ def get_roadmap(
         "name": project.get("name", ""),
         "start_date": min(start_dates) if start_dates else None,
         "due_date": max(due_dates) if due_dates else None,
-        "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
+        "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if project_progress > 0 else "todo"),
         "progress": project_progress,
         "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
         "children": [],
@@ -2549,7 +2955,7 @@ def get_roadmap(
             "name": sp.get("name", ""),
             "start_date": min(sp_starts) if sp_starts else None,
             "due_date": max(sp_dues) if sp_dues else None,
-            "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
+            "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_progress > 0 else "todo"),
             "progress": sp_progress,
             "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_progress < 100),
             "children": [],
@@ -2612,8 +3018,8 @@ def get_global_roadmap(
 
     # 사용자가 멤버인 프로젝트만 표시 (admin이어도 멤버 기준)
     authorized_pids = get_user_project_ids(db, state, user_id)
-    public_pids = {p["id"] for p in all_projects if p.get("visibility") == "public"}
-    accessible = authorized_pids | public_pids
+    authorized_pids |= get_user_public_project_ids(db, state, user_id)
+    accessible = authorized_pids
     projects = [p for p in all_projects if p["id"] in accessible]
 
     task_rows = db.query(Task).filter(Task.archived_at.is_(None)).all()
@@ -2648,7 +3054,7 @@ def get_global_roadmap(
             "name": project.get("name", ""),
             "start_date": min(start_dates) if start_dates else None,
             "due_date": max(due_dates) if due_dates else None,
-            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if done > 0 else "todo"),
+            "status": "done" if project_progress == 100 and total > 0 else ("in_progress" if project_progress > 0 else "todo"),
             "progress": project_progress,
             "overdue": bool(due_dates and max(due_dates) < today_str and project_progress < 100),
             "children": [],
@@ -2676,7 +3082,7 @@ def get_global_roadmap(
                 "name": sp.get("name", ""),
                 "start_date": min(sp_starts) if sp_starts else None,
                 "due_date": max(sp_dues) if sp_dues else None,
-                "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_done > 0 else "todo"),
+                "status": "done" if sp_progress == 100 and sp_total > 0 else ("in_progress" if sp_progress > 0 else "todo"),
                 "progress": sp_progress,
                 "overdue": bool(sp_dues and max(sp_dues) < today_str and sp_progress < 100),
                 "children": [],
@@ -2833,6 +3239,32 @@ def get_task_activities(task_id: int, db: Session = Depends(get_db)):
         for a in activities
     ]}
 
+def _sync_activity_mentions(db: Session, activity_id: int, content: str):
+    """Parse @mentions from activity content (strip HTML) and sync TaskActivityMention records."""
+    import re as _re
+    # Strip HTML tags to get plain text
+    plain = _re.sub(r'<[^>]+>', ' ', content or '')
+    mention_texts = _re.findall(r'@(\S+)', plain)
+    if not mention_texts:
+        db.query(TaskActivityMention).filter(TaskActivityMention.activity_id == activity_id).delete()
+        return
+    # Find matching users
+    matched_user_ids = set()
+    for mt in mention_texts:
+        mt_lower = mt.lower()
+        user = db.query(User).filter(
+            User.is_active == True,
+            (func.lower(User.loginid) == mt_lower) | (func.lower(User.username) == mt_lower)
+        ).first()
+        if user:
+            matched_user_ids.add(user.id)
+    # Sync: remove old, add new
+    existing = {m.user_id for m in db.query(TaskActivityMention).filter(TaskActivityMention.activity_id == activity_id).all()}
+    for uid in matched_user_ids - existing:
+        db.add(TaskActivityMention(activity_id=activity_id, user_id=uid))
+    for uid in existing - matched_user_ids:
+        db.query(TaskActivityMention).filter(TaskActivityMention.activity_id == activity_id, TaskActivityMention.user_id == uid).delete()
+
 @app.post("/api/tasks/{task_id}/activities")
 def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -2861,6 +3293,8 @@ def create_task_activity(task_id: int, body: dict = Body(...), db: Session = Dep
     db.commit()
     db.refresh(activity)
     _sync_task_progress(db, task_id)
+    _sync_activity_mentions(db, activity.id, activity.content)
+    db.commit()
     return {
         "id": activity.id,
         "task_id": activity.task_id,
@@ -2895,6 +3329,9 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
     db.commit()
     db.refresh(activity)
     _sync_task_progress(db, activity.task_id)
+    if "content" in body:
+        _sync_activity_mentions(db, activity.id, activity.content)
+        db.commit()
     return {
         "id": activity.id,
         "task_id": activity.task_id,
@@ -2929,15 +3366,42 @@ def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 def _sync_task_progress(db: Session, task_id: int):
-    """Recalculate task progress from checkbox activities only."""
-    activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
-    checkboxes = [a for a in activities if (a.block_type or "checkbox") == "checkbox"]
-    if not checkboxes:
+    """Recalculate task progress from checkbox activities and auto-sync status.
+
+    진행률/파생 status 정책은 _derive_task_status/_compute_task_progress 참고.
+    체크박스 활동이 있으면 그 기준으로 동기화한다.
+    v3.4: 체크박스가 없고 연결된 SheetExecution이 있으면 그 시트들의 진행률
+          평균으로 task progress를 동기화한다 (점검표만 수행하는 task 케이스).
+    """
+    if task_id is None:
         return
-    total = len(checkboxes)
-    checked = sum(1 for a in checkboxes if a.checked)
-    progress = round(checked / total * 100) if total > 0 else 0
-    db.query(Task).filter(Task.id == task_id).update({"progress": progress})
+    activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
+    progress, cb_total = _compute_task_progress(activities)
+
+    if cb_total == 0:
+        # 체크박스 활동이 없을 때만 시트 진행률로 폴백
+        sheets = db.query(SheetExecution).filter(
+            SheetExecution.task_id == task_id,
+            SheetExecution.status.in_(("in_progress", "completed")),
+        ).all()
+        if not sheets:
+            return
+        total = 0
+        for s in sheets:
+            if s.status == "completed":
+                total += 100
+            else:
+                total += int(s.progress or 0)
+        progress = round(total / len(sheets))
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        return
+    expected_status = _derive_task_status(task.status, progress)
+    updates: dict = {"progress": progress}
+    if expected_status != task.status:
+        updates["status"] = expected_status
+    db.query(Task).filter(Task.id == task_id).update(updates)
     db.commit()
     # Also sync to sidecar task_meta
     state = load_state()
@@ -3466,6 +3930,16 @@ def _resolve_question_scope(query: str, task_details: list, today) -> dict:
     # 2) 기간 매칭
     window = _parse_time_window_from_query(query, today)
 
+    # 2-1) 기간 키워드가 있으면 window가 없어도 schedule로 처리 시도
+    schedule_keywords = ["일정", "마감", "스케줄", "schedule", "deadline", "기한"]
+    has_schedule_keyword = any(kw in query_lower for kw in schedule_keywords)
+
+    # "마감 일정" 같은 경우 이번달로 기본 설정
+    if has_schedule_keyword and not window and not query_matched_tasks:
+        # "다음주 마감" 같은 경우는 이미 window가 잡히므로 여기는 fallback
+        # 기간 키워드만 있고 시간 표현이 없으면 이번달로 기본 설정
+        window = _month_window(today.year, today.month)
+
     # 3) 전체 현황 키워드
     is_full_overview = any(kw in query_lower for kw in [
         "전체 현황", "프로젝트 현황", "전체 요약", "전체 상태", "전체 진행",
@@ -3679,26 +4153,47 @@ def _build_ai_free_question_context(
 
     elif scope_type == "schedule" and window:
         ws, we = window
+        # 기간에 겹치는 task + 날짜 미설정이지만 진행 중인 task도 포함
         filtered_by_time = [t for t in task_details if _task_overlaps_window(t, ws, we)]
+        no_date_active = [
+            t for t in task_details
+            if not t.get("start_date") and not t.get("due_date")
+            and t.get("status") in ("in_progress", "todo")
+        ]
         prompt_tasks = filtered_by_time
         scope_hint = (
             f"\n[기간 제약]\n"
             f"사용자 질문이 요청한 기간은 {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()} 입니다.\n"
-            f"이 기간에 해당하는 Task만 관련 Task로 다루고, 기간 밖 Task는 절대 언급하지 마세요.\n"
+            f"이 기간에 해당하는 Task를 중심으로 답변하세요.\n"
             f"각 Task의 설명/작업노트/일정/담당자를 상세하게 답변하세요.\n"
+            f"날짜가 설정되지 않았지만 진행 중/대기 상태인 Task가 있다면 별도로 안내하세요.\n"
+            f"\n[중요] 아래 컨텍스트에 있는 모든 Task를 빠짐없이 답변에 포함하세요.\n"
+            f"일정이 있으면 날짜순으로 정렬해서 보여주세요.\n"
         )
         # 기간 질문: project members
         context_members = _get_project_member_names(members, users_map)
 
         task_ctx_lines = []
-        for t in filtered_by_time[:30]:
+        for t in filtered_by_time[:50]:
             task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=True))
+
+        # 날짜 미설정 활성 task도 별도 섹션으로 추가
+        no_date_lines = []
+        for t in no_date_active[:20]:
+            no_date_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=False))
 
         proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
         context_str = f"""{proj_ctx}
 
 [기간 내 Task 상세 정보 ({ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()})]
+총 {len(filtered_by_time)}개 Task가 이 기간에 해당합니다.
 {chr(10).join(task_ctx_lines) if task_ctx_lines else "해당 기간에 Task 없음"}
+"""
+        if no_date_lines:
+            context_str += f"""
+[날짜 미설정 활성 Task ({len(no_date_active)}개)]
+아래 Task들은 일정이 미설정이지만 진행 중/대기 상태입니다.
+{chr(10).join(no_date_lines)}
 """
 
     elif scope_type == "project" or is_full_overview:
@@ -3757,7 +4252,7 @@ def _build_ai_free_question_context(
         proj_ctx = _fetch_project_context(db, project, sub_projects, members, users_map, task_details, project_notes)
 
         task_ctx_lines = []
-        for t in task_details[:40]:
+        for t in task_details[:50]:
             task_ctx_lines.append(_fetch_task_context_detail(t, users_map, db, include_full_text=True))
 
         context_str = f"""{proj_ctx}
@@ -3912,15 +4407,27 @@ def generate_project_ai_query(
             "제목만 나열하지 말고, 관련 상세 내용을 함께 설명하세요.\n"
         )
 
+    # 기간 질문인 경우 조회 범위 명시 추가
+    date_range_note = ""
+    if scope["scope_type"] == "schedule" and ws and we:
+        date_range_note = (
+            f"\n[조회 기준]\n"
+            f"오늘 날짜: {today.isoformat()}\n"
+            f"조회 기간: {ws.isoformat()} ~ {(we - timedelta(days=1)).isoformat()}\n"
+            f"컨텍스트에 포함된 Task 수: {len(prompt_tasks)}개\n"
+        )
+
     prompt = f"""당신은 전문 프로젝트 매니저 보조 AI입니다.
 아래 컨텍스트를 바탕으로 사용자의 질문에 답변해주세요.
-{scope_hint}
+{scope_hint}{date_range_note}
 [핵심 원칙]
 - 질문 범위를 먼저 파악하고, 그 범위 안에서만 답변하세요.
-- 전체 Task 나열은 금지입니다. 질문과 관련된 Task만 선별하세요.
+- 기간 관련 질문이면 컨텍스트에 있는 모든 Task를 빠짐없이 포함하세요. 절대 임의로 생략하지 마세요.
+- 일정 정리 요청이면 날짜순(시작일 또는 마감일 기준)으로 정렬하세요.
 - {detail_instruction}
 - 특정 Task 질문이면 해당 Task의 상태/일정/담당자/작업노트/설명/첨부자료를 중심으로 답변하세요.
 - Task 질문일 때 담당자는 해당 Task의 assignee만 언급하세요. 프로젝트 전체 팀원을 보여주지 마세요.
+- 답변 시작 부분에 "조회 기간" 또는 "기준"을 간단히 명시하세요.
 
 [컨텍스트]
 {context_str}
@@ -4643,10 +5150,13 @@ class SpaceCreate(BaseModel):
     slug: Optional[str] = None
     description: Optional[str] = None
     member_user_ids: Optional[List[int]] = None
+    purpose: Optional[str] = "project_management"
+    # project_management / equipment_ops / process_change / sw_dev / integrated_ops / custom
 
 class SpaceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    purpose: Optional[str] = None
 
 def _space_dict(s, db: Session) -> dict:
     members = db.query(SpaceMember, User).join(User, SpaceMember.user_id == User.id).filter(SpaceMember.space_id == s.id).all()
@@ -4660,6 +5170,7 @@ def _space_dict(s, db: Session) -> dict:
         "is_active": s.is_active,
         "created_at": iso(s.created_at) if s.created_at else None,
         "warned_at": iso(s.warned_at) if s.warned_at else None,
+        "purpose": getattr(s, "purpose", None) or "project_management",
         "project_count": project_count,
         "member_count": len(members),
         "members": [
@@ -4713,7 +5224,7 @@ def create_space(body: SpaceCreate, user_id: int = Query(...), db: Session = Dep
     existing = db.query(Space).filter(Space.slug == slug).first()
     if existing:
         slug = f"{slug}-{int(datetime.utcnow().timestamp()) % 10000}"
-    space = Space(name=body.name, slug=slug, description=body.description, created_by=user_id)
+    space = Space(name=body.name, slug=slug, description=body.description, created_by=user_id, purpose=body.purpose or "project_management")
     db.add(space)
     db.commit()
     db.refresh(space)
@@ -4764,6 +5275,8 @@ def update_space(space_id: int, body: SpaceUpdate, user_id: int = Query(...), db
         space.slug = new_slug
     if body.description is not None:
         space.description = body.description
+    if body.purpose is not None:
+        space.purpose = body.purpose
     db.commit()
     return _space_dict(space, db)
 
@@ -4791,7 +5304,8 @@ def get_unassigned_projects(user_id: int = Query(...), db: Session = Depends(get
     projects = [project_dict(p, state) for p in rows]
     if user_id:
         accessible = get_user_project_ids(db, state, user_id)
-        projects = [p for p in projects if p["id"] in accessible or p.get("visibility") == "public"]
+        accessible |= get_user_public_project_ids(db, state, user_id)
+        projects = [p for p in projects if p["id"] in accessible]
     return {"projects": projects}
 
 @app.post("/api/spaces/{space_id}/members")
@@ -4879,6 +5393,21 @@ def request_join_space(space_id: int, user_id: int = Query(...), message: Option
 @app.get("/api/spaces/{space_id}/join-requests")
 def get_space_join_requests(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
     _require_space_admin(db, space_id, user_id)
+    reqs = db.query(SpaceJoinRequest, User).join(User, SpaceJoinRequest.user_id == User.id).filter(
+        SpaceJoinRequest.space_id == space_id, SpaceJoinRequest.status == "pending"
+    ).all()
+    return {"requests": [
+        {"id": r.id, "user_id": r.user_id, "username": u.username, "loginid": u.loginid, "message": r.message, "created_at": iso(r.created_at)}
+        for r, u in reqs
+    ]}
+
+@app.get("/api/spaces/{space_id}/join-requests-safe")
+def get_space_join_requests_safe(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """join-requests 조회 — 권한 없으면 빈 배열 반환 (기능 차단 방지)"""
+    try:
+        _require_space_admin(db, space_id, user_id)
+    except HTTPException:
+        return {"requests": []}
     reqs = db.query(SpaceJoinRequest, User).join(User, SpaceJoinRequest.user_id == User.id).filter(
         SpaceJoinRequest.space_id == space_id, SpaceJoinRequest.status == "pending"
     ).all()
@@ -5079,6 +5608,1281 @@ def delete_user_shortcut(shortcut_id: int, user_id: int = Query(...), db: Sessio
     db.commit()
     return {"message": "Shortcut deleted"}
 
+
+# =========================
+# S3 Backup APIs
+# =========================
+@app.post("/api/admin/backup/db")
+def manual_backup_db(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """수동 DB 백업 실행 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from app.services.backup_scheduler import backup_database
+    result = backup_database()
+    return result
+
+@app.post("/api/admin/backup/files")
+def manual_backup_files(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """수동 첨부파일 S3 동기화 실행 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from app.services.backup_scheduler import sync_uploads_to_s3
+    result = sync_uploads_to_s3()
+    return result
+
+@app.get("/api/admin/backup/status")
+def get_backup_status(user_id: int = Query(...), db: Session = Depends(get_db)):
+    """백업 상태/로그 조회 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from backend.app.utils.s3.s3_utils import is_s3_configured, list_s3_files
+    from app.services.backup_scheduler import BACKUP_LOG_DIR, BACKUP_HOUR, BACKUP_MINUTE
+
+    # 최근 로그 파일 읽기
+    recent_logs = []
+    log_dir = BACKUP_LOG_DIR
+    if os.path.exists(log_dir):
+        log_files = sorted(
+            [f for f in os.listdir(log_dir) if f.startswith("backup_") and f.endswith(".log")],
+            reverse=True
+        )[:3]
+        for lf in log_files:
+            try:
+                with open(os.path.join(log_dir, lf), "r", encoding="utf-8") as f:
+                    lines = f.readlines()[-20:]  # 최근 20줄
+                    recent_logs.extend([l.strip() for l in lines])
+            except Exception:
+                pass
+
+    # S3 백업 파일 목록
+    s3_db_files = []
+    s3_attachment_count = 0
+    if is_s3_configured():
+        try:
+            s3_db_files = list_s3_files("db-backups/")[:20]
+            s3_attachments = list_s3_files("files/")
+            s3_attachment_count = len(s3_attachments)
+        except Exception:
+            pass
+
+    return {
+        "s3_configured": is_s3_configured(),
+        "schedule": f"{BACKUP_HOUR:02d}:{BACKUP_MINUTE:02d} KST daily",
+        "recent_logs": recent_logs,
+        "s3_db_backups": s3_db_files,
+        "s3_attachment_count": s3_attachment_count,
+    }
+
+@app.get("/api/admin/s3/files")
+def list_s3_storage(
+    prefix: str = Query(default=""),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """S3 파일 목록 조회 (super admin만)"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
+        raise HTTPException(status_code=403, detail="Super admin only")
+
+    from backend.app.utils.s3.s3_utils import list_s3_files, is_s3_configured
+    if not is_s3_configured():
+        return {"files": [], "message": "S3 not configured"}
+
+    files = list_s3_files(prefix)
+    return {"files": files, "total": len(files)}
+
+
+# =========================
+# v3.0 공간 목적 기반 Overview API
+# =========================
+
+@app.get("/api/spaces/{space_id}/overview")
+def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """공간 목적에 맞는 Overview 데이터 반환"""
+    space = db.query(Space).filter(Space.id == space_id, Space.is_active == True).first()
+    if not space:
+        raise HTTPException(404, "Space not found")
+    member = db.query(SpaceMember).filter(SpaceMember.space_id == space_id, SpaceMember.user_id == user_id).first()
+    if not member:
+        raise HTTPException(403, "접근 권한 없음")
+
+    purpose = getattr(space, "purpose", None) or "project_management"
+    state = load_state()
+    today = date.today().isoformat()
+
+    # 공통: 프로젝트 목록
+    projects = db.query(Project).filter(Project.space_id == space_id, Project.archived_at.is_(None)).all()
+    project_ids = [p.id for p in projects]
+
+    # 공통: Task 목록
+    tasks = db.query(Task).filter(Task.project_id.in_(project_ids), Task.archived_at.is_(None)).all() if project_ids else []
+
+    # 통계 계산
+    my_tasks = [t for t in tasks if user_id in (t.assignee_ids or [])]
+    overdue_tasks = [t for t in tasks if t.due_date and t.due_date < today and t.status not in ("done", "hold")]
+    today_tasks = [t for t in tasks if t.due_date == today]
+    in_progress = [t for t in tasks if t.status == "in_progress"]
+    todo_tasks = [t for t in tasks if t.status == "todo"]
+    done_tasks = [t for t in tasks if t.status == "done"]
+    hold_tasks = [t for t in tasks if t.status == "hold"]
+
+    # 이번 주 완료
+    from datetime import timedelta
+    week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+    week_done = [t for t in done_tasks if t.updated_at and t.updated_at.strftime("%Y-%m-%d") >= week_start]
+
+    # 다음 주 예정
+    next_week_start = (date.today() + timedelta(days=(7 - date.today().weekday()))).isoformat()
+    next_week_end = (date.today() + timedelta(days=(14 - date.today().weekday()))).isoformat()
+    next_week_tasks = [t for t in tasks if t.due_date and next_week_start <= t.due_date < next_week_end and t.status not in ("done",)]
+
+    # 우선순위 높은 Task
+    high_priority = [t for t in tasks if t.priority == "high" and t.status not in ("done", "hold")]
+
+    # Sheet 실행 현황
+    sheet_executions_active = db.query(SheetExecution).filter(
+        SheetExecution.space_id == space_id, SheetExecution.status == "in_progress"
+    ).all() if project_ids or True else []
+    sheet_recent_completed = db.query(SheetExecution).filter(
+        SheetExecution.space_id == space_id, SheetExecution.status == "completed"
+    ).order_by(SheetExecution.completed_at.desc()).limit(5).all()
+
+    def _task_brief(t):
+        meta = get_task_meta(state, t.id)
+        return {
+            "id": t.id, "title": t.title, "status": t.status, "priority": t.priority,
+            "due_date": t.due_date, "progress": meta.get("progress", 0),
+            "assignee_ids": t.assignee_ids or [], "project_id": t.project_id,
+        }
+
+    def _exec_brief(e):
+        pn = next((p.name for p in projects if p.id == e.project_id), None)
+        tn = next((t.title for t in tasks if t.id == e.task_id), None)
+        return {
+            "id": e.id, "title": e.title, "template_id": e.template_id,
+            "status": e.status, "progress": e.progress,
+            "equipment_name": e.equipment_name,
+            "project_name": pn, "task_name": tn,
+            "started_at": iso(e.started_at), "completed_at": iso(e.completed_at),
+        }
+
+    base = {
+        "purpose": purpose,
+        "stats": {
+            "total_projects": len(projects),
+            "total_tasks": len(tasks),
+            "my_tasks": len(my_tasks),
+            "todo": len(todo_tasks),
+            "in_progress": len(in_progress),
+            "done": len(done_tasks),
+            "hold": len(hold_tasks),
+            "overdue": len(overdue_tasks),
+        },
+        "overdue_tasks": [_task_brief(t) for t in overdue_tasks[:10]],
+        "today_tasks": [_task_brief(t) for t in today_tasks[:10]],
+        "high_priority_tasks": [_task_brief(t) for t in high_priority[:10]],
+        "in_progress_tasks": [_task_brief(t) for t in in_progress[:10]],
+        "week_done_count": len(week_done),
+        "next_week_tasks": [_task_brief(t) for t in next_week_tasks[:10]],
+        "active_sheets": [_exec_brief(e) for e in sheet_executions_active],
+        "recent_completed_sheets": [_exec_brief(e) for e in sheet_recent_completed],
+    }
+
+    # 목적별 추가 데이터
+    if purpose == "equipment_ops":
+        # 설비 운영: 미완료/이월 작업 강조
+        incomplete = [t for t in tasks if t.status in ("todo", "in_progress") and t.due_date and t.due_date < today]
+        base["incomplete_carried_over"] = [_task_brief(t) for t in incomplete[:10]]
+    elif purpose == "sw_dev":
+        # SW 개발: 개발 중 / 완료 / 대기 구분
+        base["dev_in_progress"] = [_task_brief(t) for t in in_progress[:15]]
+        base["dev_done_recent"] = [_task_brief(t) for t in week_done[:10]]
+
+    return base
+
+
+# =========================
+# v3.0 Sheet Template API
+# =========================
+
+class SheetTemplateCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: Optional[str] = "general"
+
+@app.post("/api/sheet-templates/inspect")
+async def inspect_sheet_file(
+    file: UploadFile = FastAPIFile(...),
+):
+    """업로드 전 파일의 Sheet 목록만 조회 (multi-sheet xlsx 선택 UX 용)."""
+    contents = await file.read()
+    filename = file.filename or "unknown"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext == "csv":
+        return {"multi": False, "sheet_names": ["(CSV)"], "suggested": None}
+    if ext not in ("xlsx", "xls"):
+        raise HTTPException(400, f"지원하지 않는 파일 형식: .{ext} (xlsx, csv만 지원)")
+
+    try:
+        import io as _io
+        import openpyxl
+        wb = openpyxl.load_workbook(_io.BytesIO(contents), data_only=True, read_only=True)
+        names = list(wb.sheetnames)
+        active_title = wb.active.title if wb.active is not None else (names[0] if names else None)
+        wb.close()
+    except Exception as e:
+        raise HTTPException(400, f"파일 열기 실패: {str(e)}")
+
+    try:
+        from app.services.sheet_parser import parse_excel_to_structure
+        _, meta = parse_excel_to_structure(contents, filename, active_title)
+        suggested_type = meta.get("suggested_type", "inspection")
+    except Exception:
+        suggested_type = "inspection"
+
+    return {
+        "multi": len(names) > 1,
+        "sheet_names": names,
+        "suggested": active_title,
+        "suggested_type": suggested_type,
+    }
+
+
+@app.post("/api/sheet-templates/upload")
+async def upload_sheet_template(
+    file: UploadFile = FastAPIFile(...),
+    space_id: int = Query(...),
+    name: Optional[str] = Query(None),
+    description: Optional[str] = Query(None),
+    category: Optional[str] = Query("general"),
+    sheet_name: Optional[str] = Query(None),
+    sheet_type: Optional[str] = Query("inspection"),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Excel/CSV 파일을 업로드하여 Sheet 템플릿으로 파싱 저장"""
+    from app.services.sheet_parser import parse_excel_to_structure
+
+    contents = await file.read()
+    original_filename = file.filename or "unknown.xlsx"
+
+    # 파싱
+    try:
+        structure, meta = parse_excel_to_structure(contents, original_filename, sheet_name)
+    except Exception as e:
+        raise HTTPException(400, f"파일 파싱 실패: {str(e)}")
+
+    # v3.1: 같은 구조 해시의 이전 매핑이 있으면 자동 적용
+    s_hash = meta.get("structure_hash", "")
+    prev_mapping = None
+    if s_hash:
+        prev_tpl = db.query(SheetTemplate).filter(
+            SheetTemplate.structure_hash == s_hash,
+            SheetTemplate.column_role_mapping.isnot(None),
+        ).order_by(SheetTemplate.created_at.desc()).first()
+        if prev_tpl:
+            prev_mapping = prev_tpl.column_role_mapping
+
+    template = SheetTemplate(
+        space_id=space_id,
+        name=name or os.path.splitext(original_filename)[0],
+        description=description,
+        category=category,
+        original_filename=original_filename,
+        sheet_name=meta.get("sheet_name"),
+        sheet_type=sheet_type or meta.get("suggested_type", "inspection"),
+        structure=structure,
+        row_count=meta.get("row_count", 0),
+        col_count=meta.get("col_count", 0),
+        checkable_count=meta.get("checkable_count", 0),
+        structure_hash=s_hash,
+        column_role_mapping=prev_mapping,  # 이전 매핑 자동 적용
+        created_by=user_id,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+
+    return {
+        "id": template.id,
+        "name": template.name,
+        "category": template.category,
+        "original_filename": template.original_filename,
+        "sheet_name": template.sheet_name,
+        "row_count": template.row_count,
+        "col_count": template.col_count,
+        "checkable_count": template.checkable_count,
+        "structure_hash": template.structure_hash,
+        "column_roles": structure.get("column_roles", {}),
+        "column_role_mapping": template.column_role_mapping,
+        "created_at": iso(template.created_at),
+    }
+
+
+@app.get("/api/sheet-templates")
+def list_sheet_templates(
+    space_id: int = Query(...),
+    category: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """공간 내 Sheet 템플릿 목록"""
+    q = db.query(SheetTemplate).filter(SheetTemplate.space_id == space_id)
+    if category:
+        q = q.filter(SheetTemplate.category == category)
+    templates = q.order_by(SheetTemplate.created_at.desc()).all()
+    return {"templates": [
+        {
+            "id": t.id, "name": t.name, "description": t.description,
+            "category": t.category, "original_filename": t.original_filename,
+            "sheet_name": t.sheet_name,
+            "row_count": t.row_count, "col_count": t.col_count,
+            "checkable_count": t.checkable_count,
+            "created_by": t.created_by,
+            "created_at": iso(t.created_at),
+        } for t in templates
+    ]}
+
+
+@app.get("/api/sheet-templates/{template_id}")
+def get_sheet_template(template_id: int, db: Session = Depends(get_db)):
+    """Sheet 템플릿 상세 (구조 포함)"""
+    t = db.query(SheetTemplate).filter(SheetTemplate.id == template_id).first()
+    if not t:
+        raise HTTPException(404, "Template not found")
+    return {
+        "id": t.id, "name": t.name, "description": t.description,
+        "category": t.category, "original_filename": t.original_filename,
+        "sheet_name": t.sheet_name,
+        "structure": t.structure,
+        "row_count": t.row_count, "col_count": t.col_count,
+        "checkable_count": t.checkable_count,
+        "column_role_mapping": t.column_role_mapping,
+        "structure_hash": t.structure_hash,
+        "created_by": t.created_by,
+        "created_at": iso(t.created_at),
+    }
+
+
+@app.post("/api/sheet-templates/{template_id}/confirm-roles")
+def confirm_sheet_roles(
+    template_id: int,
+    roles: Dict[str, Any] = Body(...),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """사용자가 확인/수정한 컬럼 역할 매핑을 저장"""
+    t = db.query(SheetTemplate).filter(SheetTemplate.id == template_id).first()
+    if not t:
+        raise HTTPException(404, "Template not found")
+    t.column_role_mapping = roles
+    db.commit()
+    return {"message": "Column role mapping saved", "column_role_mapping": roles}
+
+
+@app.delete("/api/sheet-templates/{template_id}")
+def delete_sheet_template(template_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    """Sheet 템플릿 삭제 (연결된 실행본과 항목/로그도 함께 정리)"""
+    t = db.query(SheetTemplate).filter(SheetTemplate.id == template_id).first()
+    if not t:
+        raise HTTPException(404, "Template not found")
+
+    # SheetExecution.template_id FK 에는 ON DELETE CASCADE 가 없으므로 수동으로 정리.
+    # SheetExecutionItem / SheetExecutionLog 는 execution_id 에 ondelete=CASCADE 가 있지만
+    # SQLite 등에서 cascade 가 꺼져 있을 수 있어 명시적으로 먼저 지운다.
+    exec_rows = db.query(SheetExecution.id).filter(SheetExecution.template_id == template_id).all()
+    exec_ids = [r[0] for r in exec_rows]
+    if exec_ids:
+        db.query(SheetExecutionLog).filter(SheetExecutionLog.execution_id.in_(exec_ids)).delete(synchronize_session=False)
+        db.query(SheetExecutionItem).filter(SheetExecutionItem.execution_id.in_(exec_ids)).delete(synchronize_session=False)
+        db.query(SheetExecution).filter(SheetExecution.template_id == template_id).delete(synchronize_session=False)
+
+    db.delete(t)
+    db.commit()
+    return {"message": "Template deleted", "deleted_executions": len(exec_ids)}
+
+
+# =========================
+# v3.0 Sheet Execution API
+# =========================
+
+class SheetExecutionCreate(BaseModel):
+    template_id: int
+    project_id: Optional[int] = None
+    task_id: Optional[int] = None
+    title: Optional[str] = None
+    equipment_name: Optional[str] = None
+
+@app.post("/api/sheet-executions")
+def create_sheet_execution(
+    body: SheetExecutionCreate,
+    space_id: int = Query(...),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행 시작 — 템플릿 기반으로 실행본 + 체크 항목 생성"""
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == body.template_id).first()
+    if not template:
+        raise HTTPException(404, "Template not found")
+
+    execution = SheetExecution(
+        template_id=template.id,
+        project_id=body.project_id,
+        task_id=body.task_id,
+        space_id=space_id,
+        title=body.title or f"{template.name} - {date.today().isoformat()}",
+        equipment_name=body.equipment_name,
+        sheet_type=template.sheet_type,
+        status="in_progress",
+        total_items=template.checkable_count,
+        checked_items=0,
+        progress=0,
+        started_by=user_id,
+    )
+    db.add(execution)
+    db.flush()
+
+    # 템플릿의 checkable_cells로부터 실행 항목 생성 또는 매핑 생성
+    structure = template.structure or {}
+    initial_checked_count = 0
+
+    if template.sheet_type == "assignment_mapping":
+        from app.models import SheetExecutionMapping
+        cells = structure.get("cells", [])
+        data_start_row = structure.get("data_start_row", 1)
+        headers = structure.get("headers", [])
+        column_roles = structure.get("column_roles", {})
+        
+        assignment_cols = []
+        for h in headers:
+            text = h["value"]
+            if "설비" in text or "장비" in text or "부품" in text or "적용" in text:
+                assignment_cols.append(h["col"])
+        
+        manager_col = column_roles.get("assignee", {}).get("col", -1)
+        remark_col = column_roles.get("remark", {}).get("col", -1)
+
+        cell_map = {(c["row"], c["col"]): c["value"] for c in cells}
+        max_row = max((c["row"] for c in cells), default=0)
+        
+        for r in range(data_start_row, max_row + 1):
+            master_name = cell_map.get((r, 0), "")
+            if not str(master_name).strip():
+                continue
+            master_code = cell_map.get((r, 1), "")
+            
+            manager = str(cell_map.get((r, manager_col), "")) if manager_col >= 0 else ""
+            note = str(cell_map.get((r, remark_col), "")) if remark_col >= 0 else ""
+            
+            for c_idx in assignment_cols:
+                assigned_entity = str(cell_map.get((r, c_idx), "")).strip()
+                if assigned_entity:
+                    mapping = SheetExecutionMapping(
+                        execution_id=execution.id,
+                        master_name=str(master_name).strip(),
+                        master_code=str(master_code).strip() if master_code else None,
+                        assigned_entity=assigned_entity,
+                        manager=manager.strip() if manager else None,
+                        note=note.strip() if note else None,
+                    )
+                    db.add(mapping)
+
+        # 매핑 유형은 total_items를 실제 매핑 수로 설정
+        db.flush()
+        mapping_count = db.query(SheetExecutionMapping).filter(
+            SheetExecutionMapping.execution_id == execution.id
+        ).count()
+        execution.total_items = mapping_count
+    else:
+        # 기존 점검형: 템플릿의 checkable_cells로부터 실행 항목 생성
+        checkable_cells = structure.get("checkable_cells", [])
+        COMPLETED_INITIAL = {"완료", "OK", "ok", "PASS", "pass", "양호", "O", "o", "○", "●", "✓", "✔", "☑"}
+        checked_at_now = datetime.utcnow()
+        for cell in checkable_cells:
+            init_val = cell.get("initial_value")
+            init_val_str = (str(init_val).strip() if init_val is not None else "")
+            parsed_status = (cell.get("parsed_status") or "").strip()
+            parsed_note = (cell.get("parsed_note") or "").strip()
+            status_for_check = parsed_status or init_val_str
+            pre_checked = status_for_check in COMPLETED_INITIAL
+            if pre_checked:
+                initial_checked_count += 1
+            item = SheetExecutionItem(
+                execution_id=execution.id,
+                cell_ref=cell.get("ref", ""),
+                row_idx=cell.get("row", 0),
+                col_idx=cell.get("col", 0),
+                label=cell.get("label", ""),
+                checked=pre_checked,
+                value=(parsed_status or init_val_str) or None,
+                memo=parsed_note or None,
+                checked_by=user_id if pre_checked else None,
+                checked_at=checked_at_now if pre_checked else None,
+            )
+            db.add(item)
+
+    if initial_checked_count and execution.total_items:
+        execution.checked_items = initial_checked_count
+        execution.progress = round(initial_checked_count / execution.total_items * 100)
+
+    # 시작 로그
+    db.add(SheetExecutionLog(
+        execution_id=execution.id, action="start", user_id=user_id,
+        new_value=f"실행 시작: {execution.title}",
+    ))
+
+    db.commit()
+    db.refresh(execution)
+
+    return {
+        "id": execution.id,
+        "template_id": execution.template_id,
+        "project_id": execution.project_id,
+        "task_id": execution.task_id,
+        "title": execution.title,
+        "status": execution.status,
+        "total_items": execution.total_items,
+        "progress": execution.progress,
+        "started_at": iso(execution.started_at),
+    }
+
+
+@app.get("/api/sheet-executions")
+def list_sheet_executions(
+    space_id: int = Query(...),
+    project_id: Optional[int] = Query(None),
+    task_id: Optional[int] = Query(None),
+    template_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    equipment_name: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),  # YYYY-MM-DD
+    date_to: Optional[str] = Query(None),    # YYYY-MM-DD
+    user_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행 목록 조회 (필터 지원)"""
+    q = db.query(SheetExecution).filter(SheetExecution.space_id == space_id)
+    if project_id is not None:
+        q = q.filter(SheetExecution.project_id == project_id)
+    if task_id is not None:
+        q = q.filter(SheetExecution.task_id == task_id)
+    if template_id is not None:
+        q = q.filter(SheetExecution.template_id == template_id)
+    if status:
+        q = q.filter(SheetExecution.status == status)
+    if equipment_name:
+        q = q.filter(SheetExecution.equipment_name.like(f"%{equipment_name}%"))
+    if date_from:
+        from sqlalchemy import text as _text
+        q = q.filter(SheetExecution.started_at >= date_from)
+    if date_to:
+        q = q.filter(SheetExecution.started_at <= f"{date_to} 23:59:59")
+    execs = q.order_by(SheetExecution.started_at.desc()).limit(200).all()
+    return {"executions": [
+        {
+            "id": e.id, "template_id": e.template_id, "project_id": e.project_id,
+            "task_id": e.task_id,
+            "title": e.title, "equipment_name": e.equipment_name,
+            "status": e.status, "total_items": e.total_items,
+            "checked_items": e.checked_items, "progress": e.progress,
+            "started_by": e.started_by, "started_at": iso(e.started_at),
+            "completed_at": iso(e.completed_at), "completed_by": e.completed_by,
+        } for e in execs
+    ]}
+
+
+@app.get("/api/sheet-executions/{execution_id}")
+def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
+    """Sheet 실행 상세 + 항목 + 템플릿 구조 + (assignment_mapping 유형의 경우) 매핑 목록"""
+    from app.models import SheetExecutionMapping
+
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+
+    items = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id
+    ).order_by(SheetExecutionItem.row_idx, SheetExecutionItem.col_idx).all()
+
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+
+    mappings_data = []
+    if execution.sheet_type == "assignment_mapping":
+        mappings = db.query(SheetExecutionMapping).filter(
+            SheetExecutionMapping.execution_id == execution_id
+        ).order_by(SheetExecutionMapping.master_name, SheetExecutionMapping.id).all()
+        mappings_data = [
+            {
+                "id": m.id,
+                "master_name": m.master_name,
+                "master_code": m.master_code,
+                "assigned_entity": m.assigned_entity,
+                "manager": m.manager,
+                "last_checked_at": iso(m.last_checked_at) if m.last_checked_at else None,
+                "note": m.note,
+            } for m in mappings
+        ]
+
+    return {
+        "id": execution.id,
+        "template_id": execution.template_id,
+        "project_id": execution.project_id,
+        "task_id": execution.task_id,
+        "title": execution.title,
+        "equipment_name": execution.equipment_name,
+        "sheet_type": execution.sheet_type,
+        "status": execution.status,
+        "total_items": execution.total_items,
+        "checked_items": execution.checked_items,
+        "progress": execution.progress,
+        "started_by": execution.started_by,
+        "started_at": iso(execution.started_at),
+        "completed_at": iso(execution.completed_at),
+        "completed_by": execution.completed_by,
+        "template_structure": template.structure if template else {},
+        "template_name": template.name if template else "",
+        "items": [
+            {
+                "id": item.id,
+                "cell_ref": item.cell_ref,
+                "row_idx": item.row_idx,
+                "col_idx": item.col_idx,
+                "label": item.label,
+                "checked": item.checked,
+                "value": item.value,
+                "memo": item.memo,
+                "checked_by": item.checked_by,
+                "checked_at": iso(item.checked_at) if item.checked_at else None,
+            } for item in items
+        ],
+        "mappings": mappings_data,
+    }
+
+
+@app.get("/api/sheet-executions/{execution_id}/mappings")
+def list_sheet_mappings(execution_id: int, db: Session = Depends(get_db)):
+    """assignment_mapping 유형 실행의 매핑 목록"""
+    from app.models import SheetExecutionMapping
+
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+
+    mappings = db.query(SheetExecutionMapping).filter(
+        SheetExecutionMapping.execution_id == execution_id
+    ).order_by(SheetExecutionMapping.master_name, SheetExecutionMapping.id).all()
+    return {
+        "mappings": [
+            {
+                "id": m.id,
+                "master_name": m.master_name,
+                "master_code": m.master_code,
+                "assigned_entity": m.assigned_entity,
+                "manager": m.manager,
+                "last_checked_at": iso(m.last_checked_at) if m.last_checked_at else None,
+                "note": m.note,
+            } for m in mappings
+        ]
+    }
+
+
+@app.patch("/api/sheet-executions/{execution_id}/items/{item_id}")
+def update_sheet_execution_item(
+    execution_id: int,
+    item_id: int,
+    checked: Optional[bool] = Body(None),
+    value: Optional[str] = Body(None),
+    memo: Optional[str] = Body(None),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """실행 항목 체크/메모 업데이트"""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    if execution.status == "completed":
+        raise HTTPException(400, "이미 완료된 실행입니다")
+
+    item = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.id == item_id, SheetExecutionItem.execution_id == execution_id
+    ).first()
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    old_checked = item.checked
+    old_value = item.value
+
+    if checked is not None:
+        item.checked = checked
+        item.checked_by = user_id
+        item.checked_at = datetime.now(KST) if checked else None
+    if value is not None:
+        item.value = value
+    if memo is not None:
+        item.memo = memo
+
+    # 이력 로그
+    if checked is not None and checked != old_checked:
+        db.add(SheetExecutionLog(
+            execution_id=execution_id, item_id=item_id,
+            action="check" if checked else "uncheck",
+            old_value=str(old_checked), new_value=str(checked),
+            user_id=user_id,
+        ))
+    if memo is not None:
+        db.add(SheetExecutionLog(
+            execution_id=execution_id, item_id=item_id,
+            action="memo", new_value=memo[:200] if memo else "",
+            user_id=user_id,
+        ))
+
+    # 진행률 재계산 — N/A는 모수에서 제외 (해당 없음 의미)
+    total = execution.total_items or 1
+    na_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id,
+        SheetExecutionItem.value == "N/A",
+    ).count()
+    effective_total = max(1, total - na_count)
+    checked_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
+    ).count()
+    execution.checked_items = checked_count
+    execution.progress = min(100, int(checked_count / effective_total * 100))
+
+    db.commit()
+
+    # v3.4: 시트가 task에 연결되어 있고 task에 체크박스 활동이 없으면
+    #       시트 진행률로 task.progress 자동 동기화
+    if execution.task_id:
+        try:
+            _sync_task_progress(db, execution.task_id)
+        except Exception:
+            pass
+
+    return {
+        "id": item.id,
+        "checked": item.checked,
+        "value": item.value,
+        "memo": item.memo,
+        "checked_by": item.checked_by,
+        "checked_at": iso(item.checked_at) if item.checked_at else None,
+        "execution_progress": execution.progress,
+        "execution_checked_items": execution.checked_items,
+    }
+
+class CellUpsertRequest(BaseModel):
+    value: Optional[str] = None
+    memo: Optional[str] = None
+    checked: Optional[bool] = None
+
+@app.patch("/api/sheet-executions/{execution_id}/cells/{cell_ref}")
+def upsert_sheet_execution_cell(
+    execution_id: int,
+    cell_ref: str,
+    body: CellUpsertRequest,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """특정 셀(cell_ref)의 값을 동적으로 Upsert (담당자/비고 등 임의의 컬럼 수정용)"""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    if execution.status == "completed":
+        raise HTTPException(400, "이미 완료된 실행입니다")
+
+    item = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id,
+        SheetExecutionItem.cell_ref == cell_ref
+    ).first()
+
+    # 셀의 row, col 인덱스를 파싱 (임시 방편: A1 등 정규식으로 파싱 가능하지만, 없으면 0으로 처리)
+    import re
+    row_idx, col_idx = 0, 0
+    match = re.match(r"^([A-Z]+)(\d+)$", cell_ref)
+    if match:
+        col_str = match.group(1)
+        col_idx = 0
+        for char in col_str:
+            col_idx = col_idx * 26 + (ord(char) - ord('A') + 1)
+        col_idx -= 1
+        row_idx = int(match.group(2)) - 1
+
+    old_value = None
+    if not item:
+        item = SheetExecutionItem(
+            execution_id=execution_id,
+            cell_ref=cell_ref,
+            row_idx=row_idx,
+            col_idx=col_idx,
+            checked=False,
+            value=body.value,
+            memo=body.memo
+        )
+        if body.checked:
+            item.checked = True
+            item.checked_by = user_id
+            item.checked_at = datetime.now(KST)
+        db.add(item)
+    else:
+        old_value = item.value
+        old_checked = item.checked
+        if body.checked is not None:
+            item.checked = body.checked
+            if body.checked and not old_checked:
+                item.checked_by = user_id
+                item.checked_at = datetime.now(KST)
+            elif not body.checked and old_checked:
+                item.checked_at = None
+        if body.value is not None:
+            item.value = body.value
+        if body.memo is not None:
+            item.memo = body.memo
+
+    db.commit()
+    
+    # 진행률 재계산 — N/A는 모수에서 제외
+    total = execution.total_items or 1
+    na_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id,
+        SheetExecutionItem.value == "N/A",
+    ).count()
+    effective_total = max(1, total - na_count)
+    checked_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
+    ).count()
+    progress = min(100, int((checked_count / effective_total) * 100))
+    execution.checked_items = checked_count
+    execution.progress = progress
+    db.commit()
+
+    # v3.4: task progress 동기화 (시트만 있는 task 대응)
+    if execution.task_id:
+        try:
+            _sync_task_progress(db, execution.task_id)
+        except Exception:
+            pass
+
+    return {"status": "ok", "progress": progress}
+
+@app.post("/api/sheet-executions/{execution_id}/copy")
+def copy_sheet_execution(
+    execution_id: int,
+    title: str = Query(...),
+    include_data: bool = Query(False),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """기존 실행본을 복제하여 새로운 실행본 생성"""
+    original = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not original:
+        raise HTTPException(404, "Execution not found")
+        
+    execution = SheetExecution(
+        template_id=original.template_id,
+        project_id=original.project_id,
+        task_id=original.task_id,
+        space_id=original.space_id,
+        title=title,
+        equipment_name=original.equipment_name,
+        status="in_progress",
+        total_items=original.total_items,
+        checked_items=0,
+        progress=0,
+        started_by=user_id,
+    )
+    db.add(execution)
+    db.flush()
+
+    # 데이터 복제
+    if include_data:
+        original_items = db.query(SheetExecutionItem).filter(SheetExecutionItem.execution_id == execution_id).all()
+        checked_count = 0
+        for item in original_items:
+            new_item = SheetExecutionItem(
+                execution_id=execution.id,
+                cell_ref=item.cell_ref,
+                row_idx=item.row_idx,
+                col_idx=item.col_idx,
+                label=item.label,
+                checked=item.checked,
+                value=item.value,
+                memo=item.memo,
+                checked_by=user_id if item.checked else None,
+                checked_at=datetime.now(KST) if item.checked else None,
+            )
+            if new_item.checked:
+                checked_count += 1
+            db.add(new_item)
+            
+        execution.checked_items = checked_count
+        execution.progress = min(100, int((checked_count / (execution.total_items or 1)) * 100))
+    
+    db.commit()
+    
+    return {"id": execution.id}
+
+@app.patch("/api/sheet-executions/{execution_id}/complete")
+def complete_sheet_execution(
+    execution_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행 완료 처리"""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+
+    execution.status = "completed"
+    execution.completed_at = datetime.now(KST)
+    execution.completed_by = user_id
+
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="complete",
+        new_value=f"완료 (진행률: {execution.progress}%)", user_id=user_id,
+    ))
+
+    db.commit()
+
+    # v3.4: task progress 동기화 (시트만 있는 task의 경우 100%로 반영)
+    if execution.task_id:
+        try:
+            _sync_task_progress(db, execution.task_id)
+        except Exception:
+            pass
+
+    return {"message": "실행이 완료되었습니다", "progress": execution.progress}
+
+
+@app.patch("/api/sheet-executions/{execution_id}/unlink-task")
+def unlink_sheet_execution_task(
+    execution_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행과 Task의 연결만 해제 (sheet 자체는 보존)."""
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    old_task_id = execution.task_id
+    if old_task_id is None:
+        return {"message": "이미 Task와 연결되어 있지 않습니다", "task_id": None}
+    execution.task_id = None
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="unlink_task",
+        old_value=f"task_id={old_task_id}",
+        new_value="task_id=None",
+        user_id=user_id,
+    ))
+    db.commit()
+
+    # v3.4: 연결 해제된 task의 progress도 재계산 (다른 시트가 남았는지 등)
+    try:
+        _sync_task_progress(db, old_task_id)
+    except Exception:
+        pass
+
+    return {"message": "Task 연결이 해제되었습니다", "task_id": None}
+
+
+@app.get("/api/sheet-executions/{execution_id}/export")
+def export_sheet_execution_xlsx(
+    execution_id: int,
+    db: Session = Depends(get_db),
+):
+    """현재 웹에서 수정된 최신 상태를 xlsx 파일로 다운로드."""
+    import io as _io
+    from urllib.parse import quote as _quote
+    from fastapi.responses import StreamingResponse
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill
+
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+    if not template:
+        raise HTTPException(404, "Template not found")
+
+    structure = template.structure or {}
+    cells = structure.get("cells", [])
+    merges = structure.get("merges", [])
+    col_widths = structure.get("col_widths", [])
+    row_heights = structure.get("row_heights", [])
+    total_rows = structure.get("total_rows", 0) or 0
+    total_cols = structure.get("total_cols", 0) or 0
+    column_roles = structure.get("column_roles") or {}
+
+    items = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id
+    ).all()
+    # cell_ref → (value, memo, checked) 맵
+    item_map = {}
+    for it in items:
+        item_map[(it.row_idx, it.col_idx)] = it
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = (template.sheet_name or template.name or "Sheet")[:31]
+
+    # 1) 원본 셀 값 + style 복원
+    for cell_data in cells:
+        r = cell_data.get("row", 0) + 1
+        c = cell_data.get("col", 0) + 1
+        if r < 1 or c < 1:
+            continue
+        # 사용자가 web에서 수정한 값이 있으면 우선 적용
+        item = item_map.get((cell_data.get("row", 0), cell_data.get("col", 0)))
+        value = cell_data.get("value", "")
+        if item is not None:
+            if item.value is not None and item.value != "":
+                value = item.value
+            elif item.checked:
+                value = "O"
+        try:
+            target = ws.cell(row=r, column=c, value=value if value != "" else None)
+        except Exception:
+            continue
+        # 폰트
+        font_info = cell_data.get("font") or {}
+        if font_info:
+            target.font = Font(
+                bold=bool(font_info.get("bold")),
+                italic=bool(font_info.get("italic")),
+                size=font_info.get("fontSize") or 11,
+                color=font_info.get("fontColor", "FF000000").lstrip("#") if font_info.get("fontColor") else None,
+            )
+        # 정렬
+        align = cell_data.get("align")
+        if align or cell_data.get("wrapText"):
+            target.alignment = Alignment(
+                horizontal=align if align in ("left", "center", "right") else None,
+                vertical="center",
+                wrap_text=bool(cell_data.get("wrapText")),
+            )
+        # 배경
+        bg = cell_data.get("bg")
+        if bg:
+            try:
+                target.fill = PatternFill(start_color=bg.lstrip("#"), end_color=bg.lstrip("#"), fill_type="solid")
+            except Exception:
+                pass
+
+    # 2) 사용자 수정값 중 원본 cell이 없던 위치(가상 컬럼 등) 추가
+    seen_positions = {(c.get("row", 0), c.get("col", 0)) for c in cells}
+    for it in items:
+        pos = (it.row_idx, it.col_idx)
+        if pos in seen_positions:
+            continue
+        try:
+            v = it.value if it.value not in (None, "") else ("O" if it.checked else None)
+            ws.cell(row=it.row_idx + 1, column=it.col_idx + 1, value=v)
+        except Exception:
+            continue
+
+    # 2-1) 가상 컬럼 헤더 보강 (원본에 없는 가상 컬럼은 헤더 cell이 있어도 다시 적용)
+    header_row_1based = (structure.get("header_row_idx") or 0) + 1
+    for role_key, role_info in column_roles.items():
+        if not role_info or not role_info.get("virtual"):
+            continue
+        col_1based = (role_info.get("col") or 0) + 1
+        header_text = role_info.get("header") or role_key
+        try:
+            ws.cell(row=header_row_1based, column=col_1based, value=header_text).font = Font(bold=True, color="FF6B7280")
+        except Exception:
+            pass
+
+    # 3) 병합셀
+    for mg in merges:
+        try:
+            ws.merge_cells(
+                start_row=mg["startRow"] + 1,
+                start_column=mg["startCol"] + 1,
+                end_row=mg["endRow"] + 1,
+                end_column=mg["endCol"] + 1,
+            )
+        except Exception:
+            continue
+
+    # 4) 컬럼 너비
+    from openpyxl.utils import get_column_letter as _col_letter
+    for idx, w in enumerate(col_widths or []):
+        if idx >= total_cols:
+            break
+        try:
+            ws.column_dimensions[_col_letter(idx + 1)].width = float(w)
+        except Exception:
+            continue
+
+    # 5) 행 높이
+    for idx, h in enumerate(row_heights or []):
+        if idx >= total_rows:
+            break
+        try:
+            ws.row_dimensions[idx + 1].height = float(h)
+        except Exception:
+            continue
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    wb.close()
+
+    fname_base = (execution.title or template.name or "sheet").replace("/", "_").replace("\\", "_")
+    encoded = _quote(f"{fname_base}.xlsx")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
+    )
+
+
+@app.get("/api/sheet-executions/{execution_id}/logs")
+def get_sheet_execution_logs(execution_id: int, db: Session = Depends(get_db)):
+    """실행 이력 로그 조회"""
+    logs = db.query(SheetExecutionLog).filter(
+        SheetExecutionLog.execution_id == execution_id
+    ).order_by(SheetExecutionLog.created_at.desc()).limit(200).all()
+    return {"logs": [
+        {
+            "id": l.id, "action": l.action, "item_id": l.item_id,
+            "old_value": l.old_value, "new_value": l.new_value,
+            "memo": l.memo, "user_id": l.user_id,
+            "created_at": iso(l.created_at),
+        } for l in logs
+    ]}
+
+
+@app.get("/api/tasks/{task_id}/sheet-summary")
+def get_task_sheet_summary(task_id: int, db: Session = Depends(get_db)):
+    """Task 에 직접 연결된 Sheet 실행 요약 (Task Details 패널용)"""
+    execs = db.query(SheetExecution).filter(SheetExecution.task_id == task_id).order_by(SheetExecution.started_at.desc()).all()
+    active = [e for e in execs if e.status == "in_progress"]
+    completed = [e for e in execs if e.status == "completed"]
+    return {
+        "task_id": task_id,
+        "total_executions": len(execs),
+        "active_count": len(active),
+        "completed_count": len(completed),
+        "active_executions": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "started_at": iso(e.started_at)}
+            for e in active
+        ],
+        "recent_completed": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "completed_at": iso(e.completed_at)}
+            for e in completed[:10]
+        ],
+    }
+
+
+@app.get("/api/projects/{project_id}/sheet-summary")
+def get_project_sheet_summary(project_id: int, db: Session = Depends(get_db)):
+    """프로젝트에 연결된 Sheet 실행 요약"""
+    execs = db.query(SheetExecution).filter(SheetExecution.project_id == project_id).order_by(SheetExecution.started_at.desc()).all()
+    active = [e for e in execs if e.status == "in_progress"]
+    completed = [e for e in execs if e.status == "completed"]
+    return {
+        "project_id": project_id,
+        "total_executions": len(execs),
+        "active_count": len(active),
+        "completed_count": len(completed),
+        "active_executions": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "started_at": iso(e.started_at)}
+            for e in active
+        ],
+        "recent_completed": [
+            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
+             "completed_at": iso(e.completed_at)}
+            for e in completed[:10]
+        ],
+    }
+
+
+class SheetMappingCreate(BaseModel):
+    master_name: str
+    assigned_entity: str
+
+class SheetMappingUpdate(BaseModel):
+    master_name: Optional[str] = None
+    assigned_entity: Optional[str] = None
+    manager: Optional[str] = None
+    note: Optional[str] = None
+
+@app.post("/api/sheet-executions/{execution_id}/mappings")
+def add_sheet_mapping(execution_id: int, body: SheetMappingCreate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    from app.models import SheetExecutionMapping
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution: raise HTTPException(404, "Execution not found")
+
+    mapping = SheetExecutionMapping(
+        execution_id=execution_id,
+        master_name=body.master_name,
+        assigned_entity=body.assigned_entity,
+        manager=None, note=None,
+    )
+    db.add(mapping)
+    
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="add_mapping", user_id=user_id,
+        new_value=f"[{body.master_name}]에 [{body.assigned_entity}] 추가"
+    ))
+    db.commit()
+    db.refresh(mapping)
+    return mapping
+
+@app.patch("/api/sheet-executions/{execution_id}/mappings/{mapping_id}")
+def update_sheet_mapping(execution_id: int, mapping_id: int, body: SheetMappingUpdate, user_id: int = Query(...), db: Session = Depends(get_db)):
+    from app.models import SheetExecutionMapping
+    mapping = db.query(SheetExecutionMapping).filter(SheetExecutionMapping.id == mapping_id, SheetExecutionMapping.execution_id == execution_id).first()
+    if not mapping: raise HTTPException(404, "Mapping not found")
+
+    old_master = mapping.master_name
+    old_assigned = mapping.assigned_entity
+
+    log_msg = []
+    if body.master_name is not None and body.master_name != mapping.master_name:
+        mapping.master_name = body.master_name
+        log_msg.append(f"마스터 변경: {old_master} -> {body.master_name}")
+    if body.assigned_entity is not None and body.assigned_entity != mapping.assigned_entity:
+        mapping.assigned_entity = body.assigned_entity
+        log_msg.append(f"설비 변경: {old_assigned} -> {body.assigned_entity}")
+    if body.manager is not None: mapping.manager = body.manager
+    if body.note is not None: mapping.note = body.note
+
+    mapping.last_checked_at = datetime.utcnow()
+
+    if log_msg:
+        db.add(SheetExecutionLog(
+            execution_id=execution_id, action="update_mapping", user_id=user_id,
+            old_value=f"[{old_master}] {old_assigned}",
+            new_value=", ".join(log_msg)
+        ))
+
+    db.commit()
+    db.refresh(mapping)
+    return mapping
+
+@app.delete("/api/sheet-executions/{execution_id}/mappings/{mapping_id}")
+def delete_sheet_mapping(execution_id: int, mapping_id: int, user_id: int = Query(...), db: Session = Depends(get_db)):
+    from app.models import SheetExecutionMapping
+    mapping = db.query(SheetExecutionMapping).filter(SheetExecutionMapping.id == mapping_id, SheetExecutionMapping.execution_id == execution_id).first()
+    if not mapping: raise HTTPException(404, "Mapping not found")
+
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="delete_mapping", user_id=user_id,
+        old_value=f"[{mapping.master_name}]에 배정된 [{mapping.assigned_entity}] 삭제"
+    ))
+    db.delete(mapping)
+    db.commit()
+    return {"message": "Mapping deleted"}
 
 # =========================
 # Run

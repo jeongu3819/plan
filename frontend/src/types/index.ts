@@ -29,6 +29,14 @@ export interface Project {
   };
 }
 
+export type SpacePurpose =
+  | 'project_management'
+  | 'equipment_ops'
+  | 'process_change'
+  | 'sw_dev'
+  | 'integrated_ops'
+  | 'custom';
+
 export interface Space {
   id: number;
   name: string;
@@ -37,6 +45,7 @@ export interface Space {
   created_by?: number;
   is_active: boolean;
   created_at?: string;
+  purpose?: SpacePurpose;
   member_count: number;
   members: SpaceMemberInfo[];
 }
@@ -249,4 +258,150 @@ export interface ProjectAiQueryResponse {
       window_end?: string | null;
     };
   };
+}
+
+// ========================================
+// v3.0 Sheet 운영 타입
+// ========================================
+
+export interface ColumnRoleInfo {
+  col: number;       // 0-based column index
+  header: string;    // detected header text
+  confidence: number; // 0~1
+  editor_type?: 'text' | 'textarea' | 'select' | 'date'; // 에디터 타입
+  virtual?: boolean; // 웹에서 가상 생성된 컬럼 여부
+}
+
+export interface ColumnRoleMapping {
+  check_status?: ColumnRoleInfo;
+  checked_at?: ColumnRoleInfo;
+  assignee?: ColumnRoleInfo;
+  due_date?: ColumnRoleInfo;
+  planned_date?: ColumnRoleInfo;
+  progress_date?: ColumnRoleInfo;
+  cycle?: ColumnRoleInfo;
+  remark?: ColumnRoleInfo;
+}
+
+export type SheetType = 'inspection' | 'assignment_mapping';
+
+export interface SheetTemplate {
+  id: number;
+  name: string;
+  description?: string;
+  category?: string;
+  original_filename?: string;
+  sheet_name?: string;
+  sheet_type?: SheetType;
+  structure?: SheetStructure;
+  row_count: number;
+  col_count: number;
+  checkable_count: number;
+  column_role_mapping?: ColumnRoleMapping | null;
+  structure_hash?: string;
+  created_by?: number;
+  created_at?: string;
+}
+
+export interface SheetStructure {
+  cells: SheetCell[];
+  merges: SheetMerge[];
+  col_widths?: number[];
+  row_heights?: number[];
+  total_rows: number;
+  total_cols: number;
+  checkable_cells: SheetCheckableCell[];
+  headers?: { col: number; value: string }[];
+  column_roles?: ColumnRoleMapping;
+  header_row_idx?: number;
+  data_start_row?: number;
+  structure_hash?: string;
+  suggested_type?: SheetType;
+}
+
+export interface SheetCell {
+  row: number;
+  col: number;
+  value: string;
+  type?: string;
+  bg?: string;
+  font?: { bold?: boolean; italic?: boolean; fontSize?: number; fontColor?: string };
+  borders?: Record<string, string>;
+  align?: string;
+  wrapText?: boolean;
+  rowSpan?: number;
+  colSpan?: number;
+}
+
+export interface SheetMerge {
+  startRow: number;
+  startCol: number;
+  endRow: number;
+  endCol: number;
+}
+
+export interface SheetCheckableCell {
+  ref: string;
+  row: number;
+  col: number;
+  label: string;
+  initial_value?: string;
+  parsed_status?: string;
+  parsed_note?: string;
+}
+
+export interface SheetExecution {
+  id: number;
+  template_id: number;
+  project_id?: number;
+  task_id?: number;
+  title: string;
+  equipment_name?: string;
+  sheet_type?: SheetType;
+  status: 'in_progress' | 'completed' | 'cancelled';
+  total_items: number;
+  checked_items: number;
+  progress: number;
+  started_by?: number;
+  started_at?: string;
+  completed_at?: string;
+  completed_by?: number;
+  template_structure?: SheetStructure;
+  template_name?: string;
+  items?: SheetExecutionItem[];
+  mappings?: SheetExecutionMapping[];
+}
+
+export interface SheetExecutionMapping {
+  id: number;
+  master_name: string;
+  master_code?: string;
+  assigned_entity: string;
+  manager?: string;
+  last_checked_at?: string;
+  note?: string;
+}
+
+export interface SheetExecutionItem {
+  id: number;
+  cell_ref: string;
+  row_idx: number;
+  col_idx: number;
+  label: string;
+  checked: boolean;
+  value?: string;
+  memo?: string;
+  checked_by?: number;
+  checked_at?: string;
+}
+
+export interface SheetExecutionLog {
+  id: number;
+  action: string;
+  item_id?: number;
+  old_value?: string;
+  new_value?: string;
+  memo?: string;
+  user_id?: number;
+  created_at?: string;
 }

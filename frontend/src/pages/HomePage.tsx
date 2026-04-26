@@ -52,6 +52,9 @@ import { useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../hooks/useSpaceNav';
 import { useDensityScores } from '../hooks/useDensityScores';
 import ZeroStateDashboard from '../components/ZeroStateDashboard';
+import PurposeOverview from '../components/space/PurposeOverview';
+import SheetExecutionPopup from '../components/sheets/SheetExecutionPopup';
+import type { SpacePurpose } from '../types';
 import {
   format,
   differenceInDays,
@@ -110,6 +113,7 @@ const KOREAN_HOLIDAYS: Record<string, string> = {
   '2026-05-05': '어린이날',
   '2026-05-24': '부처님오신날',
   '2026-06-06': '현충일',
+  '2026-07-17': '제헌절',
   '2026-08-15': '광복절',
   '2026-08-17': '대체공휴일',
   '2026-09-24': '추석 연휴',
@@ -302,6 +306,7 @@ const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const { spacePath } = useSpaceNav();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [popupExecId, setPopupExecId] = useState<number | null>(null);
 
   const [calMonth, setCalMonth] = useState(new Date());
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
@@ -318,6 +323,14 @@ const HomePage: React.FC = () => {
     queryKey: ['stats', currentUserId, currentSpaceId],
     queryFn: () => api.getStats(currentUserId, currentSpaceId),
   });
+
+  // v3.0 목적 기반 Overview
+  const { data: overviewData, isLoading: overviewLoading } = useQuery({
+    queryKey: ['spaceOverview', currentSpaceId, currentUserId],
+    queryFn: () => api.getSpaceOverview(currentSpaceId!, currentUserId),
+    enabled: !!currentSpaceId && currentUserId > 0,
+  });
+  const spacePurpose = (overviewData?.purpose || 'project_management') as SpacePurpose;
 
   // Density Scores for My Tasks widget
   const myTasksForDensity = stats?.my_tasks || [];
@@ -494,13 +507,14 @@ const HomePage: React.FC = () => {
             )}
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Typography
-                variant="body2"
+                variant="body1"
                 sx={{
                   fontWeight: 600,
-                  fontSize: '0.82rem',
+                  fontSize: '0.92rem',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
+                  lineHeight: 1.4,
                 }}
               >
                 {task.title}
@@ -511,7 +525,7 @@ const HomePage: React.FC = () => {
                   sx={{
                     color:
                       differenceInDays(new Date(task.due_date), new Date()) < 0 ? '#EF4444' : '#9CA3AF',
-                    fontSize: '0.7rem',
+                    fontSize: '0.8rem',
                   }}
                 >
                   Due {format(new Date(task.due_date), 'MMM dd')}
@@ -522,9 +536,9 @@ const HomePage: React.FC = () => {
               label={task.priority || 'medium'}
               size="small"
               sx={{
-                height: 18,
-                fontSize: '0.6rem',
-                fontWeight: 600,
+                height: 20,
+                fontSize: '0.7rem',
+                fontWeight: 700,
                 bgcolor:
                   task.priority === 'high'
                     ? '#FEF2F2'
@@ -549,9 +563,9 @@ const HomePage: React.FC = () => {
   const WidgetHeader: React.FC<{ def: WidgetDef }> = ({ def }) => (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, px: 0.5 }}>
       <Box sx={{ color: '#2955FF', display: 'flex' }}>
-        {React.cloneElement(def.icon as React.ReactElement, { sx: { fontSize: '1.1rem' } })}
+        {React.cloneElement(def.icon as React.ReactElement, { sx: { fontSize: '1.3rem' } })}
       </Box>
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.85rem', flexGrow: 1 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 700, fontSize: '1rem', flexGrow: 1 }}>
         {def.title}
       </Typography>
     </Box>
@@ -616,13 +630,13 @@ const HomePage: React.FC = () => {
                     >
                       <Typography
                         variant="caption"
-                        sx={{ color: '#9CA3AF', fontSize: '0.65rem', fontWeight: 500 }}
+                        sx={{ color: '#6B7280', fontSize: '0.78rem', fontWeight: 600 }}
                       >
                         {item.label}
                       </Typography>
                       <Typography
-                        variant="h6"
-                        sx={{ fontWeight: 800, color: item.color, fontSize: '1.3rem' }}
+                        variant="h5"
+                        sx={{ fontWeight: 800, color: item.color, fontSize: '1.55rem' }}
                       >
                         {item.value}
                       </Typography>
@@ -712,12 +726,12 @@ const HomePage: React.FC = () => {
                 {(stats?.total || 0) > 0 && !overviewFilter && (
                   <Box>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                      <Typography variant="caption" sx={{ fontWeight: 600, fontSize: '0.7rem' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.82rem' }}>
                         Completion
                       </Typography>
                       <Typography
-                        variant="caption"
-                        sx={{ fontWeight: 700, fontSize: '0.7rem', color: '#22C55E' }}
+                        variant="body2"
+                        sx={{ fontWeight: 700, fontSize: '0.82rem', color: '#22C55E' }}
                       >
                         {Math.round(((stats?.done || 0) / (stats?.total || 1)) * 100)}%
                       </Typography>
@@ -1348,7 +1362,7 @@ const HomePage: React.FC = () => {
               transform: introPhase === 'shrinking' ? 'translateY(-20px)' : 'translateY(0)',
             }}
           >
-            PLAN-A
+            PLAN-AI
           </Typography>
           <Typography
             variant="body1"
@@ -1405,7 +1419,7 @@ const HomePage: React.FC = () => {
                 variant="h4"
                 sx={{ fontWeight: 900, color: '#1A1D29', letterSpacing: '-0.03em' }}
               >
-                PLAN-A
+                PLAN-AI
               </Typography>
               <Typography
                 variant="caption"
@@ -1477,7 +1491,34 @@ const HomePage: React.FC = () => {
           <ZeroStateDashboard currentUserId={currentUserId} />
         </Box>
       ) : (
-        /* ── Sortable Widget Grid ── */
+        <>
+        {/* ── v3.0 목적 기반 Overview ── */}
+        {spacePurpose && spacePurpose !== 'project_management' && (
+          <Box sx={{
+            mb: 2, opacity: introPhase === 'done' ? 1 : 0,
+            transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
+            transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
+          }}>
+            <PurposeOverview
+              data={overviewData}
+              loading={overviewLoading}
+              purpose={spacePurpose}
+              onTaskClick={(taskId, projectId) => {
+                openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] }, projectId);
+              }}
+              onSheetClick={(executionId) => {
+                setPopupExecId(executionId);
+              }}
+            />
+          </Box>
+        )}
+        <SheetExecutionPopup
+          open={popupExecId !== null}
+          executionId={popupExecId}
+          userId={currentUserId}
+          onClose={() => setPopupExecId(null)}
+        />
+        {/* ── Sortable Widget Grid ── */}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={displayOrder} strategy={rectSortingStrategy}>
             <Box
@@ -1498,6 +1539,7 @@ const HomePage: React.FC = () => {
             </Box>
           </SortableContext>
         </DndContext>
+        </>
       )}
 
       {/* ── Widget Palette Drawer ── */}
