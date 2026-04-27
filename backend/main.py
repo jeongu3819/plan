@@ -145,6 +145,44 @@ def _run_migrations():
         if t is not None:
             Base.metadata.create_all(bind=engine, tables=[t])
 
+    # v3.7: sheet_executions.task_id FK → ON DELETE SET NULL
+    # Task 영구 삭제 시 SheetExecution 이력은 보존하고 task_id 만 NULL 처리되도록 한다.
+    # MySQL 에서만 적용 (SQLite 는 FK 의 ON DELETE 옵션 변경이 ALTER 로 불가).
+    if engine.dialect.name == "mysql" and "sheet_executions" in insp.get_table_names():
+        try:
+            with engine.begin() as conn:
+                row = conn.execute(text("""
+                    SELECT CONSTRAINT_NAME, DELETE_RULE
+                    FROM information_schema.REFERENTIAL_CONSTRAINTS
+                    WHERE TABLE_NAME = 'sheet_executions'
+                      AND CONSTRAINT_SCHEMA = DATABASE()
+                      AND REFERENCED_TABLE_NAME = 'tasks'
+                """)).fetchone()
+                current_name = row[0] if row else None
+                current_rule = (row[1] or "").upper() if row else ""
+
+                # task_id 컬럼은 NULL 허용으로 보장
+                conn.execute(text("ALTER TABLE sheet_executions MODIFY COLUMN task_id INT NULL"))
+
+                if current_name and current_rule != "SET NULL":
+                    conn.execute(text(f"ALTER TABLE sheet_executions DROP FOREIGN KEY `{current_name}`"))
+                    conn.execute(text(
+                        "ALTER TABLE sheet_executions "
+                        "ADD CONSTRAINT fk_sheet_executions_task "
+                        "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL"
+                    ))
+                elif not current_name:
+                    conn.execute(text(
+                        "ALTER TABLE sheet_executions "
+                        "ADD CONSTRAINT fk_sheet_executions_task "
+                        "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL"
+                    ))
+        except Exception as e:
+            import logging
+            logging.getLogger("main").warning(
+                f"sheet_executions.task_id FK ON DELETE SET NULL 마이그레이션 실패 (무시): {e}"
+            )
+
 _run_migrations()
 
 app = FastAPI(title="Antigravity Schedule Platform API")
@@ -237,7 +275,18 @@ def startup_ensure_super_admin():
         # v1.2: backfill deptname -> TEAM node
         _backfill_team_nodes(db)
         # 3일 지난 삭제 항목 영구 제거
-        _purge_expired_trash(db)
+        # FK 제약 위반 등으로 정리에 실패해도 서버 부팅이 막히지 않도록 보호
+        try:
+            _purge_expired_trash(db)
+        except Exception as e:
+            import logging
+            logging.getLogger("main").warning(
+                f"휴지통 만료 데이터 정리 실패 (무시하고 서버 시작 계속): {e}"
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
         # 빈 공간 경고 및 자동 삭제
         _cleanup_empty_spaces(db)
     finally:
@@ -1627,6 +1676,13 @@ def _purge_expired_trash(db: Session):
                 db.query(Task.id).filter(Task.project_id == pid)
             )
         ).delete(synchronize_session=False)
+        # Task 삭제 전 SheetExecution.task_id 연결 해제 (시트 실행 이력은 보존)
+        # FK가 ON DELETE SET NULL 로 설정되지 않은 환경에서도 Task bulk delete가 막히지 않도록 수동 NULL 처리
+        db.query(SheetExecution).filter(
+            SheetExecution.task_id.in_(
+                db.query(Task.id).filter(Task.project_id == pid)
+            )
+        ).update({SheetExecution.task_id: None}, synchronize_session=False)
         db.query(Task).filter(Task.project_id == pid).delete(synchronize_session=False)
         db.query(SubProjectModel).filter(SubProjectModel.project_id == pid).delete()
         project_notes = db.query(NoteModel).filter(NoteModel.project_id == pid).all()
@@ -1656,6 +1712,10 @@ def _purge_expired_trash(db: Session):
     for t in expired_tasks:
         db.query(TaskActivityModel).filter(TaskActivityModel.task_id == t.id).delete()
         db.query(AttachmentModel).filter(AttachmentModel.task_id == t.id).delete()
+        # SheetExecution 이력은 보존하고 task_id 만 NULL 로 연결 해제
+        db.query(SheetExecution).filter(SheetExecution.task_id == t.id).update(
+            {SheetExecution.task_id: None}, synchronize_session=False
+        )
         db.delete(t)
         changed = True
 
@@ -3365,38 +3425,63 @@ def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
     _sync_task_progress(db, task_id)
     return {"ok": True}
 
-def _sync_task_progress(db: Session, task_id: int):
+def _sync_task_progress(db: Session, task_id: int, force_zero_if_empty: bool = False):
     """Recalculate task progress from checkbox activities and auto-sync status.
 
     진행률/파생 status 정책은 _derive_task_status/_compute_task_progress 참고.
     체크박스 활동이 있으면 그 기준으로 동기화한다.
     v3.4: 체크박스가 없고 연결된 SheetExecution이 있으면 그 시트들의 진행률
           평균으로 task progress를 동기화한다 (점검표만 수행하는 task 케이스).
+    v3.5: "내용이 비어있는 체크박스"는 작업노트로 간주하지 않고 시트 폴백을 허용.
+          (block_type 기본값이 'checkbox'라 빈 placeholder가 잘못 카운트되는 케이스 대응)
+    v3.6: force_zero_if_empty — Check Sheet 연결 해제 등에서 source가 모두 사라진 경우
+          이전 progress(직전 시트 잔재)가 남는 문제를 방지하기 위해 명시적으로 0% 처리.
+
+    Returns:
+        int | None: 동기화 후 task.progress. 동기화 대상이 없으면 None.
     """
     if task_id is None:
-        return
+        return None
     activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == task_id).all()
     progress, cb_total = _compute_task_progress(activities)
 
-    if cb_total == 0:
-        # 체크박스 활동이 없을 때만 시트 진행률로 폴백
+    # v3.5: "실제로 의미있는" 체크박스만 집계 — content가 비어 있는 항목은 제외.
+    #       이렇게 하면 빈 placeholder activities가 시트 폴백을 막는 일이 없다.
+    meaningful_checkboxes = [
+        a for a in activities
+        if (a.block_type or "checkbox") == "checkbox" and (a.content or "").strip()
+    ]
+    has_meaningful_work_note = len(meaningful_checkboxes) > 0
+
+    if not has_meaningful_work_note:
+        # 체크박스가 없거나 모두 빈 placeholder일 때 시트 진행률로 폴백
         sheets = db.query(SheetExecution).filter(
             SheetExecution.task_id == task_id,
             SheetExecution.status.in_(("in_progress", "completed")),
         ).all()
         if not sheets:
-            return
-        total = 0
-        for s in sheets:
-            if s.status == "completed":
-                total += 100
+            # v3.6: 호출자가 force_zero_if_empty=True를 주면 명시적으로 0% 동기화.
+            #       (예: Check Sheet 연결 해제 직후 — 직전 시트 progress 잔재 제거)
+            if force_zero_if_empty:
+                progress = 0
             else:
-                total += int(s.progress or 0)
-        progress = round(total / len(sheets))
+                # 체크박스도 없고 시트도 없으면 동기화하지 않음 (수동 progress 유지)
+                if cb_total == 0:
+                    return None
+                # cb_total > 0인데 모두 빈 placeholder인 경우엔 progress=0으로 안전 처리
+                progress = 0
+        else:
+            total = 0
+            for s in sheets:
+                if s.status == "completed":
+                    total += 100
+                else:
+                    total += int(s.progress or 0)
+            progress = round(total / len(sheets))
 
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
-        return
+        return None
     expected_status = _derive_task_status(task.status, progress)
     updates: dict = {"progress": progress}
     if expected_status != task.status:
@@ -3407,6 +3492,7 @@ def _sync_task_progress(db: Session, task_id: int):
     state = load_state()
     set_task_meta(state, task_id, {"progress": progress})
     save_state(state)
+    return progress
 
 # =========================
 # Graph
@@ -6462,13 +6548,22 @@ def upsert_sheet_execution_cell(
     db.commit()
 
     # v3.4: task progress 동기화 (시트만 있는 task 대응)
+    # v3.6: 동기화된 task progress를 응답에 포함해서 프론트가 즉시 반영하게 함
+    task_progress: int | None = None
     if execution.task_id:
         try:
-            _sync_task_progress(db, execution.task_id)
+            task_progress = _sync_task_progress(db, execution.task_id)
         except Exception:
             pass
 
-    return {"status": "ok", "progress": progress}
+    return {
+        "status": "ok",
+        "progress": progress,
+        "checked_items": checked_count,
+        "total_items": total,
+        "task_id": execution.task_id,
+        "task_progress": task_progress,
+    }
 
 @app.post("/api/sheet-executions/{execution_id}/copy")
 def copy_sheet_execution(
@@ -6582,12 +6677,20 @@ def unlink_sheet_execution_task(
     db.commit()
 
     # v3.4: 연결 해제된 task의 progress도 재계산 (다른 시트가 남았는지 등)
+    # v3.6: 다른 시트/체크박스 소스가 남아있지 않으면 명시적으로 0%로 동기화한다
+    #       (이전 시트 progress가 잔재로 남는 문제 방지)
+    task_progress: int | None = None
     try:
-        _sync_task_progress(db, old_task_id)
+        task_progress = _sync_task_progress(db, old_task_id, force_zero_if_empty=True)
     except Exception:
         pass
 
-    return {"message": "Task 연결이 해제되었습니다", "task_id": None}
+    return {
+        "message": "Task 연결이 해제되었습니다",
+        "task_id": None,
+        "old_task_id": old_task_id,
+        "task_progress": task_progress,
+    }
 
 
 @app.get("/api/sheet-executions/{execution_id}/export")

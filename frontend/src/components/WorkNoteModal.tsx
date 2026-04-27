@@ -386,11 +386,21 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 my: 0.5,
                                 fontSize: '0.85rem',
                             },
+                            // 폭맞춤 모드: 컨테이너 폭에 맞추고 텍스트 줄바꿈
+                            '& table[data-fit-mode="fit"]': {
+                                width: '100%',
+                            },
                             '& th, & td': {
                                 border: '1px solid #E5E7EB',
                                 padding: '6px 10px',
                                 whiteSpace: 'nowrap',
                                 verticalAlign: 'top',
+                            },
+                            '& table[data-fit-mode="fit"] th, & table[data-fit-mode="fit"] td': {
+                                whiteSpace: 'normal',
+                            },
+                            '& table[data-wrap-text="true"] th, & table[data-wrap-text="true"] td': {
+                                whiteSpace: 'normal',
                             },
                             '& th': {
                                 bgcolor: '#F9FAFB',
@@ -594,6 +604,65 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     </Tooltip>
                 </Box>
             )}
+
+            {/* 테이블 hover 리사이즈 toolbar — 폭맞춤/원본/줄바꿈/폰트± */}
+            {canEdit && hoveredTable && (() => {
+                const fitMode = hoveredTable.el.getAttribute('data-fit-mode') === 'fit';
+                const wrapped = hoveredTable.el.getAttribute('data-wrap-text') === 'true';
+                const activeSx = { bgcolor: 'rgba(255,255,255,0.18)' };
+                return (
+                    <Box
+                        onMouseEnter={cancelHideTimer}
+                        onMouseLeave={scheduleHide}
+                        onMouseDown={(e) => e.preventDefault()}
+                        sx={{
+                            position: 'fixed',
+                            top: Math.max(4, hoveredTable.rect.top + 4),
+                            left: hoveredTable.rect.right - 4,
+                            transform: 'translateX(-100%)',
+                            zIndex: 1500,
+                            display: 'flex', alignItems: 'center', gap: 0.25,
+                            px: 0.5, py: 0.25, borderRadius: 999,
+                            bgcolor: 'rgba(30,30,30,0.92)',
+                            backdropFilter: 'blur(6px)',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+                        }}
+                    >
+                        <Tooltip title="컨테이너 폭에 맞춤" arrow>
+                            <IconButton size="small" onClick={() => resizeTable(hoveredTable.el, 'fit')}
+                                sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 44, borderRadius: 999, ...(fitMode ? activeSx : {}) }}>
+                                폭맞춤
+                            </IconButton>
+                        </Tooltip>
+                        <Tooltip title="원본 폭(가로 스크롤)" arrow>
+                            <IconButton size="small" onClick={() => resizeTable(hoveredTable.el, 'natural')}
+                                sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 36, borderRadius: 999, ...(!fitMode ? activeSx : {}) }}>
+                                원본
+                            </IconButton>
+                        </Tooltip>
+                        <Box sx={{ width: 1, height: 14, bgcolor: 'rgba(255,255,255,0.25)', mx: 0.25 }} />
+                        <Tooltip title="셀 내용 줄바꿈" arrow>
+                            <IconButton size="small" onClick={() => resizeTable(hoveredTable.el, 'wrap')}
+                                sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 44, borderRadius: 999, ...(wrapped ? activeSx : {}) }}>
+                                줄바꿈
+                            </IconButton>
+                        </Tooltip>
+                        <Box sx={{ width: 1, height: 14, bgcolor: 'rgba(255,255,255,0.25)', mx: 0.25 }} />
+                        <Tooltip title="글씨 작게" arrow>
+                            <IconButton size="small" onClick={() => resizeTable(hoveredTable.el, 'fontDown')}
+                                sx={{ color: '#fff', p: 0.4 }}>
+                                <RemoveIcon sx={{ fontSize: '0.85rem' }} />
+                            </IconButton>
+                        </Tooltip>
+                        <Tooltip title="글씨 크게" arrow>
+                            <IconButton size="small" onClick={() => resizeTable(hoveredTable.el, 'fontUp')}
+                                sx={{ color: '#fff', p: 0.4 }}>
+                                <AddIcon sx={{ fontSize: '0.85rem' }} />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                );
+            })()}
         </Box>
     );
 };

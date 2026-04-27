@@ -24,7 +24,10 @@
       "Bash(echo \"exit=$?\")",
       "Bash(echo \"tsc=$?\")",
       "Bash(git fetch *)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(xargs grep *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(git *)"
     ]
   }
 }
