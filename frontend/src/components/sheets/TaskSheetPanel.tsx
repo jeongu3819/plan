@@ -16,13 +16,13 @@ import AddIcon from '@mui/icons-material/Add';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../../hooks/useSpaceNav';
 import SheetExecutionPopup from './SheetExecutionPopup';
-import type { SheetTemplate } from '../../types';
+import type { SheetTemplate, Task } from '../../types';
 
 interface Props {
   taskId: number;
@@ -35,6 +35,7 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
   const currentSpaceId = useAppStore(state => state.currentSpaceId);
   const navigate = useNavigate();
   const { spacePath } = useSpaceNav();
+  const queryClient = useQueryClient();
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | ''>('');
@@ -58,7 +59,24 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
 
   const unlinkMut = useMutation({
     mutationFn: (executionId: number) => api.unlinkSheetExecutionTask(executionId, currentUserId),
-    onSuccess: () => refetch(),
+    onSuccess: (response: any) => {
+      // v3.6: 백엔드가 force_zero_if_empty=true로 동기화 → response.task_progress 사용 (없으면 0).
+      //       전체 task list invalidate 대신 해당 task만 setQueryData로 패치한다.
+      const newProgress: number =
+        typeof response?.task_progress === 'number' ? response.task_progress : 0;
+      queryClient.setQueriesData<Task[]>(
+        { queryKey: ['tasks'] },
+        (old) => Array.isArray(old)
+          ? old.map(t => t.id === taskId ? { ...t, progress: newProgress } : t)
+          : old,
+      );
+      // TaskDrawer는 store의 selectedTask를 표시 → 즉시 0% 반영
+      const sel = useAppStore.getState().selectedTask;
+      if (sel && sel.id === taskId) {
+        useAppStore.setState({ selectedTask: { ...sel, progress: newProgress } });
+      }
+      refetch();
+    },
     onError: (e: any) => alert(e?.response?.data?.detail || '연결 해제 실패'),
   });
 

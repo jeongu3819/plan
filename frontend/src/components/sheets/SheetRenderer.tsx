@@ -37,6 +37,10 @@ interface Props {
    *  onCheckChange 대신 이걸 제공하면 check_status 셀은 Select UI로 렌더된다. */
   onStatusChange?: (cellRef: string, status: StatusValue, rowIdx: number, colIdx: number) => void;
   readOnly?: boolean;
+  /** v3.7: 양식 원본 preview 모드 — 진행 유/무 체크박스, 상태 dropdown, 점검일시 자동값을
+   *  모두 숨기고 원본 셀 값만 표시한다. SheetTemplatePage 같은 양식 확인용 화면에서 사용.
+   *  실제 점검 화면(SheetExecutionPopup)에서는 false로 두어야 한다. */
+  templatePreview?: boolean;
 }
 
 const DEFAULT_ROW_HEIGHT = 22; // ~15pt in Excel
@@ -74,6 +78,7 @@ export default function SheetRenderer({
   valueMap: propValueMap,
   columnRoles,
   onCheckChange, onValueChange, onStatusChange, readOnly,
+  templatePreview,
 }: Props) {
   const { cells, merges, col_widths, row_heights, total_rows, total_cols, checkable_cells } = structure;
 
@@ -276,10 +281,11 @@ export default function SheetRenderer({
                   if (hiddenCells.has(key)) return null;
 
                   const cell = cellMap.get(key);
-                  const isCheckable = checkableSet.has(key);
+                  // v3.7: templatePreview 모드면 체크/상태/점검일시 모두 비활성 → 원본 셀 값만 표시
+                  const isCheckable = !templatePreview && checkableSet.has(key);
                   const execItem = execItemMap.get(key);
                   // v3.2: 상태(여부성) 셀 — O/X/N/A dropdown 대상
-                  const isStatusCell = !!onStatusChange && statusCol >= 0 && colIdx === statusCol && rowIdx > headerRowIdx;
+                  const isStatusCell = !templatePreview && !!onStatusChange && statusCol >= 0 && colIdx === statusCol && rowIdx > headerRowIdx;
 
                   // 병합 origin 우선, 그다음 cell 자체의 span 사용
                   const merge = mergeAt.get(key);
@@ -291,7 +297,8 @@ export default function SheetRenderer({
                   const borders = cell?.borders;
 
                   // v3.1: 점검일시 컬럼이면 자동으로 체크 시간을 표시
-                  const isCheckedAtCol = checkedAtCol >= 0 && colIdx === checkedAtCol;
+                  // v3.7: templatePreview 모드에선 자동 점검일시 표시 안 함 (원본 값만)
+                  const isCheckedAtCol = !templatePreview && checkedAtCol >= 0 && colIdx === checkedAtCol;
                   const rowCheckedAt = isCheckedAtCol ? getRowCheckedAt(rowIdx) : undefined;
 
                   // 현재 체크 상태 및 기타 수정값

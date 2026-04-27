@@ -15,8 +15,9 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
+import { useAppStore } from '../../stores/useAppStore';
 import SheetRenderer, { type StatusValue } from './SheetRenderer';
-import type { SheetExecution } from '../../types';
+import type { SheetExecution, Task } from '../../types';
 
 /** 0-based col index → Excel A1 column letter */
 function colToLetter(col: number): string {
@@ -59,12 +60,31 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   const upsertMut = useMutation({
     mutationFn: ({ cellRef, data }: { cellRef: string; data: any }) =>
       api.upsertSheetExecutionCell(executionId!, cellRef, data, userId),
-    onSuccess: () => {
+    onSuccess: (response: any) => {
+      // 시트 자체는 invalidate (item 목록/메타가 바뀌었으므로)
       queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
-      // v3.5: 시트가 task에 연결돼 있으면 백엔드가 task.progress/status를 동기화한다.
-      //       Board/List/Calendar/Kanban 등이 즉시 반영되도록 task 쿼리도 무효화.
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['taskSheetSummary'] });
+
+      // v3.6: 응답에 task_progress가 있으면 task list 캐시를 직접 패치 — 전체 invalidate 금지.
+      //       (스펙 14.1: 전체 task list 강제 새로고침 지양)
+      const taskId: number | null | undefined = response?.task_id;
+      const taskProgress: number | null | undefined = response?.task_progress;
+      if (taskId != null && typeof taskProgress === 'number') {
+        queryClient.setQueriesData<Task[]>(
+          { queryKey: ['tasks'] },
+          (old) => Array.isArray(old)
+            ? old.map(t => t.id === taskId ? { ...t, progress: taskProgress } : t)
+            : old,
+        );
+        // TaskDrawer는 store의 selectedTask를 표시 → 같은 task면 store도 즉시 패치
+        const sel = useAppStore.getState().selectedTask;
+        if (sel && sel.id === taskId) {
+          useAppStore.setState({ selectedTask: { ...sel, progress: taskProgress } });
+        }
+        queryClient.invalidateQueries({ queryKey: ['taskSheetSummary', taskId] });
+      } else {
+        // task와 무관한 시트면 summary만 갱신 (TaskSheetPanel 사용처)
+        queryClient.invalidateQueries({ queryKey: ['taskSheetSummary'] });
+      }
     },
   });
 

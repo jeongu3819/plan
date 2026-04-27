@@ -13,6 +13,7 @@ import FormatColorTextIcon from '@mui/icons-material/FormatColorText';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import AddIcon from '@mui/icons-material/Add';
+import RemoveIcon from '@mui/icons-material/Remove';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { TaskActivity } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -25,6 +26,7 @@ import {
     SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import ImagePreviewModal from './ImagePreviewModal';
 
 const COLORS = ['#374151', '#EF4444', '#F59E0B', '#22C55E', '#3B82F6', '#8B5CF6'];
 
@@ -61,6 +63,7 @@ interface SortableBlockProps {
     showColorPicker: number | null;
     onShowColorPicker: (id: number | null) => void;
     savedSelection: React.MutableRefObject<Range | null>;
+    onImageClick: (src: string, alt?: string) => void;
 }
 
 /** Format checked_at date for display */
@@ -76,6 +79,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     block, index, canEdit, focusedBlockId,
     onCheck, onContentChange, onFocus, onKeyDown, onToggleType, onDelete, onInsertAfter,
     blockRefs, showColorPicker, onShowColorPicker, savedSelection,
+    onImageClick,
 }) => {
     const {
         attributes, listeners, setNodeRef, transform, transition, isDragging,
@@ -152,6 +156,122 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     const isCheckbox = block.block_type === 'checkbox';
     const isEmpty = !block.content || block.content.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/gi, '').trim() === '';
 
+    // ── 이미지 / 테이블 hover-overlay 리사이즈 toolbar ──
+    const [hoveredImg, setHoveredImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null);
+    const [hoveredTable, setHoveredTable] = useState<{ el: HTMLTableElement; rect: DOMRect } | null>(null);
+    const hideTimerRef = useRef<number | null>(null);
+    const cancelHideTimer = () => {
+        if (hideTimerRef.current !== null) {
+            clearTimeout(hideTimerRef.current);
+            hideTimerRef.current = null;
+        }
+    };
+    const scheduleHide = () => {
+        cancelHideTimer();
+        hideTimerRef.current = window.setTimeout(() => {
+            setHoveredImg(null);
+            setHoveredTable(null);
+        }, 250);
+    };
+    useEffect(() => () => cancelHideTimer(), []);
+    // 스크롤되면 toolbar 위치가 stale → 숨김
+    useEffect(() => {
+        if (!hoveredImg && !hoveredTable) return;
+        const handler = () => {
+            setHoveredImg(null);
+            setHoveredTable(null);
+        };
+        window.addEventListener('scroll', handler, true);
+        return () => window.removeEventListener('scroll', handler, true);
+    }, [hoveredImg, hoveredTable]);
+
+    const handleEditorMouseOver = (e: React.MouseEvent) => {
+        if (!canEdit) return;
+        const target = e.target as HTMLElement;
+        if (target instanceof HTMLImageElement) {
+            cancelHideTimer();
+            setHoveredImg({ el: target, rect: target.getBoundingClientRect() });
+            setHoveredTable(null);
+            return;
+        }
+        const table = target.closest('table') as HTMLTableElement | null;
+        if (table) {
+            cancelHideTimer();
+            setHoveredTable({ el: table, rect: table.getBoundingClientRect() });
+            setHoveredImg(null);
+        }
+    };
+    const handleEditorMouseOut = (e: React.MouseEvent) => {
+        if (!canEdit) return;
+        const target = e.target as HTMLElement;
+        if (target instanceof HTMLImageElement) {
+            scheduleHide();
+            return;
+        }
+        const table = target.closest('table');
+        if (table) {
+            const related = e.relatedTarget as HTMLElement | null;
+            if (!related || !table.contains(related)) {
+                scheduleHide();
+            }
+        }
+    };
+
+    const resizeImage = (img: HTMLImageElement, action: 'shrink' | 'grow' | 'fit' | 'reset') => {
+        if (action === 'reset') {
+            img.style.width = '';
+            img.style.height = '';
+            img.removeAttribute('data-note-width');
+        } else if (action === 'fit') {
+            img.style.width = '100%';
+            img.style.height = 'auto';
+            img.setAttribute('data-note-width', '100%');
+        } else {
+            const current = img.offsetWidth || img.naturalWidth || 200;
+            const delta = action === 'shrink' ? -50 : 50;
+            const next = Math.max(50, Math.min(2000, current + delta));
+            img.style.width = `${next}px`;
+            img.style.height = 'auto';
+            img.setAttribute('data-note-width', String(next));
+        }
+        // 변경된 HTML을 즉시 저장 → 새로고침 후에도 유지
+        if (contentRef.current) {
+            const html = contentRef.current.innerHTML;
+            lastSavedContent.current = html;
+            onContentChange(block, html);
+        }
+        // toolbar 위치 갱신 (이미지 크기 변경 후)
+        requestAnimationFrame(() => {
+            setHoveredImg(prev => prev ? { el: img, rect: img.getBoundingClientRect() } : null);
+        });
+    };
+
+    const resizeTable = (table: HTMLTableElement, action: 'fit' | 'natural' | 'wrap' | 'fontUp' | 'fontDown') => {
+        if (action === 'fit') {
+            table.setAttribute('data-fit-mode', 'fit');
+        } else if (action === 'natural') {
+            table.removeAttribute('data-fit-mode');
+        } else if (action === 'wrap') {
+            const wrapped = table.getAttribute('data-wrap-text') === 'true';
+            if (wrapped) table.removeAttribute('data-wrap-text');
+            else table.setAttribute('data-wrap-text', 'true');
+        } else {
+            // 폰트 +/- (transform scale 미사용, font-size 직접 조정)
+            const computed = window.getComputedStyle(table).fontSize;
+            const px = parseFloat(computed) || 14;
+            const next = action === 'fontUp' ? Math.min(22, px + 1) : Math.max(10, px - 1);
+            table.style.fontSize = `${next}px`;
+        }
+        if (contentRef.current) {
+            const html = contentRef.current.innerHTML;
+            lastSavedContent.current = html;
+            onContentChange(block, html);
+        }
+        requestAnimationFrame(() => {
+            setHoveredTable(prev => prev ? { el: table, rect: table.getBoundingClientRect() } : null);
+        });
+    };
+
     return (
         <Box ref={setNodeRef} style={style}>
             <Box
@@ -212,6 +332,17 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                         onBlur={handleBlur}
                         onFocus={() => onFocus(block.id)}
                         onKeyDown={e => canEdit && handleKeyDownInternal(e)}
+                        onClick={(e) => {
+                            // 이미지 클릭 → 라이트박스로 확대 보기
+                            const target = e.target as HTMLElement;
+                            if (target instanceof HTMLImageElement) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onImageClick(target.src, target.alt);
+                            }
+                        }}
+                        onMouseOver={handleEditorMouseOver}
+                        onMouseOut={handleEditorMouseOut}
                         data-placeholder={isCheckbox ? '체크리스트 항목...' : '메모를 작성하세요...'}
                         sx={{
                             fontSize: '0.9rem',
@@ -224,6 +355,8 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             transition: 'background 0.15s',
                             wordBreak: 'break-word',
                             whiteSpace: 'pre-wrap',
+                            // 큰 image/table 등은 잘리지 않고 가로 스크롤로 노출
+                            overflowX: 'auto',
                             textDecoration: isCheckbox && block.checked ? 'line-through' : 'none',
                             opacity: isCheckbox && block.checked ? 0.5 : 1,
                             color: '#374151',
@@ -236,6 +369,33 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 pointerEvents: 'none',
                             },
                             '& b, & strong': { fontWeight: 700 },
+                            // 이미지: 원본 크기 유지, 큰 이미지는 가로 스크롤로 표시 (라이트박스로 확대 가능)
+                            '& img': {
+                                maxWidth: 'none',
+                                height: 'auto',
+                                cursor: 'zoom-in',
+                                borderRadius: 1,
+                                display: 'block',
+                                my: 0.5,
+                            },
+                            // 테이블: 원본 폭 유지, 셀 내용 줄바꿈 안 함 → 가로 스크롤로 노출
+                            '& table': {
+                                width: 'max-content',
+                                maxWidth: 'none',
+                                borderCollapse: 'collapse',
+                                my: 0.5,
+                                fontSize: '0.85rem',
+                            },
+                            '& th, & td': {
+                                border: '1px solid #E5E7EB',
+                                padding: '6px 10px',
+                                whiteSpace: 'nowrap',
+                                verticalAlign: 'top',
+                            },
+                            '& th': {
+                                bgcolor: '#F9FAFB',
+                                fontWeight: 600,
+                            },
                         }}
                     />
                     {/* Shift+Enter hint for checkbox blocks */}
@@ -387,6 +547,53 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     </Box>
                 </Box>
             )}
+
+            {/* 이미지 hover 리사이즈 toolbar — 이미지 위에 떠 있는 컨트롤 */}
+            {canEdit && hoveredImg && (
+                <Box
+                    onMouseEnter={cancelHideTimer}
+                    onMouseLeave={scheduleHide}
+                    onMouseDown={(e) => e.preventDefault()}
+                    sx={{
+                        position: 'fixed',
+                        top: Math.max(4, hoveredImg.rect.top + 4),
+                        left: hoveredImg.rect.right - 4,
+                        transform: 'translateX(-100%)',
+                        zIndex: 1500,
+                        display: 'flex', alignItems: 'center', gap: 0.25,
+                        px: 0.5, py: 0.25, borderRadius: 999,
+                        bgcolor: 'rgba(30,30,30,0.92)',
+                        backdropFilter: 'blur(6px)',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+                    }}
+                >
+                    <Tooltip title="축소 (-50px)" arrow>
+                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'shrink')}
+                            sx={{ color: '#fff', p: 0.4 }}>
+                            <RemoveIcon sx={{ fontSize: '0.85rem' }} />
+                        </IconButton>
+                    </Tooltip>
+                    <Tooltip title="확대 (+50px)" arrow>
+                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'grow')}
+                            sx={{ color: '#fff', p: 0.4 }}>
+                            <AddIcon sx={{ fontSize: '0.85rem' }} />
+                        </IconButton>
+                    </Tooltip>
+                    <Box sx={{ width: 1, height: 14, bgcolor: 'rgba(255,255,255,0.25)', mx: 0.25 }} />
+                    <Tooltip title="컨테이너 폭에 맞춤" arrow>
+                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'fit')}
+                            sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 32, borderRadius: 999 }}>
+                            100%
+                        </IconButton>
+                    </Tooltip>
+                    <Tooltip title="원본 크기로 복원" arrow>
+                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'reset')}
+                            sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 32, borderRadius: 999 }}>
+                            원본
+                        </IconButton>
+                    </Tooltip>
+                </Box>
+            )}
         </Box>
     );
 };
@@ -399,6 +606,11 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map());
     const pendingFocusRef = useRef<number | null>(null);
     const savedSelection = useRef<Range | null>(null);
+    // 이미지 라이트박스
+    const [previewImage, setPreviewImage] = useState<{ src: string; alt?: string } | null>(null);
+    const handleImageClick = useCallback((src: string, alt?: string) => {
+        setPreviewImage({ src, alt });
+    }, []);
 
     const { data: blocks = [] } = useQuery<TaskActivity[]>({
         queryKey: ['activities', taskId],
@@ -683,6 +895,7 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                                 showColorPicker={showColorPicker}
                                 onShowColorPicker={setShowColorPicker}
                                 savedSelection={savedSelection}
+                                onImageClick={handleImageClick}
                             />
                         ))}
                     </SortableContext>
@@ -741,6 +954,13 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                     )}
                 </Box>
             )}
+
+            {/* 이미지 라이트박스 — 이미지 클릭 시 확대/축소 보기 */}
+            <ImagePreviewModal
+                src={previewImage?.src ?? null}
+                alt={previewImage?.alt}
+                onClose={() => setPreviewImage(null)}
+            />
         </Dialog>
     );
 };

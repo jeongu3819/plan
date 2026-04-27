@@ -256,7 +256,7 @@ export default function SheetTemplatePage() {
               <Button variant="outlined" onClick={() => openPreview(previewTemplate)}>다시 시도</Button>
             </Box>
           ) : previewTemplate?.structure ? (
-            <SheetRenderer structure={previewTemplate.structure} readOnly />
+            <SheetRenderer structure={previewTemplate.structure} readOnly templatePreview />
           ) : (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}>
               <Typography color="text.secondary">구조 데이터가 없습니다</Typography>
