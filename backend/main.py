@@ -183,6 +183,44 @@ def _run_migrations():
                 f"sheet_executions.task_id FK ON DELETE SET NULL 마이그레이션 실패 (무시): {e}"
             )
 
+    # v3.8: sheet_executions.project_id FK → ON DELETE SET NULL
+    # Project 영구 삭제 시 SheetExecution 이력은 보존하고 project_id 만 NULL 처리되도록 한다.
+    # 휴지통 만료 정리에서 Project 삭제가 FK 위반으로 실패하던 문제를 근본 해결.
+    if engine.dialect.name == "mysql" and "sheet_executions" in insp.get_table_names():
+        try:
+            with engine.begin() as conn:
+                row = conn.execute(text("""
+                    SELECT CONSTRAINT_NAME, DELETE_RULE
+                    FROM information_schema.REFERENTIAL_CONSTRAINTS
+                    WHERE TABLE_NAME = 'sheet_executions'
+                      AND CONSTRAINT_SCHEMA = DATABASE()
+                      AND REFERENCED_TABLE_NAME = 'projects'
+                """)).fetchone()
+                current_name = row[0] if row else None
+                current_rule = (row[1] or "").upper() if row else ""
+
+                # project_id 컬럼은 NULL 허용으로 보장
+                conn.execute(text("ALTER TABLE sheet_executions MODIFY COLUMN project_id INT NULL"))
+
+                if current_name and current_rule != "SET NULL":
+                    conn.execute(text(f"ALTER TABLE sheet_executions DROP FOREIGN KEY `{current_name}`"))
+                    conn.execute(text(
+                        "ALTER TABLE sheet_executions "
+                        "ADD CONSTRAINT fk_sheet_executions_project "
+                        "FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL"
+                    ))
+                elif not current_name:
+                    conn.execute(text(
+                        "ALTER TABLE sheet_executions "
+                        "ADD CONSTRAINT fk_sheet_executions_project "
+                        "FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL"
+                    ))
+        except Exception as e:
+            import logging
+            logging.getLogger("main").warning(
+                f"sheet_executions.project_id FK ON DELETE SET NULL 마이그레이션 실패 (무시): {e}"
+            )
+
 _run_migrations()
 
 app = FastAPI(title="Antigravity Schedule Platform API")
@@ -1683,6 +1721,11 @@ def _purge_expired_trash(db: Session):
                 db.query(Task.id).filter(Task.project_id == pid)
             )
         ).update({SheetExecution.task_id: None}, synchronize_session=False)
+        # Project 삭제 전 SheetExecution.project_id 도 NULL 처리 (이력 보존, FK 위반 방지)
+        # fk_sheet_executions_project 가 ON DELETE SET NULL 로 설정되지 않은 환경 보호.
+        db.query(SheetExecution).filter(
+            SheetExecution.project_id == pid
+        ).update({SheetExecution.project_id: None}, synchronize_session=False)
         db.query(Task).filter(Task.project_id == pid).delete(synchronize_session=False)
         db.query(SubProjectModel).filter(SubProjectModel.project_id == pid).delete()
         project_notes = db.query(NoteModel).filter(NoteModel.project_id == pid).all()
@@ -5832,8 +5875,14 @@ def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = D
     high_priority = [t for t in tasks if t.priority == "high" and t.status not in ("done", "hold")]
 
     # Sheet 실행 현황
+    # 진행 중 sheet 는 status=="in_progress" + progress<100 + task_id 가 있는 것만 집계.
+    # - 100% 도달했는데 status 가 자동으로 completed 로 플립되지 않은 경우에도 즉시 제외
+    # - Task 에서 연결 해제된(task_id NULL) sheet 는 Dashboard 진행 중에 표시하지 않음
     sheet_executions_active = db.query(SheetExecution).filter(
-        SheetExecution.space_id == space_id, SheetExecution.status == "in_progress"
+        SheetExecution.space_id == space_id,
+        SheetExecution.status == "in_progress",
+        SheetExecution.progress < 100,
+        SheetExecution.task_id.isnot(None),
     ).all() if project_ids or True else []
     sheet_recent_completed = db.query(SheetExecution).filter(
         SheetExecution.space_id == space_id, SheetExecution.status == "completed"
@@ -5854,6 +5903,9 @@ def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = D
             "id": e.id, "title": e.title, "template_id": e.template_id,
             "status": e.status, "progress": e.progress,
             "equipment_name": e.equipment_name,
+            # v3.9: project_id / task_id 도 함께 노출 — 프론트에서 project 단위 grouping 시
+            #       project_name 문자열이 아닌 id 로 안전하게 묶기 위함 (동명 프로젝트 충돌 방지).
+            "project_id": e.project_id, "task_id": e.task_id,
             "project_name": pn, "task_name": tn,
             "started_at": iso(e.started_at), "completed_at": iso(e.completed_at),
         }
@@ -6660,18 +6712,28 @@ def unlink_sheet_execution_task(
     user_id: int = Query(...),
     db: Session = Depends(get_db),
 ):
-    """Sheet 실행과 Task의 연결만 해제 (sheet 자체는 보존)."""
+    """Sheet 실행과 Task의 연결만 해제 (sheet 자체는 보존).
+
+    v3.9: 연결 해제 시 status="unlinked"로 명시 표시.
+          Dashboard 진행 중 sheet count / Sheets 관리 화면에서 unlinked 를 별도로
+          식별할 수 있게 한다 (이전엔 task_id=NULL만으로는 "원래 task 없이 시작한 시트"와
+          "task에서 해제된 시트"를 구분할 수 없었음).
+          단, completed 상태인 시트는 이력 보존을 위해 status를 바꾸지 않는다.
+    """
     execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
     if not execution:
         raise HTTPException(404, "Execution not found")
     old_task_id = execution.task_id
     if old_task_id is None:
         return {"message": "이미 Task와 연결되어 있지 않습니다", "task_id": None}
+    old_status = execution.status
     execution.task_id = None
+    if execution.status not in ("completed", "cancelled"):
+        execution.status = "unlinked"
     db.add(SheetExecutionLog(
         execution_id=execution_id, action="unlink_task",
-        old_value=f"task_id={old_task_id}",
-        new_value="task_id=None",
+        old_value=f"task_id={old_task_id},status={old_status}",
+        new_value=f"task_id=None,status={execution.status}",
         user_id=user_id,
     ))
     db.commit()
@@ -6691,6 +6753,157 @@ def unlink_sheet_execution_task(
         "old_task_id": old_task_id,
         "task_progress": task_progress,
     }
+
+
+class MarkAllProgressRequest(BaseModel):
+    keep_na: bool = True
+
+
+@app.post("/api/sheet-executions/{execution_id}/mark-all-progress")
+def mark_all_sheet_progress(
+    execution_id: int,
+    body: MarkAllProgressRequest = Body(default_factory=MarkAllProgressRequest),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """v3.9: 시트의 모든 항목을 한 번에 "진행" 처리한다.
+
+    - keep_na=True (기본): value=="N/A" 인 항목은 건드리지 않는다 (사용자가 의도적으로
+      N/A로 둔 항목을 강제로 진행 처리하지 않기 위해).
+    - keep_na=False: N/A 도 진행 처리.
+    - 이미 checked=True 인 항목은 skip (변경 카운트에서도 제외).
+    - 진행률 재계산 후 _sync_task_progress 로 task progress/status 도 즉시 반영.
+    - 응답에 task_progress/task_status 까지 포함시켜 프론트가 추가 fetch 없이
+      Board / Dashboard / TaskDrawer 를 즉시 업데이트할 수 있게 한다.
+    """
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    if execution.status == "completed":
+        raise HTTPException(400, "이미 완료된 실행입니다")
+
+    items = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id
+    ).all()
+
+    now = datetime.now(KST)
+    updated_count = 0
+    skipped_na_count = 0
+    for it in items:
+        if it.value == "N/A":
+            if body.keep_na:
+                skipped_na_count += 1
+                continue
+        if it.checked:
+            continue
+        it.checked = True
+        it.checked_by = user_id
+        it.checked_at = now
+        # value 가 비어 있으면 "O" 로 채워서 일반 진행 항목과 표시 일관성 유지
+        if not (it.value or "").strip():
+            it.value = "O"
+        updated_count += 1
+
+    if updated_count > 0:
+        db.add(SheetExecutionLog(
+            execution_id=execution_id,
+            action="mark_all_progress",
+            old_value=f"unchecked->checked count={updated_count}",
+            new_value=f"keep_na={body.keep_na}",
+            user_id=user_id,
+        ))
+
+    # 진행률 재계산 (N/A는 모수에서 제외 — 기존 정책 동일)
+    total = execution.total_items or len(items) or 1
+    na_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id,
+        SheetExecutionItem.value == "N/A",
+    ).count()
+    effective_total = max(1, total - na_count)
+    checked_count = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
+    ).count()
+    execution.checked_items = checked_count
+    execution.progress = min(100, int(checked_count / effective_total * 100))
+    db.commit()
+
+    # Task 동기화
+    task_progress: int | None = None
+    task_status: str | None = None
+    if execution.task_id:
+        try:
+            task_progress = _sync_task_progress(db, execution.task_id)
+            task = db.query(Task).filter(Task.id == execution.task_id).first()
+            if task:
+                task_status = task.status
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "sheet_execution_id": execution.id,
+        "updated_count": updated_count,
+        "skipped_na_count": skipped_na_count,
+        "total_items": total,
+        "checked_items": execution.checked_items,
+        "progress": execution.progress,
+        "task_id": execution.task_id,
+        "task_progress": task_progress,
+        "task_status": task_status,
+    }
+
+
+@app.delete("/api/sheet-executions/{execution_id}")
+def delete_sheet_execution(
+    execution_id: int,
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Sheet 실행본 영구 삭제 (운영자 직접 DB 삭제를 없애기 위한 안전 엔드포인트).
+
+    v3.9: 다음 상태에서만 삭제 허용:
+        - unlinked  : Task 에서 연결 해제됨 (Dashboard 잔존 정리용)
+        - cancelled : 취소된 실행
+        - completed : 완료된 실행 (이력 정리)
+        - in_progress 이지만 task_id IS NULL (어떤 task 에도 연결 안된 진행중 시트)
+    Task 에 연결된 in_progress 실행본은 삭제 불가 — 진행 중 작업의 진행률 소스를
+    실수로 날리는 것을 방지한다. 필요 시 먼저 연결 해제(unlink)를 거친 뒤 삭제.
+
+    SheetExecutionItem / SheetExecutionLog 는 ondelete=CASCADE 로 자동 정리되지만
+    SheetExecutionMapping 은 ondelete=CASCADE 가 없을 수 있으므로 명시적으로 정리.
+    """
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+
+    if execution.status == "in_progress" and execution.task_id is not None:
+        raise HTTPException(
+            400,
+            "Task 에 연결된 진행 중 시트는 삭제할 수 없습니다. 먼저 연결 해제 후 삭제하세요.",
+        )
+
+    # SheetExecutionMapping 수동 정리 (cascade 없을 수 있음)
+    try:
+        from app.models import SheetExecutionMapping
+        db.query(SheetExecutionMapping).filter(
+            SheetExecutionMapping.execution_id == execution_id
+        ).delete(synchronize_session=False)
+    except Exception:
+        pass
+
+    # 감사 로그를 한 줄 남기고 삭제 (CASCADE 로 곧 사라지지만 다른 시트와의 분리 추적은 어려움)
+    db.add(SheetExecutionLog(
+        execution_id=execution_id, action="delete",
+        old_value=f"status={execution.status},task_id={execution.task_id}",
+        new_value="deleted",
+        user_id=user_id,
+    ))
+    db.commit()
+
+    db.delete(execution)
+    db.commit()
+
+    return {"message": "Sheet 실행본이 삭제되었습니다", "execution_id": execution_id}
 
 
 @app.get("/api/sheet-executions/{execution_id}/export")

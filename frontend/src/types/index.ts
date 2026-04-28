@@ -358,7 +358,8 @@ export interface SheetExecution {
   title: string;
   equipment_name?: string;
   sheet_type?: SheetType;
-  status: 'in_progress' | 'completed' | 'cancelled';
+  // v3.9: 'unlinked' = Task에서 연결 해제된 시트 (Dashboard 진행 중 카운트에서 제외, Sheets 관리 화면에서 삭제 가능)
+  status: 'in_progress' | 'completed' | 'cancelled' | 'unlinked';
   total_items: number;
   checked_items: number;
   progress: number;

@@ -75,6 +75,9 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
       if (sel && sel.id === taskId) {
         useAppStore.setState({ selectedTask: { ...sel, progress: newProgress } });
       }
+      // v3.9: Dashboard 진행 중 sheet count / Sheets 관리 화면도 즉시 반영
+      queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
+      queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
       refetch();
     },
     onError: (e: any) => alert(e?.response?.data?.detail || '연결 해제 실패'),

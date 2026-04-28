@@ -1,7 +1,7 @@
 /**
  * SheetExecutionPage — Sheet 실행 화면 (체크/메모/완료)
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Paper, Button, Chip, LinearProgress, IconButton,
   TextField, Dialog, DialogTitle, DialogContent, DialogActions,
@@ -11,6 +11,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HistoryIcon from '@mui/icons-material/History';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
+import DoneAllIcon from '@mui/icons-material/DoneAll';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
@@ -64,6 +65,7 @@ export default function SheetExecutionPage() {
   const [memoDialog, setMemoDialog] = useState<{ itemId: number; cellRef: string; currentMemo: string } | null>(null);
   const [memoText, setMemoText] = useState('');
   const [logOpen, setLogOpen] = useState(false);
+  const [markAllConfirmOpen, setMarkAllConfirmOpen] = useState(false);
 
   const { data: execution, isLoading } = useQuery({
     queryKey: ['sheetExecution', executionId],
@@ -78,31 +80,53 @@ export default function SheetExecutionPage() {
     enabled: !!executionId && logOpen,
   });
 
+  // v3.9: sheet 항목 변경은 backend 의 _sync_task_progress 가 task progress/status 를
+  //       자동 동기화하므로, 프론트도 ['tasks'](Board/Roadmap/Calendar 등),
+  //       ['spaceOverview'](Home 진행 중 sheet 카운트),
+  //       ['sheetExecutions'](Sheets 관리 화면) 캐시를 함께 invalidate 해야 한다.
+  //       이걸 빼먹으면 백엔드 데이터는 맞아도 UI(Board 컬럼 자동 이동, Dashboard 카운트)가
+  //       stale 상태로 남아서 "50% 인데 To do 그대로" 같은 증상이 생긴다.
+  const invalidateSheetSync = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
+    queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
+    queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
+  }, [queryClient, executionId]);
+
   const checkMutation = useMutation({
     mutationFn: ({ itemId, checked }: { itemId: number; checked: boolean }) =>
       api.updateSheetExecutionItem(Number(executionId), itemId, { checked }, currentUserId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] }),
+    onSuccess: () => invalidateSheetSync(),
   });
 
   // v3.2: cell_ref 단위 upsert — 상태/진행일/담당자/비고 모두 이걸로 처리
   const cellUpsertMutation = useMutation({
     mutationFn: ({ cellRef, body }: { cellRef: string; body: { checked?: boolean; value?: string; memo?: string } }) =>
       api.upsertSheetExecutionCell(Number(executionId), cellRef, body, currentUserId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] }),
+    onSuccess: () => invalidateSheetSync(),
   });
 
   const memoMutation = useMutation({
     mutationFn: ({ itemId, memo }: { itemId: number; memo: string }) =>
       api.updateSheetExecutionItem(Number(executionId), itemId, { memo }, currentUserId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
+      invalidateSheetSync();
       setMemoDialog(null);
     },
   });
 
   const completeMutation = useMutation({
     mutationFn: () => api.completeSheetExecution(Number(executionId), currentUserId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] }),
+    onSuccess: () => invalidateSheetSync(),
+  });
+
+  // v3.10: 전체 진행 처리 — 미진행 항목을 일괄 'O' 처리. N/A는 유지.
+  const markAllMutation = useMutation({
+    mutationFn: () => api.markAllSheetProgress(Number(executionId), true, currentUserId),
+    onSuccess: () => {
+      invalidateSheetSync();
+      setMarkAllConfirmOpen(false);
+    },
   });
 
   const handleCheckChange = (cellRef: string, checked: boolean) => {
@@ -199,6 +223,18 @@ export default function SheetExecutionPage() {
           >
             변경 이력
           </Button>
+          {!isCompleted && execution.sheet_type !== 'assignment_mapping' && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<DoneAllIcon sx={{ fontSize: 16 }} />}
+              onClick={() => setMarkAllConfirmOpen(true)}
+              disabled={markAllMutation.isPending}
+              sx={{ fontSize: '0.76rem', borderColor: '#2955FF', color: '#2955FF' }}
+            >
+              전체 진행 처리
+            </Button>
+          )}
           {!isCompleted && (
             <Button
               size="small"
@@ -353,6 +389,32 @@ export default function SheetExecutionPage() {
             sx={{ bgcolor: '#2955FF' }}
           >
             저장
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Mark-all-progress confirm dialog */}
+      <Dialog open={markAllConfirmOpen} onClose={() => !markAllMutation.isPending && setMarkAllConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700, fontSize: '0.95rem' }}>전체 진행 처리</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            현재 체크시트의 미진행 항목을 모두 '진행(O)'으로 변경할까요?
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            • 이미 N/A로 설정된 항목은 그대로 유지됩니다.<br />
+            • 이미 체크된 항목은 변경하지 않습니다.<br />
+            • 진행일 컬럼이 있으면 오늘 날짜로 자동 채워집니다.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMarkAllConfirmOpen(false)} disabled={markAllMutation.isPending}>취소</Button>
+          <Button
+            variant="contained"
+            onClick={() => markAllMutation.mutate()}
+            disabled={markAllMutation.isPending}
+            sx={{ bgcolor: '#2955FF' }}
+          >
+            {markAllMutation.isPending ? '처리 중…' : '전체 진행 처리'}
           </Button>
         </DialogActions>
       </Dialog>

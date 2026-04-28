@@ -1122,6 +1122,20 @@ export const api = {
     const res = await client.patch(`/sheet-executions/${executionId}/unlink-task`, null, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
+  /** v3.9: unlinked / cancelled / completed / (task 미연결)in_progress 시트 영구 삭제. */
+  deleteSheetExecution: async (executionId: number, userId: number): Promise<any> => {
+    const res = await client.delete(`/sheet-executions/${executionId}`, { params: { user_id: requireUserId(userId) } });
+    return res.data;
+  },
+  /** v3.10: 시트의 모든 미진행 항목을 일괄 진행 처리. keep_na=true 면 N/A 항목은 건너뜀. */
+  markAllSheetProgress: async (executionId: number, keepNa: boolean, userId: number): Promise<any> => {
+    const res = await client.post(
+      `/sheet-executions/${executionId}/mark-all-progress`,
+      { keep_na: keepNa },
+      { params: { user_id: requireUserId(userId) } }
+    );
+    return res.data;
+  },
   /** 현재 웹에서 수정한 최신 상태를 xlsx로 받아옴. 브라우저 다운로드 트리거. */
   downloadSheetExecutionXlsx: async (executionId: number, suggestedName?: string): Promise<void> => {
     const res = await client.get(`/sheet-executions/${executionId}/export`, { responseType: 'blob' });

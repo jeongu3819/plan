@@ -6,15 +6,18 @@ import {
   Box, Typography, Paper, Chip, FormControl, InputLabel,
   Select, MenuItem, alpha, CircularProgress, IconButton,
   LinearProgress, TextField, InputAdornment, Collapse, Button,
+  Tooltip,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DescriptionIcon from '@mui/icons-material/Description';
 import FilterListIcon from '@mui/icons-material/FilterList';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAppStore } from '../stores/useAppStore';
 import { useNavigate } from 'react-router-dom';
@@ -26,6 +29,7 @@ export default function SheetHistoryPage() {
   const navigate = useNavigate();
   const { spacePath } = useSpaceNav();
   const currentUserId = useAppStore(state => state.currentUserId);
+  const queryClient = useQueryClient();
 
   const { data: overviewData } = useQuery({
     queryKey: ['spaceOverview', currentSpaceId, currentUserId],
@@ -67,6 +71,22 @@ export default function SheetHistoryPage() {
 
   const executions: SheetExecution[] = (execData as any)?.executions || [];
 
+  // v3.9: unlinked / cancelled / 등 cleanup 가능한 시트 영구 삭제
+  const deleteMut = useMutation({
+    mutationFn: (executionId: number) => api.deleteSheetExecution(executionId, currentUserId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
+      queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
+    },
+    onError: (e: any) => alert(e?.response?.data?.detail || '삭제 실패'),
+  });
+
+  const handleDelete = (e: React.MouseEvent, exec: SheetExecution) => {
+    e.stopPropagation();
+    if (!confirm(`'${exec.title}' 시트 실행본을 영구 삭제할까요?\n(items / logs 도 함께 삭제됩니다)`)) return;
+    deleteMut.mutate(exec.id);
+  };
+
   return (
     <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto' }}>
       {/* Header */}
@@ -101,6 +121,8 @@ export default function SheetHistoryPage() {
                 <MenuItem value="">전체</MenuItem>
                 <MenuItem value="in_progress">진행 중</MenuItem>
                 <MenuItem value="completed">완료</MenuItem>
+                <MenuItem value="unlinked">연결 해제됨</MenuItem>
+                <MenuItem value="cancelled">취소됨</MenuItem>
               </Select>
             </FormControl>
             <TextField
@@ -170,6 +192,19 @@ export default function SheetHistoryPage() {
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           {executions.map(exec => {
             const isCompleted = exec.status === 'completed';
+            const isUnlinked = exec.status === 'unlinked';
+            const isCancelled = exec.status === 'cancelled';
+            // v3.9: unlinked/cancelled 상태이거나, in_progress이면서 task_id 가 없는 시트는 운영자가
+            //       UI에서 직접 삭제 가능 (DB 직접 진입 불필요).
+            const canDelete = isUnlinked || isCancelled || isCompleted ||
+              (exec.status === 'in_progress' && !(exec as any).task_id);
+            const statusMeta = isCompleted
+              ? { label: '완료', color: '#16A34A', bg: alpha('#22C55E', 0.1), icon: <CheckCircleIcon /> as React.ReactNode, iconColor: '#22C55E' }
+              : isUnlinked
+                ? { label: '연결 해제됨', color: '#6B7280', bg: alpha('#9CA3AF', 0.12), icon: <LinkOffIcon /> as React.ReactNode, iconColor: '#9CA3AF' }
+                : isCancelled
+                  ? { label: '취소됨', color: '#9CA3AF', bg: alpha('#9CA3AF', 0.1), icon: <ClearIcon /> as React.ReactNode, iconColor: '#9CA3AF' }
+                  : { label: '진행 중', color: '#D97706', bg: alpha('#F59E0B', 0.1), icon: <PlayCircleOutlineIcon /> as React.ReactNode, iconColor: '#F59E0B' };
             return (
               <Paper
                 key={exec.id}
@@ -178,12 +213,13 @@ export default function SheetHistoryPage() {
                 sx={{
                   p: 2, borderRadius: 2, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', gap: 2,
+                  opacity: isUnlinked || isCancelled ? 0.75 : 1,
                   '&:hover': { bgcolor: '#FAFAFA', borderColor: '#2955FF' },
                   transition: 'all 0.15s',
                 }}
               >
-                <Box sx={{ color: isCompleted ? '#22C55E' : '#F59E0B', display: 'flex', flexShrink: 0 }}>
-                  {isCompleted ? <CheckCircleIcon /> : <PlayCircleOutlineIcon />}
+                <Box sx={{ color: statusMeta.iconColor, display: 'flex', flexShrink: 0 }}>
+                  {statusMeta.icon}
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="subtitle2" fontWeight={700} sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -194,12 +230,12 @@ export default function SheetHistoryPage() {
                       <Chip label={exec.equipment_name} size="small" variant="outlined" sx={{ height: 18, fontSize: '0.6rem' }} />
                     )}
                     <Chip
-                      label={isCompleted ? '완료' : '진행 중'}
+                      label={statusMeta.label}
                       size="small"
                       sx={{
                         height: 18, fontSize: '0.6rem', fontWeight: 600,
-                        bgcolor: isCompleted ? alpha('#22C55E', 0.1) : alpha('#F59E0B', 0.1),
-                        color: isCompleted ? '#16A34A' : '#D97706',
+                        bgcolor: statusMeta.bg,
+                        color: statusMeta.color,
                       }}
                     />
                   </Box>
@@ -231,6 +267,18 @@ export default function SheetHistoryPage() {
                     </Typography>
                   )}
                 </Box>
+                {canDelete && (
+                  <Tooltip title="시트 영구 삭제">
+                    <IconButton
+                      size="small"
+                      onClick={(e) => handleDelete(e, exec)}
+                      disabled={deleteMut.isPending}
+                      sx={{ color: '#EF4444', flexShrink: 0, '&:hover': { bgcolor: alpha('#EF4444', 0.08) } }}
+                    >
+                      <DeleteOutlineIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
               </Paper>
             );
           })}
