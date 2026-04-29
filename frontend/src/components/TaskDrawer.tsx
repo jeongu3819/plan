@@ -138,6 +138,7 @@ const TaskDrawer: React.FC = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
+            queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
             closeDrawer();
         },
     });
@@ -147,6 +148,7 @@ const TaskDrawer: React.FC = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
+            queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
             const followUp = pendingFollowUpRef.current;
             pendingFollowUpRef.current = null;
             if (followUp) {
@@ -163,6 +165,7 @@ const TaskDrawer: React.FC = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
+            queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
             closeDrawer();
         },
     });

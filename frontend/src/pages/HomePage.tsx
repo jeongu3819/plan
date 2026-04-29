@@ -56,7 +56,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../hooks/useSpaceNav';
 import { useDensityScores } from '../hooks/useDensityScores';
 import ZeroStateDashboard from '../components/ZeroStateDashboard';
-import { TaskList, ProjectGroupedSheetList } from '../components/space/PurposeOverview';
+import { ProjectGroupedSheetList } from '../components/space/PurposeOverview';
 import SheetExecutionPopup from '../components/sheets/SheetExecutionPopup';
 import {
   format,
@@ -309,6 +309,40 @@ const SortableWidget: React.FC<{
 };
 
 // ── Dashboard Calendar Component ──
+// Bar style by status / priority (light theme tuned, dark theme degrades gracefully)
+const taskBarStyle = (t: Task): { bg: string; fg: string; border: string } => {
+  // High priority overrides for visibility
+  if (t.priority === 'high' && t.status !== 'done') {
+    return { bg: '#FEE2E2', fg: '#B91C1C', border: '#EF4444' };
+  }
+  switch (t.status) {
+    case 'in_progress':
+      return { bg: '#DBEAFE', fg: '#1E40AF', border: '#2955FF' };
+    case 'done':
+      return { bg: '#F3F4F6', fg: '#6B7280', border: '#9CA3AF' };
+    case 'hold':
+      return { bg: '#FEF3C7', fg: '#92400E', border: '#F59E0B' };
+    case 'todo':
+    default:
+      return { bg: '#E5E7EB', fg: '#374151', border: '#6B7280' };
+  }
+};
+
+// Compute the [from, to] inclusive range for a task in YYYY-MM-DD-friendly Date objects.
+// Returns null when neither date is present.
+const taskDateRange = (t: Task): { from: Date; to: Date; single: boolean } | null => {
+  const sd = (t as any).start_date ? new Date((t as any).start_date) : null;
+  const dd = t.due_date ? new Date(t.due_date) : null;
+  if (sd && dd) {
+    // If start > due, treat as single day on due
+    if (sd.getTime() > dd.getTime()) return { from: dd, to: dd, single: true };
+    return { from: sd, to: dd, single: isSameDay(sd, dd) };
+  }
+  if (dd) return { from: dd, to: dd, single: true };
+  if (sd) return { from: sd, to: sd, single: true };
+  return null;
+};
+
 const DashboardCalendar: React.FC<{
   stats: DashboardStats | undefined;
   overviewData: any;
@@ -334,7 +368,15 @@ const DashboardCalendar: React.FC<{
     ...(overviewData?.next_week_tasks || []),
     ...(overviewData?.incomplete_carried_over || []),
   ];
-  const uniqueTasks = allTasks.filter((t, i, arr) => arr.findIndex(x => x.id === t.id) === i);
+  // Prefer the task entry that has start_date (stats/all_tasks) over the brief one
+  const taskMap = new Map<number, Task>();
+  for (const t of allTasks) {
+    const existing = taskMap.get(t.id);
+    if (!existing || (!((existing as any).start_date) && (t as any).start_date)) {
+      taskMap.set(t.id, t);
+    }
+  }
+  const uniqueTasks = Array.from(taskMap.values());
   const WDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
   const handleOverflowClick = (e: React.MouseEvent<HTMLElement>, day: Date, tasks: Task[]) => {
@@ -387,7 +429,21 @@ const DashboardCalendar: React.FC<{
           const isSun = getDay(day) === 0;
           const isSat = getDay(day) === 6;
           const isTd = isDateToday(day);
-          const dayTasks = uniqueTasks.filter(t => t.due_date && isSameDay(new Date(t.due_date), day));
+          const isWeekStart = getDay(day) === 0;
+          const isWeekEnd = getDay(day) === 6;
+          const isMonthStart = isSameDay(day, mStart);
+          const isMonthEnd = isSameDay(day, mEnd);
+          const dayMs = day.getTime();
+
+          // A task occupies this day if start <= day <= due (inclusive)
+          const dayTasks = uniqueTasks.filter(t => {
+            const range = taskDateRange(t);
+            if (!range) return false;
+            // Compare by date (zero out time)
+            const fromMs = new Date(range.from.getFullYear(), range.from.getMonth(), range.from.getDate()).getTime();
+            const toMs = new Date(range.to.getFullYear(), range.to.getMonth(), range.to.getDate()).getTime();
+            return dayMs >= fromMs && dayMs <= toMs;
+          });
           const displayTasks = dayTasks.slice(0, 5);
           const overflowCount = dayTasks.length - 5;
 
@@ -431,28 +487,41 @@ const DashboardCalendar: React.FC<{
                 )}
               </Box>
 
-              {displayTasks.map(t => (
-                <Box
-                  key={t.id}
-                  onClick={(e) => { e.stopPropagation(); openDrawer(t); }}
-                  sx={{
-                    px: 0.5, py: 0.2,
-                    bgcolor: t.status === 'done' ? '#DCFCE7' : statusColors[t.status] ? `${statusColors[t.status]}1A` : '#F3F4F6',
-                    color: t.status === 'done' ? '#16A34A' : statusColors[t.status] || '#4B5563',
-                    borderLeft: `2px solid ${t.status === 'done' ? '#22C55E' : statusColors[t.status] || '#9CA3AF'}`,
-                    borderRadius: '0 4px 4px 0',
-                    fontSize: '0.7rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    '&:hover': { filter: 'brightness(0.95)' }
-                  }}
-                >
-                  {t.title}
-                </Box>
-              ))}
+              {displayTasks.map(t => {
+                const range = taskDateRange(t)!;
+                const style = taskBarStyle(t);
+                const fromMs = new Date(range.from.getFullYear(), range.from.getMonth(), range.from.getDate()).getTime();
+                const toMs = new Date(range.to.getFullYear(), range.to.getMonth(), range.to.getDate()).getTime();
+                const isBarStart = dayMs === fromMs || isMonthStart || isWeekStart;
+                const isBarEnd = dayMs === toMs || isMonthEnd || isWeekEnd;
+                const isReallyStart = dayMs === fromMs;
+                const radiusLeft = isBarStart ? 4 : 0;
+                const radiusRight = isBarEnd ? 4 : 0;
+                return (
+                  <Box
+                    key={t.id}
+                    onClick={(e) => { e.stopPropagation(); openDrawer(t); }}
+                    sx={{
+                      px: 0.5, py: 0.2,
+                      bgcolor: style.bg,
+                      color: style.fg,
+                      borderLeft: isReallyStart ? `3px solid ${style.border}` : 'none',
+                      borderRadius: `${radiusLeft}px ${radiusRight}px ${radiusRight}px ${radiusLeft}px`,
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      opacity: t.status === 'done' ? 0.7 : 1,
+                      '&:hover': { filter: 'brightness(0.95)' }
+                    }}
+                  >
+                    {/* Show title only on the first cell of the bar (per week/month) to avoid repetition */}
+                    {isBarStart ? t.title : '\u00A0'}
+                  </Box>
+                );
+              })}
               {overflowCount > 0 && (
                 <Typography
                   onClick={(e) => handleOverflowClick(e, day, dayTasks)}
@@ -489,25 +558,29 @@ const DashboardCalendar: React.FC<{
           {overflowDate ? format(overflowDate, 'M월 d일 일정') : ''}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 300, overflowY: 'auto' }}>
-          {overflowTasks.map(t => (
-            <Box
-              key={t.id}
-              onClick={() => { openDrawer(t); setOverflowAnchor(null); }}
-              sx={{
-                px: 1, py: 0.5,
-                bgcolor: t.status === 'done' ? '#DCFCE7' : statusColors[t.status] ? `${statusColors[t.status]}1A` : '#F3F4F6',
-                color: t.status === 'done' ? '#16A34A' : statusColors[t.status] || '#4B5563',
-                borderLeft: `3px solid ${t.status === 'done' ? '#22C55E' : statusColors[t.status] || '#9CA3AF'}`,
-                borderRadius: '0 4px 4px 0',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                '&:hover': { filter: 'brightness(0.95)' }
-              }}
-            >
-              {t.title}
-            </Box>
-          ))}
+          {overflowTasks.map(t => {
+            const style = taskBarStyle(t);
+            return (
+              <Box
+                key={t.id}
+                onClick={() => { openDrawer(t); setOverflowAnchor(null); }}
+                sx={{
+                  px: 1, py: 0.5,
+                  bgcolor: style.bg,
+                  color: style.fg,
+                  borderLeft: `3px solid ${style.border}`,
+                  borderRadius: '0 4px 4px 0',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  opacity: t.status === 'done' ? 0.75 : 1,
+                  '&:hover': { filter: 'brightness(0.95)' }
+                }}
+              >
+                {t.title}
+              </Box>
+            );
+          })}
         </Box>
       </Popover>
     </Paper>
@@ -1204,43 +1277,86 @@ const HomePage: React.FC = () => {
             )}
           </>
         );
-      case 'calendar': 
+      case 'calendar':
         // Calendar is now rendered outside the grid
         return null;
       case 'today_tasks':
         return (
-          <Box sx={{ height: '100%', overflowY: 'auto' }}>
-            <TaskList title={def.title} tasks={overviewData?.today_tasks || []} color="#2955FF" icon={def.icon} onTaskClick={(taskId: number, projectId: number) => openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] } as any, projectId)} emptyText="오늘 마감 작업 없음" />
-          </Box>
+          <>
+            <WidgetHeader def={def} />
+            {renderTaskList(overviewData?.today_tasks || [], '오늘 마감 작업 없음')}
+          </>
         );
       case 'check_sheets':
+        // ProjectGroupedSheetList ships its own outer Paper; render it directly without
+        // an extra wrapper so the SortableWidget Paper is the only outer card.
         return (
-          <Box sx={{ height: '100%', overflowY: 'auto' }}>
-            <ProjectGroupedSheetList title={def.title} activeSheets={overviewData?.active_sheets || []} nearCompletedSheets={overviewData?.near_completed_sheets || []} completedSheets={overviewData?.recent_completed_sheets || []} color="#16A34A" onSheetClick={setPopupExecId} emptyText="진행 중인 체크시트가 없습니다" />
-          </Box>
+          <ProjectGroupedSheetList
+            title={def.title}
+            activeSheets={overviewData?.active_sheets || []}
+            nearCompletedSheets={overviewData?.near_completed_sheets || []}
+            completedSheets={overviewData?.recent_completed_sheets || []}
+            color="#16A34A"
+            onSheetClick={setPopupExecId}
+            emptyText="진행 중인 체크시트가 없습니다"
+          />
         );
       case 'incomplete_tasks':
+        // Hidden globally — duplicates Overdue Tasks. Kept here for legacy layouts.
         return (
-          <Box sx={{ height: '100%', overflowY: 'auto' }}>
-            <TaskList title={def.title} tasks={overviewData?.incomplete_carried_over || []} color="#EF4444" icon={def.icon} onTaskClick={(taskId: number, projectId: number) => openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] } as any, projectId)} emptyText="미완료 작업 없음" />
-          </Box>
+          <>
+            <WidgetHeader def={def} />
+            {renderTaskList(overviewData?.incomplete_carried_over || [], '미완료 작업 없음')}
+          </>
         );
-      case 'high_priority':
+      case 'high_priority': {
+        // Sort: priority high → due date asc → exclude done/hold
+        const hpTasks: Task[] = [...(overviewData?.high_priority_tasks || [])]
+          .filter((t: Task) => t.status !== 'done' && t.status !== 'hold')
+          .sort((a: Task, b: Task) => {
+            const ap = a.priority === 'high' ? 0 : a.priority === 'medium' ? 1 : 2;
+            const bp = b.priority === 'high' ? 0 : b.priority === 'medium' ? 1 : 2;
+            if (ap !== bp) return ap - bp;
+            if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
+            if (a.due_date) return -1;
+            if (b.due_date) return 1;
+            return 0;
+          });
         return (
-          <Box sx={{ height: '100%', overflowY: 'auto' }}>
-            <TaskList title={def.title} tasks={overviewData?.high_priority_tasks || []} color="#F59E0B" icon={def.icon} onTaskClick={(taskId: number, projectId: number) => openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] } as any, projectId)} emptyText="우선순위 항목 없음" />
-          </Box>
+          <>
+            <WidgetHeader def={def} />
+            {renderTaskList(hpTasks, '우선순위 항목 없음')}
+          </>
         );
+      }
       default:
         return null;
     }
   };
 
-  // Display order = widgetOrder filtered to visible
-  const displayOrder = widgetOrder.filter(id => visibleWidgets.includes(id));
+  // Space purpose drives which widgets are renderable in the grid.
+  const spacePurpose: string = (overviewData as any)?.purpose || 'project_management';
+
+  // Globally suppressed:
+  //   - 'calendar': rendered above the grid (its grid slot would be an empty card)
+  //   - 'incomplete_tasks': duplicate of Overdue Tasks
+  //   - 'upcoming': duplicate of "우선순위 높은 항목" (kept) — also superseded for project_management
+  // For project_management spaces the user requested hiding the four
+  // overview-style boxes (today_tasks, check_sheets, incomplete_tasks, high_priority)
+  // since the default widgets already cover that space.
+  const FORCE_HIDDEN_GLOBAL = new Set(['calendar', 'incomplete_tasks', 'upcoming']);
+  const FORCE_HIDDEN_PM = new Set(['today_tasks', 'check_sheets', 'high_priority']);
+  const isHiddenForPurpose = (id: string) =>
+    FORCE_HIDDEN_GLOBAL.has(id) ||
+    (spacePurpose === 'project_management' && FORCE_HIDDEN_PM.has(id));
+
+  // Display order = widgetOrder filtered to visible & not purpose-hidden
+  const displayOrder = widgetOrder.filter(
+    id => visibleWidgets.includes(id) && !isHiddenForPurpose(id)
+  );
   // Add any visible widgets not in order (edge case)
   visibleWidgets.forEach(id => {
-    if (!displayOrder.includes(id)) displayOrder.push(id);
+    if (!displayOrder.includes(id) && !isHiddenForPurpose(id)) displayOrder.push(id);
   });
 
   /* ── Intro Animation State ── */
