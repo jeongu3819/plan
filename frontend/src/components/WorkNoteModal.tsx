@@ -249,6 +249,105 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
 
     const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
         if (!canEdit) return;
+
+        // 1. Try HTML Table paste from Excel or web
+        const htmlData = e.clipboardData.getData('text/html');
+        if (htmlData) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlData, 'text/html');
+            const table = doc.querySelector('table');
+            if (table) {
+                e.preventDefault();
+                const cleanTable = document.createElement('table');
+                cleanTable.className = 'work-note-table';
+                cleanTable.innerHTML = table.innerHTML;
+                
+                // Strip scripts and dangerous attributes
+                const scripts = cleanTable.querySelectorAll('script');
+                scripts.forEach(s => s.remove());
+                const allNodes = cleanTable.querySelectorAll('*');
+                allNodes.forEach(node => {
+                    Array.from(node.attributes).forEach(attr => {
+                        if (attr.name.toLowerCase().startsWith('on')) {
+                            node.removeAttribute(attr.name);
+                        }
+                    });
+                });
+
+                cleanTable.style.borderCollapse = 'collapse';
+                cleanTable.setAttribute('data-fit-mode', 'fit'); // Default to width fit
+                const cells = cleanTable.querySelectorAll('th, td');
+                cells.forEach(c => {
+                    const cell = c as HTMLElement;
+                    cell.style.border = '1px solid #E5E7EB';
+                    cell.style.padding = '8px';
+                    // Let applyTableState handle width and wrap styles
+                });
+                applyTableState(cleanTable);
+
+                const sel = window.getSelection();
+                const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+                if (range && contentRef.current && contentRef.current.contains(range.commonAncestorContainer)) {
+                    range.deleteContents();
+                    range.insertNode(cleanTable);
+                    range.setStartAfter(cleanTable);
+                    range.collapse(true);
+                    sel?.removeAllRanges();
+                    sel?.addRange(range);
+                } else if (contentRef.current) {
+                    contentRef.current.appendChild(cleanTable);
+                }
+                persistContent();
+                return;
+            }
+        }
+
+        // 2. Try TSV plain text paste
+        const plainData = e.clipboardData.getData('text/plain');
+        if (plainData) {
+            const rows = plainData.split(/\r?\n/).filter(r => r.trim() !== '');
+            const isTsv = rows.length >= 1 && rows.some(r => r.includes('\t'));
+            if (isTsv) {
+                e.preventDefault();
+                const cleanTable = document.createElement('table');
+                cleanTable.className = 'work-note-table';
+                cleanTable.style.borderCollapse = 'collapse';
+                cleanTable.style.width = '100%';
+                cleanTable.setAttribute('data-fit-mode', 'fit');
+                
+                const tbody = document.createElement('tbody');
+                rows.forEach(row => {
+                    const tr = document.createElement('tr');
+                    row.split('\t').forEach(cell => {
+                        const td = document.createElement('td');
+                        td.textContent = cell;
+                        td.style.border = '1px solid #E5E7EB';
+                        td.style.padding = '8px';
+                        td.style.whiteSpace = 'normal';
+                        td.style.wordBreak = 'break-word';
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                cleanTable.appendChild(tbody);
+
+                const sel = window.getSelection();
+                const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+                if (range && contentRef.current && contentRef.current.contains(range.commonAncestorContainer)) {
+                    range.deleteContents();
+                    range.insertNode(cleanTable);
+                    range.setStartAfter(cleanTable);
+                    range.collapse(true);
+                    sel?.removeAllRanges();
+                    sel?.addRange(range);
+                } else if (contentRef.current) {
+                    contentRef.current.appendChild(cleanTable);
+                }
+                persistContent();
+                return;
+            }
+        }
+
         const items = Array.from(e.clipboardData?.items || []);
         const imageItems = items.filter((it) => it.type && it.type.startsWith('image/'));
         if (imageItems.length === 0) return;

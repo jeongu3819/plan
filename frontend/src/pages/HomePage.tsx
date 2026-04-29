@@ -24,6 +24,7 @@ import {
   DialogActions,
   TextField,
   FormControlLabel,
+  Popover,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -68,10 +69,6 @@ import {
   isToday as isDateToday,
   addMonths,
   subMonths,
-  startOfWeek,
-  endOfWeek,
-  addWeeks,
-  subWeeks,
 } from 'date-fns';
 import {
   DndContext,
@@ -311,6 +308,212 @@ const SortableWidget: React.FC<{
   );
 };
 
+// ── Dashboard Calendar Component ──
+const DashboardCalendar: React.FC<{
+  stats: DashboardStats | undefined;
+  overviewData: any;
+  openDrawer: (task: Task) => void;
+}> = ({ stats, overviewData, openDrawer }) => {
+  const [calMonth, setCalMonth] = useState(new Date());
+  const [overflowAnchor, setOverflowAnchor] = useState<HTMLElement | null>(null);
+  const [overflowDate, setOverflowDate] = useState<Date | null>(null);
+  const [overflowTasks, setOverflowTasks] = useState<Task[]>([]);
+
+  const mStart = startOfMonth(calMonth);
+  const mEnd = endOfMonth(calMonth);
+  const mDays = eachDayOfInterval({ start: mStart, end: mEnd });
+  const pad = getDay(mStart);
+
+  const allTasks: Task[] = [
+    ...(stats?.overdue || []),
+    ...(stats?.upcoming || []),
+    ...(stats?.my_tasks || []),
+    ...(overviewData?.overdue_tasks || []),
+    ...(overviewData?.today_tasks || []),
+    ...(overviewData?.high_priority_tasks || []),
+    ...(overviewData?.next_week_tasks || []),
+    ...(overviewData?.incomplete_carried_over || []),
+  ];
+  const uniqueTasks = allTasks.filter((t, i, arr) => arr.findIndex(x => x.id === t.id) === i);
+  const WDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+  const handleOverflowClick = (e: React.MouseEvent<HTMLElement>, day: Date, tasks: Task[]) => {
+    e.stopPropagation();
+    setOverflowDate(day);
+    setOverflowTasks(tasks);
+    setOverflowAnchor(e.currentTarget);
+  };
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2, borderRadius: 3, bgcolor: '#fff', border: '1px solid rgba(0,0,0,0.08)' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CalendarMonthIcon sx={{ color: '#2955FF', fontSize: '1.4rem' }} />
+          <Typography variant="h6" sx={{ fontWeight: 800, color: '#1A1D29' }}>
+            월간 작업 캘린더
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <IconButton size="small" onClick={() => setCalMonth(subMonths(calMonth, 1))} sx={{ bgcolor: '#F3F4F6', '&:hover': { bgcolor: '#E5E7EB' } }}>
+            <ChevronLeftIcon />
+          </IconButton>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, minWidth: 100, textAlign: 'center' }}>
+            {format(calMonth, 'yyyy년 M월')}
+          </Typography>
+          <IconButton size="small" onClick={() => setCalMonth(addMonths(calMonth, 1))} sx={{ bgcolor: '#F3F4F6', '&:hover': { bgcolor: '#E5E7EB' } }}>
+            <ChevronRightIcon />
+          </IconButton>
+        </Box>
+      </Box>
+
+      {/* Weekday headers */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
+        {WDAYS.map((d, i) => (
+          <Box key={i} sx={{ textAlign: 'center', py: 1, fontSize: '0.8rem', fontWeight: 700, color: i === 0 ? '#EF4444' : i === 6 ? '#3B82F6' : '#6B7280' }}>
+            {d}
+          </Box>
+        ))}
+      </Box>
+
+      {/* Day grid */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
+        {Array.from({ length: pad }).map((_, i) => (
+          <Box key={`p${i}`} sx={{ minHeight: 110, borderBottom: '1px solid #F3F4F6', borderRight: '1px solid #F3F4F6', bgcolor: '#FAFBFC' }} />
+        ))}
+        {mDays.map((day, idx) => {
+          const dayNum = parseInt(format(day, 'd'));
+          const dateKey = format(day, 'yyyy-MM-dd');
+          const holiday = KOREAN_HOLIDAYS[dateKey];
+          const isSun = getDay(day) === 0;
+          const isSat = getDay(day) === 6;
+          const isTd = isDateToday(day);
+          const dayTasks = uniqueTasks.filter(t => t.due_date && isSameDay(new Date(t.due_date), day));
+          const displayTasks = dayTasks.slice(0, 5);
+          const overflowCount = dayTasks.length - 5;
+
+          return (
+            <Box
+              key={day.toISOString()}
+              sx={{
+                minHeight: 110,
+                borderBottom: '1px solid #F3F4F6',
+                borderRight: '1px solid #F3F4F6',
+                p: 0.5,
+                bgcolor: isTd ? '#FAFBFF' : holiday ? '#FFF5F5' : '#fff',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.3,
+                ...(idx % 7 === 6 - pad && { borderRight: 'none' }),
+              }}
+            >
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5 }}>
+                <Box
+                  sx={{
+                    width: isTd ? 24 : 'auto',
+                    height: isTd ? 24 : 'auto',
+                    borderRadius: '50%',
+                    bgcolor: isTd ? '#2955FF' : 'transparent',
+                    color: isTd ? '#fff' : holiday || isSun ? '#EF4444' : isSat ? '#3B82F6' : '#374151',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.8rem',
+                    fontWeight: isTd ? 700 : 500,
+                    px: isTd ? 0 : 0.5,
+                  }}
+                >
+                  {dayNum}
+                </Box>
+                {holiday && (
+                  <Typography sx={{ fontSize: '0.65rem', color: '#EF4444', fontWeight: 600, mt: 0.2 }}>
+                    {holiday}
+                  </Typography>
+                )}
+              </Box>
+
+              {displayTasks.map(t => (
+                <Box
+                  key={t.id}
+                  onClick={(e) => { e.stopPropagation(); openDrawer(t); }}
+                  sx={{
+                    px: 0.5, py: 0.2,
+                    bgcolor: t.status === 'done' ? '#DCFCE7' : statusColors[t.status] ? `${statusColors[t.status]}1A` : '#F3F4F6',
+                    color: t.status === 'done' ? '#16A34A' : statusColors[t.status] || '#4B5563',
+                    borderLeft: `2px solid ${t.status === 'done' ? '#22C55E' : statusColors[t.status] || '#9CA3AF'}`,
+                    borderRadius: '0 4px 4px 0',
+                    fontSize: '0.7rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    '&:hover': { filter: 'brightness(0.95)' }
+                  }}
+                >
+                  {t.title}
+                </Box>
+              ))}
+              {overflowCount > 0 && (
+                <Typography
+                  onClick={(e) => handleOverflowClick(e, day, dayTasks)}
+                  sx={{
+                    fontSize: '0.65rem',
+                    color: '#6B7280',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    textAlign: 'center',
+                    bgcolor: '#F3F4F6',
+                    borderRadius: 1,
+                    py: 0.2,
+                    '&:hover': { bgcolor: '#E5E7EB', color: '#374151' }
+                  }}
+                >
+                  +{overflowCount} more
+                </Typography>
+              )}
+            </Box>
+          );
+        })}
+      </Box>
+
+      {/* Overflow Popover */}
+      <Popover
+        open={Boolean(overflowAnchor)}
+        anchorEl={overflowAnchor}
+        onClose={() => { setOverflowAnchor(null); setOverflowDate(null); }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+        PaperProps={{ sx: { p: 1.5, width: 260, borderRadius: 2, boxShadow: '0 4px 20px rgba(0,0,0,0.1)' } }}
+      >
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: '#1A1D29' }}>
+          {overflowDate ? format(overflowDate, 'M월 d일 일정') : ''}
+        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 300, overflowY: 'auto' }}>
+          {overflowTasks.map(t => (
+            <Box
+              key={t.id}
+              onClick={() => { openDrawer(t); setOverflowAnchor(null); }}
+              sx={{
+                px: 1, py: 0.5,
+                bgcolor: t.status === 'done' ? '#DCFCE7' : statusColors[t.status] ? `${statusColors[t.status]}1A` : '#F3F4F6',
+                color: t.status === 'done' ? '#16A34A' : statusColors[t.status] || '#4B5563',
+                borderLeft: `3px solid ${t.status === 'done' ? '#22C55E' : statusColors[t.status] || '#9CA3AF'}`,
+                borderRadius: '0 4px 4px 0',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                '&:hover': { filter: 'brightness(0.95)' }
+              }}
+            >
+              {t.title}
+            </Box>
+          ))}
+        </Box>
+      </Popover>
+    </Paper>
+  );
+};
+
 const HomePage: React.FC = () => {
   const currentUserId = useAppStore(state => state.currentUserId);
   const navigate = useNavigate();
@@ -318,10 +521,7 @@ const HomePage: React.FC = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [popupExecId, setPopupExecId] = useState<number | null>(null);
 
-  const [calMonth, setCalMonth] = useState(new Date());
-  const [calViewMode, setCalViewMode] = useState<'week' | 'month'>('week');
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [hideDoneTasks, setHideDoneTasks] = useState(false);
 
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api.getMe() });
@@ -1004,297 +1204,9 @@ const HomePage: React.FC = () => {
             )}
           </>
         );
-      case 'calendar': {
-        const mStart = calViewMode === 'week' ? startOfWeek(calMonth) : startOfMonth(calMonth);
-        const mEnd = calViewMode === 'week' ? endOfWeek(calMonth) : endOfMonth(calMonth);
-        const mDays = eachDayOfInterval({ start: mStart, end: mEnd });
-        const pad = calViewMode === 'week' ? 0 : getDay(mStart);
-        const allTasks: Task[] = [
-          ...(stats?.overdue || []),
-          ...(stats?.upcoming || []),
-          ...(stats?.my_tasks || []),
-        ];
-        const uniqueTasks = allTasks.filter((t, i, arr) => arr.findIndex(x => x.id === t.id) === i);
-        const WDAYS = ['일', '월', '화', '수', '목', '금', '토'];
-
-        // Tasks only (no holidays) for the list
-        const taskEvents: { date: Date; label: string; status: string; task: Task }[] = [];
-        mDays.forEach(day => {
-          uniqueTasks
-            .filter(t => t.due_date && isSameDay(new Date(t.due_date), day))
-            .forEach(t => {
-              taskEvents.push({ date: day, label: t.title, status: t.status, task: t });
-            });
-        });
-
-        // If a date is selected, filter to that date
-        const displayEvents = selectedDate
-          ? taskEvents.filter(ev => isSameDay(ev.date, selectedDate))
-          : taskEvents;
-
-        return (
-          <>
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                mb: 1.5,
-              }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                {React.cloneElement(def.icon as React.ReactElement, {
-                  sx: { fontSize: '1.1rem', color: '#2955FF' },
-                })}
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, fontSize: '0.9rem' }}>
-                  {def.title}
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
-                <Box sx={{ display: 'flex', bgcolor: 'rgba(0,0,0,0.04)', borderRadius: 1.5, p: 0.3, mr: 1 }}>
-                  <Typography onClick={() => setCalViewMode('week')} sx={{ px: 1, py: 0.2, fontSize: '0.7rem', fontWeight: 700, borderRadius: 1, cursor: 'pointer', bgcolor: calViewMode === 'week' ? '#fff' : 'transparent', color: calViewMode === 'week' ? '#2955FF' : '#9CA3AF', boxShadow: calViewMode === 'week' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', transition: 'all 0.2s' }}>Week</Typography>
-                  <Typography onClick={() => setCalViewMode('month')} sx={{ px: 1, py: 0.2, fontSize: '0.7rem', fontWeight: 700, borderRadius: 1, cursor: 'pointer', bgcolor: calViewMode === 'month' ? '#fff' : 'transparent', color: calViewMode === 'month' ? '#2955FF' : '#9CA3AF', boxShadow: calViewMode === 'month' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', transition: 'all 0.2s' }}>Month</Typography>
-                </Box>
-                <IconButton
-                  size="small"
-                  onClick={() => {
-                    setCalMonth(calViewMode === 'week' ? subWeeks(calMonth, 1) : subMonths(calMonth, 1));
-                    setSelectedDate(null);
-                  }}
-                  sx={{ p: 0.3 }}
-                >
-                  <ChevronLeftIcon sx={{ fontSize: '1.1rem' }} />
-                </IconButton>
-                <Typography
-                  variant="caption"
-                  sx={{ fontWeight: 700, fontSize: '0.8rem', minWidth: 90, textAlign: 'center' }}
-                >
-                  {calViewMode === 'week' ? `${format(mStart, 'M/d')} - ${format(mEnd, 'M/d')}` : format(calMonth, 'yyyy년 M월')}
-                </Typography>
-                <IconButton
-                  size="small"
-                  onClick={() => {
-                    setCalMonth(calViewMode === 'week' ? addWeeks(calMonth, 1) : addMonths(calMonth, 1));
-                    setSelectedDate(null);
-                  }}
-                  sx={{ p: 0.3 }}
-                >
-                  <ChevronRightIcon sx={{ fontSize: '1.1rem' }} />
-                </IconButton>
-              </Box>
-            </Box>
-            {/* Weekday headers */}
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 0, mb: 0.5 }}>
-              {WDAYS.map((d, i) => (
-                <Box
-                  key={i}
-                  sx={{
-                    textAlign: 'center',
-                    fontSize: '0.7rem',
-                    fontWeight: 700,
-                    color: i === 0 ? '#EF4444' : i === 6 ? '#3B82F6' : '#9CA3AF',
-                    py: 0.3,
-                  }}
-                >
-                  {d}
-                </Box>
-              ))}
-            </Box>
-            {/* Day grid */}
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px' }}>
-              {Array.from({ length: pad }).map((_, i) => (
-                <Box key={`p${i}`} sx={{ height: 38 }} />
-              ))}
-              {mDays.map(day => {
-                const dayNum = parseInt(format(day, 'd'));
-                const dateKey = format(day, 'yyyy-MM-dd');
-                const holiday = KOREAN_HOLIDAYS[dateKey];
-                const isSun = getDay(day) === 0;
-                const isSat = getDay(day) === 6;
-                const isTd = isDateToday(day);
-                const dayTasks = uniqueTasks.filter(
-                  t => t.due_date && isSameDay(new Date(t.due_date), day)
-                );
-                const isSelected = selectedDate && isSameDay(day, selectedDate);
-                return (
-                  <Tooltip
-                    key={dayNum}
-                    title={
-                      holiday || (dayTasks.length > 0 ? dayTasks.map(t => t.title).join(', ') : '')
-                    }
-                    arrow
-                    placement="top"
-                  >
-                    <Box
-                      onClick={() => {
-                        if (dayTasks.length > 0) {
-                          setSelectedDate(prev => (prev && isSameDay(prev, day) ? null : day));
-                        }
-                      }}
-                      sx={{
-                        height: 38,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: 1,
-                        cursor: dayTasks.length > 0 ? 'pointer' : 'default',
-                        position: 'relative',
-                        bgcolor: isSelected
-                          ? '#1E44CC'
-                          : isTd
-                            ? '#2955FF'
-                            : holiday
-                              ? '#FEF2F2'
-                              : 'transparent',
-                        '&:hover': {
-                          bgcolor: isSelected
-                            ? '#1E44CC'
-                            : isTd
-                              ? '#1E44CC'
-                              : holiday
-                                ? '#FEE2E2'
-                                : 'rgba(0,0,0,0.04)',
-                        },
-                        transition: 'background 0.15s',
-                        outline: isSelected ? '2px solid #2955FF' : 'none',
-                        outlineOffset: -1,
-                      }}
-                    >
-                      <Typography
-                        sx={{
-                          fontSize: '0.82rem',
-                          fontWeight: isTd || holiday || isSelected ? 700 : 500,
-                          color:
-                            isSelected || isTd
-                              ? '#fff'
-                              : holiday || isSun
-                                ? '#EF4444'
-                                : isSat
-                                  ? '#3B82F6'
-                                  : '#374151',
-                          lineHeight: 1,
-                        }}
-                      >
-                        {dayNum}
-                      </Typography>
-                      {holiday && (
-                        <Typography
-                          sx={{
-                            fontSize: '0.45rem',
-                            color: isSelected || isTd ? '#fff' : '#EF4444',
-                            fontWeight: 600,
-                            lineHeight: 1,
-                            mt: 0.3,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                            maxWidth: 34,
-                          }}
-                        >
-                          {holiday}
-                        </Typography>
-                      )}
-                      {dayTasks.length > 0 && !holiday && (
-                        <Box
-                          sx={{
-                            width: 5,
-                            height: 5,
-                            borderRadius: '50%',
-                            bgcolor: isSelected || isTd ? '#fff' : '#2955FF',
-                            position: 'absolute',
-                            bottom: 2,
-                          }}
-                        />
-                      )}
-                    </Box>
-                  </Tooltip>
-                );
-              })}
-            </Box>
-
-            {/* ── Task list below calendar (tasks only, no holidays) ── */}
-            {displayEvents.length > 0 && (
-              <>
-                <Divider sx={{ my: 1.5 }} />
-                {selectedDate && (
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      mb: 0.5,
-                    }}
-                  >
-                    <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: '#374151' }}>
-                      {format(selectedDate, 'M월 d일')} 일정
-                    </Typography>
-                    <Typography
-                      onClick={() => setSelectedDate(null)}
-                      sx={{
-                        fontSize: '0.65rem',
-                        color: '#2955FF',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        '&:hover': { textDecoration: 'underline' },
-                      }}
-                    >
-                      전체보기
-                    </Typography>
-                  </Box>
-                )}
-                <Box sx={{ maxHeight: 320, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 2 } }}>
-                  {displayEvents.map(
-                    (ev, idx) => (
-                      <Box
-                        key={idx}
-                        onClick={() => openDrawer(ev.task)}
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 1,
-                          py: 0.6,
-                          px: 0.5,
-                          borderRadius: 1,
-                          cursor: 'pointer',
-                          '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
-                          transition: 'background 0.1s',
-                        }}
-                      >
-                        <Box
-                          sx={{
-                            width: 7,
-                            height: 7,
-                            borderRadius: '50%',
-                            flexShrink: 0,
-                            bgcolor: statusColors[ev.status] || '#6B7280',
-                          }}
-                        />
-                        <Typography
-                          sx={{
-                            fontSize: '0.75rem',
-                            fontWeight: 500,
-                            color: '#374151',
-                            flexGrow: 1,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {ev.label}
-                        </Typography>
-                        <Typography sx={{ fontSize: '0.65rem', color: '#9CA3AF', flexShrink: 0 }}>
-                          {format(ev.date, 'M/d')}
-                        </Typography>
-                      </Box>
-                    )
-                  )}
-                </Box>
-              </>
-            )}
-          </>
-        );
-      }
+      case 'calendar': 
+        // Calendar is now rendered outside the grid
+        return null;
       case 'today_tasks':
         return (
           <Box sx={{ height: '100%', overflowY: 'auto' }}>
@@ -1536,6 +1448,19 @@ const HomePage: React.FC = () => {
           userId={currentUserId}
           onClose={() => setPopupExecId(null)}
         />
+        {/* ── Dashboard Calendar (Full width) ── */}
+        {visibleWidgets.includes('calendar') && (
+          <Box
+            sx={{
+              mb: 2,
+              opacity: introPhase === 'done' ? 1 : 0,
+              transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
+              transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
+            }}
+          >
+            <DashboardCalendar stats={stats} overviewData={overviewData} openDrawer={openDrawer} />
+          </Box>
+        )}
         {/* ── Sortable Widget Grid ── */}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={displayOrder} strategy={rectSortingStrategy}>

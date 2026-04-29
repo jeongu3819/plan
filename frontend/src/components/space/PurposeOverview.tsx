@@ -63,6 +63,7 @@ interface Props {
   purpose: SpacePurpose;
   onTaskClick?: (taskId: number, projectId: number) => void;
   onSheetClick?: (executionId: number) => void;
+  visibleWidgets?: string[];
 }
 
 function StatCard({ label, value, color, icon }: { label: string; value: number; color: string; icon?: React.ReactNode }) {
@@ -506,7 +507,7 @@ function ProjectManagementOverview({ data, onTaskClick, onSheetClick }: { data: 
   );
 }
 
-function EquipmentOpsOverview({ data, onTaskClick, onSheetClick }: { data: OverviewData; onTaskClick?: Props['onTaskClick']; onSheetClick?: Props['onSheetClick'] }) {
+function EquipmentOpsOverview({ data, onTaskClick, onSheetClick, visibleWidgets = [] }: { data: OverviewData; onTaskClick?: Props['onTaskClick']; onSheetClick?: Props['onSheetClick']; visibleWidgets?: string[] }) {
   const s = data.stats;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -516,7 +517,9 @@ function EquipmentOpsOverview({ data, onTaskClick, onSheetClick }: { data: Overv
         <StatCard label="미완료/이월" value={(data.incomplete_carried_over || []).length} color="#EF4444" icon={<WarningAmberIcon />} />
         <StatCard label="진행 중 Sheet" value={data.active_sheets.length} color="#7C3AED" icon={<DescriptionIcon />} />
       </Box>
-      <TaskList title="오늘 해야 할 작업" tasks={data.today_tasks} color="#2955FF" icon={<ScheduleIcon />} onTaskClick={onTaskClick} emptyText="오늘 마감 작업 없음" />
+      {visibleWidgets.includes('today_tasks') && (
+        <TaskList title="오늘 해야 할 작업" tasks={data.today_tasks} color="#2955FF" icon={<ScheduleIcon />} onTaskClick={onTaskClick} emptyText="오늘 마감 작업 없음" />
+      )}
 
       <Box
         sx={{
@@ -526,17 +529,23 @@ function EquipmentOpsOverview({ data, onTaskClick, onSheetClick }: { data: Overv
           alignItems: 'stretch',
         }}
       >
-        <ProjectGroupedSheetList
-          title="Check Sheet 현황"
-          activeSheets={data.active_sheets}
-          nearCompletedSheets={data.near_completed_sheets}
-          completedSheets={data.recent_completed_sheets}
-          color="#16A34A"
-          onSheetClick={onSheetClick}
-          emptyText="진행 중인 체크시트가 없습니다"
-        />
-        <TaskList title="미완료/이월 작업" tasks={data.incomplete_carried_over || []} color="#EF4444" icon={<WarningAmberIcon />} onTaskClick={onTaskClick} emptyText="미완료 작업 없음" />
-        <TaskList title="우선순위 높은 항목" tasks={data.high_priority_tasks} color="#F59E0B" icon={<PriorityHighIcon />} onTaskClick={onTaskClick} emptyText="우선순위 항목 없음" />
+        {visibleWidgets.includes('check_sheets') && (
+          <ProjectGroupedSheetList
+            title="Check Sheet 현황"
+            activeSheets={data.active_sheets}
+            nearCompletedSheets={data.near_completed_sheets}
+            completedSheets={data.recent_completed_sheets}
+            color="#16A34A"
+            onSheetClick={onSheetClick}
+            emptyText="진행 중인 체크시트가 없습니다"
+          />
+        )}
+        {visibleWidgets.includes('incomplete_tasks') && (
+          <TaskList title="미완료/이월 작업" tasks={data.incomplete_carried_over || []} color="#EF4444" icon={<WarningAmberIcon />} onTaskClick={onTaskClick} emptyText="미완료 작업 없음" />
+        )}
+        {visibleWidgets.includes('high_priority') && (
+          <TaskList title="우선순위 높은 항목" tasks={data.high_priority_tasks} color="#F59E0B" icon={<PriorityHighIcon />} onTaskClick={onTaskClick} emptyText="우선순위 항목 없음" />
+        )}
       </Box>
 
       <SheetList title="최근 완료된 점검" sheets={data.recent_completed_sheets} color="#22C55E" onSheetClick={onSheetClick} hideIfEmpty />
@@ -602,7 +611,7 @@ function IntegratedOpsOverview({ data, onTaskClick, onSheetClick }: { data: Over
 // 메인 PurposeOverview 컴포넌트
 // ========================================
 
-export default function PurposeOverview({ data, loading, purpose, onTaskClick, onSheetClick }: Props) {
+export default function PurposeOverview({ data, loading, purpose, onTaskClick, onSheetClick, visibleWidgets = [] }: Props) {
   if (loading) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1 }}>
@@ -619,7 +628,7 @@ export default function PurposeOverview({ data, loading, purpose, onTaskClick, o
 
   const overviewMap: Record<string, React.ReactNode> = {
     project_management: <ProjectManagementOverview data={data} onTaskClick={onTaskClick} onSheetClick={onSheetClick} />,
-    equipment_ops: <EquipmentOpsOverview data={data} onTaskClick={onTaskClick} onSheetClick={onSheetClick} />,
+    equipment_ops: <EquipmentOpsOverview data={data} onTaskClick={onTaskClick} onSheetClick={onSheetClick} visibleWidgets={visibleWidgets} />,
     process_change: <ProcessChangeOverview data={data} onTaskClick={onTaskClick} onSheetClick={onSheetClick} />,
     sw_dev: <SwDevOverview data={data} onTaskClick={onTaskClick} onSheetClick={onSheetClick} />,
     integrated_ops: <IntegratedOpsOverview data={data} onTaskClick={onTaskClick} onSheetClick={onSheetClick} />,
