@@ -40,6 +40,62 @@ const restoreSelection = (range: Range | null) => {
     sel?.addRange(range);
 };
 
+/**
+ * 클립보드 붙여넣기 이미지 압축/리사이즈.
+ * - 1MB 미만이면 원본 그대로 (확장자만 보정).
+ * - 큰 이미지: 긴 변 1920px 로 축소, JPEG q=0.85 (PNG 알파 감지 시 PNG 유지).
+ * - 실패하면 원본 Blob 을 File 로 감싸서 반환 (절대 throw 하지 않음).
+ */
+async function compressPastedImage(blob: Blob, timestamp: number): Promise<File> {
+    const SMALL_BYTES = 1024 * 1024; // 1MB
+    const MAX_EDGE = 1920;
+    const QUALITY = 0.85;
+    const sourceType = blob.type || 'image/png';
+    const fallbackExt = sourceType.includes('jpeg') || sourceType.includes('jpg') ? 'jpg' : 'png';
+    const fallback = new File([blob], `work-note-paste-${timestamp}.${fallbackExt}`, { type: sourceType });
+    if (blob.size <= SMALL_BYTES) return fallback;
+    try {
+        const url = URL.createObjectURL(blob);
+        try {
+            const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error('image decode failed'));
+                img.src = url;
+            });
+            const w = image.naturalWidth || image.width;
+            const h = image.naturalHeight || image.height;
+            if (!w || !h) return fallback;
+            const longEdge = Math.max(w, h);
+            const scale = longEdge > MAX_EDGE ? MAX_EDGE / longEdge : 1;
+            const tw = Math.max(1, Math.round(w * scale));
+            const th = Math.max(1, Math.round(h * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = tw;
+            canvas.height = th;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return fallback;
+            ctx.drawImage(image, 0, 0, tw, th);
+            // PNG 원본은 알파를 보존(투명 배경 캡처 대비). 그 외엔 JPEG 로 압축.
+            const isPng = sourceType.includes('png');
+            const outType = isPng ? 'image/png' : 'image/jpeg';
+            const outExt = isPng ? 'png' : 'jpg';
+            const outBlob: Blob | null = await new Promise((resolve) =>
+                canvas.toBlob((b) => resolve(b), outType, QUALITY)
+            );
+            if (!outBlob) return fallback;
+            // 압축 결과가 더 크면 (이미 작은 PNG 등) 원본 사용.
+            if (outBlob.size >= blob.size) return fallback;
+            return new File([outBlob], `work-note-paste-${timestamp}.${outExt}`, { type: outType });
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+    } catch (e) {
+        console.warn('compressPastedImage failed, using original:', e);
+        return fallback;
+    }
+}
+
 interface WorkNoteModalProps {
     open: boolean;
     onClose: () => void;
@@ -379,10 +435,10 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         const imageItems = items.filter((it) => it.type && it.type.startsWith('image/'));
         if (imageItems.length === 0) return;
         e.preventDefault();
-        
+
         setIsUploading(true);
         let pendingCount = imageItems.length;
-        
+
         imageItems.forEach(async (item) => {
             const fileBlob = item.getAsFile();
             if (!fileBlob) {
@@ -392,7 +448,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             }
 
             const timestamp = Date.now();
-            const file = new File([fileBlob], `work-note-paste-${timestamp}.png`, { type: 'image/png' });
+            const file = await compressPastedImage(fileBlob, timestamp);
 
             try {
                 const currentUserId = useAppStore.getState().currentUserId || 1;
@@ -402,7 +458,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 const img = document.createElement('img');
                 img.src = imageUrl;
                 img.alt = '붙여넣은 이미지';
-                
+
                 const sel = window.getSelection();
                 const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
                 if (range && contentRef.current && contentRef.current.contains(range.commonAncestorContainer)) {
@@ -415,9 +471,24 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 } else if (contentRef.current) {
                     contentRef.current.appendChild(img);
                 }
-            } catch (err) {
+            } catch (err: any) {
                 console.error('Image upload failed:', err);
-                alert('이미지 업로드에 실패했습니다. (서버 용량 부족 또는 네트워크 오류)');
+                const status = err?.response?.status;
+                const detail = err?.response?.data?.detail;
+                let msg = '이미지 업로드에 실패했습니다.';
+                if (status === 401 || status === 403) {
+                    msg = '이미지 업로드 권한이 없습니다.';
+                } else if (status === 413) {
+                    msg = '이미지 용량이 너무 커서 업로드할 수 없습니다. (서버 한도 초과)';
+                } else if (status === 404) {
+                    msg = '대상 작업을 찾을 수 없어 업로드할 수 없습니다.';
+                } else if (status && status >= 500) {
+                    msg = '서버 오류로 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.';
+                } else if (!status) {
+                    msg = '네트워크 오류로 업로드에 실패했습니다.';
+                }
+                if (detail && typeof detail === 'string') msg += `\n사유: ${detail}`;
+                alert(msg);
             } finally {
                 pendingCount -= 1;
                 if (pendingCount <= 0) {

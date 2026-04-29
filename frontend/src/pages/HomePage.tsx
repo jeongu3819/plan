@@ -359,6 +359,7 @@ const DashboardCalendar: React.FC<{
   const pad = getDay(mStart);
 
   const allTasks: Task[] = [
+    ...(stats?.all_tasks || []),
     ...(stats?.overdue || []),
     ...(stats?.upcoming || []),
     ...(stats?.my_tasks || []),
@@ -1310,22 +1311,160 @@ const HomePage: React.FC = () => {
           </>
         );
       case 'high_priority': {
-        // Sort: priority high → due date asc → exclude done/hold
-        const hpTasks: Task[] = [...(overviewData?.high_priority_tasks || [])]
-          .filter((t: Task) => t.status !== 'done' && t.status !== 'hold')
-          .sort((a: Task, b: Task) => {
-            const ap = a.priority === 'high' ? 0 : a.priority === 'medium' ? 1 : 2;
-            const bp = b.priority === 'high' ? 0 : b.priority === 'medium' ? 1 : 2;
-            if (ap !== bp) return ap - bp;
-            if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
-            if (a.due_date) return -1;
-            if (b.due_date) return 1;
-            return 0;
-          });
+        // Pool: high priority OR due within 7 days OR overdue (excludes done/hold).
+        // Sort: overdue first → today → ≤7d → high priority → due asc.
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+        const sevenAhead = new Date(today0); sevenAhead.setDate(sevenAhead.getDate() + 7);
+        const sevenStr = format(sevenAhead, 'yyyy-MM-dd');
+        const pool = [
+          ...(overviewData?.high_priority_tasks || []),
+          ...(overviewData?.overdue_tasks || []),
+          ...(overviewData?.today_tasks || []),
+          ...(overviewData?.next_week_tasks || []),
+        ];
+        const seen = new Map<number, Task>();
+        for (const t of pool) {
+          if (!t || seen.has(t.id)) continue;
+          if (t.status === 'done' || t.status === 'hold') continue;
+          const due = t.due_date || '';
+          const isHigh = t.priority === 'high';
+          const inRange = !!due && due <= sevenStr;
+          if (isHigh || inRange) seen.set(t.id, t);
+        }
+        const bucket = (t: Task): number => {
+          const due = t.due_date || '';
+          if (due && due < todayStr) return 0; // overdue
+          if (due === todayStr) return 1;       // today
+          if (due && due <= sevenStr) return 2; // within 7d
+          return 3;                              // pure high (no near deadline)
+        };
+        const hpTasks: Task[] = Array.from(seen.values()).sort((a, b) => {
+          const ba = bucket(a), bb = bucket(b);
+          if (ba !== bb) return ba - bb;
+          const ap = a.priority === 'high' ? 0 : a.priority === 'medium' ? 1 : 2;
+          const bp = b.priority === 'high' ? 0 : b.priority === 'medium' ? 1 : 2;
+          if (ap !== bp) return ap - bp;
+          if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
+          if (a.due_date) return -1;
+          if (b.due_date) return 1;
+          return 0;
+        });
+        const dueHint = (t: Task): { label: string; color: string } | null => {
+          if (!t.due_date) return null;
+          const diff = differenceInDays(new Date(t.due_date), today0);
+          if (diff < 0) return { label: `기한 초과 ${Math.abs(diff)}일`, color: '#EF4444' };
+          if (diff === 0) return { label: '오늘 마감', color: '#EF4444' };
+          if (diff <= 7) return { label: `D-${diff}`, color: '#F59E0B' };
+          return null;
+        };
         return (
           <>
             <WidgetHeader def={def} />
-            {renderTaskList(hpTasks, '우선순위 항목 없음')}
+            {hpTasks.length === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 3 }}>
+                <Typography variant="body2" color="textSecondary" sx={{ fontSize: '0.8rem' }}>
+                  우선순위 항목 없음
+                </Typography>
+              </Box>
+            ) : (
+              <Box>
+                {hpTasks.map((task) => {
+                  const hint = dueHint(task);
+                  return (
+                    <Box
+                      key={task.id}
+                      onClick={() => openDrawer(task)}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1.5,
+                        py: 1,
+                        px: 1.5,
+                        borderRadius: 1.5,
+                        cursor: 'pointer',
+                        '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          bgcolor: statusColors[task.status] || '#6B7280',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Typography
+                          variant="body1"
+                          sx={{
+                            fontWeight: 600,
+                            fontSize: '0.92rem',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {task.title}
+                        </Typography>
+                        {(task.due_date || hint) && (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 0.25 }}>
+                            {task.due_date && (
+                              <Typography
+                                variant="caption"
+                                sx={{
+                                  color: hint?.color || '#9CA3AF',
+                                  fontSize: '0.78rem',
+                                }}
+                              >
+                                Due {format(new Date(task.due_date), 'MMM dd')}
+                              </Typography>
+                            )}
+                            {hint && (
+                              <Chip
+                                label={hint.label}
+                                size="small"
+                                sx={{
+                                  height: 18,
+                                  fontSize: '0.66rem',
+                                  fontWeight: 700,
+                                  bgcolor: hint.color === '#EF4444' ? '#FEF2F2' : '#FEF3C7',
+                                  color: hint.color,
+                                }}
+                              />
+                            )}
+                          </Box>
+                        )}
+                      </Box>
+                      <Chip
+                        label={task.priority || 'medium'}
+                        size="small"
+                        sx={{
+                          height: 20,
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          bgcolor:
+                            task.priority === 'high'
+                              ? '#FEF2F2'
+                              : task.priority === 'low'
+                                ? '#F3F4F6'
+                                : '#EFF6FF',
+                          color:
+                            task.priority === 'high'
+                              ? '#EF4444'
+                              : task.priority === 'low'
+                                ? '#6B7280'
+                                : '#3B82F6',
+                        }}
+                      />
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
           </>
         );
       }
@@ -1344,8 +1483,8 @@ const HomePage: React.FC = () => {
   // For project_management spaces the user requested hiding the four
   // overview-style boxes (today_tasks, check_sheets, incomplete_tasks, high_priority)
   // since the default widgets already cover that space.
-  const FORCE_HIDDEN_GLOBAL = new Set(['calendar', 'incomplete_tasks', 'upcoming']);
-  const FORCE_HIDDEN_PM = new Set(['today_tasks', 'check_sheets', 'high_priority']);
+  const FORCE_HIDDEN_GLOBAL = new Set(['calendar', 'upcoming']);
+  const FORCE_HIDDEN_PM = new Set(['check_sheets']);
   const isHiddenForPurpose = (id: string) =>
     FORCE_HIDDEN_GLOBAL.has(id) ||
     (spacePurpose === 'project_management' && FORCE_HIDDEN_PM.has(id));
