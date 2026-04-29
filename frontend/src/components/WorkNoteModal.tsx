@@ -16,7 +16,7 @@ import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
-import { TaskActivity } from '../types';
+import type { TaskActivity, Task } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import {
@@ -28,6 +28,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import ImagePreviewModal from './ImagePreviewModal';
+import { useAppStore } from '../stores/useAppStore';
 
 const COLORS = ['#374151', '#EF4444', '#F59E0B', '#22C55E', '#3B82F6', '#8B5CF6'];
 
@@ -251,6 +252,58 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         onContentChange(block, html);
     }, [block, onContentChange]);
 
+    // v3.12: 클립보드 이미지(스크린샷/캡처)를 base64 data URL 로 영구 저장.
+    //   - 브라우저가 기본으로 만들어주는 blob: URL 은 모달을 닫으면 사라진다.
+    //   - 따라서 paste 이벤트를 가로채 FileReader 로 data URL 을 만들어 직접 <img> 삽입.
+    //   - persistContent 호출 → 즉시 서버에 저장, 새로고침/재오픈 후에도 유지.
+    const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+        if (!canEdit) return;
+        const items = Array.from(e.clipboardData?.items || []);
+        const imageItems = items.filter((it) => it.type && it.type.startsWith('image/'));
+        if (imageItems.length === 0) return; // 텍스트/HTML paste 는 기본 동작 유지
+        e.preventDefault();
+        let pendingCount = imageItems.length;
+        imageItems.forEach((item) => {
+            const file = item.getAsFile();
+            if (!file) {
+                pendingCount -= 1;
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const dataUrl = reader.result;
+                if (typeof dataUrl !== 'string') {
+                    pendingCount -= 1;
+                    if (pendingCount <= 0) persistContent();
+                    return;
+                }
+                const img = document.createElement('img');
+                img.src = dataUrl;
+                img.alt = '붙여넣은 이미지';
+                // caret 위치에 삽입 (없으면 컨테이너 끝)
+                const sel = window.getSelection();
+                const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+                if (range && contentRef.current && contentRef.current.contains(range.commonAncestorContainer)) {
+                    range.deleteContents();
+                    range.insertNode(img);
+                    range.setStartAfter(img);
+                    range.collapse(true);
+                    sel?.removeAllRanges();
+                    sel?.addRange(range);
+                } else if (contentRef.current) {
+                    contentRef.current.appendChild(img);
+                }
+                pendingCount -= 1;
+                if (pendingCount <= 0) persistContent();
+            };
+            reader.onerror = () => {
+                pendingCount -= 1;
+                if (pendingCount <= 0) persistContent();
+            };
+            reader.readAsDataURL(file);
+        });
+    }, [canEdit, persistContent]);
+
     const resizeImage = (img: HTMLImageElement, action: 'shrink' | 'grow' | 'fit' | 'reset') => {
         if (action === 'reset') {
             img.style.width = '';
@@ -315,15 +368,50 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         window.addEventListener('pointercancel', onUp);
     }, [persistContent]);
 
+    // v3.12: data-* 만 토글하면 Excel/Word 에서 paste 한 table 의 inline style 이
+    //   상위 sx 셀렉터를 이기기 때문에 폭맞춤/원본/줄바꿈이 시각적으로 동작하지 않는다.
+    //   → inline style 을 직접 set/clear 하는 방식으로 강제 적용.
+    //   data-* 도 그대로 유지해서 sx fallback + 새로고침 후에도 상태가 보존되게 한다.
+    const applyTableState = (table: HTMLTableElement) => {
+        const fit = table.getAttribute('data-fit-mode') === 'fit';
+        const wrap = table.getAttribute('data-wrap-text') === 'true';
+        if (fit) {
+            table.style.width = '100%';
+            table.style.maxWidth = '100%';
+            table.style.tableLayout = 'fixed';
+        } else {
+            table.style.width = '';
+            table.style.maxWidth = '';
+            table.style.tableLayout = '';
+        }
+        const cellWrap = fit || wrap; // fit 모드는 자동 줄바꿈, 또는 명시적 wrap
+        const cells = table.querySelectorAll('th, td');
+        cells.forEach((c) => {
+            const cell = c as HTMLElement;
+            if (cellWrap) {
+                cell.style.whiteSpace = 'normal';
+                cell.style.wordBreak = 'break-word';
+                cell.style.overflowWrap = 'anywhere';
+            } else {
+                cell.style.whiteSpace = '';
+                cell.style.wordBreak = '';
+                cell.style.overflowWrap = '';
+            }
+        });
+    };
+
     const resizeTable = (table: HTMLTableElement, action: 'fit' | 'natural' | 'wrap' | 'fontUp' | 'fontDown') => {
         if (action === 'fit') {
             table.setAttribute('data-fit-mode', 'fit');
+            applyTableState(table);
         } else if (action === 'natural') {
             table.removeAttribute('data-fit-mode');
+            applyTableState(table);
         } else if (action === 'wrap') {
             const wrapped = table.getAttribute('data-wrap-text') === 'true';
             if (wrapped) table.removeAttribute('data-wrap-text');
             else table.setAttribute('data-wrap-text', 'true');
+            applyTableState(table);
         } else {
             // 폰트 +/- (transform scale 미사용, font-size 직접 조정)
             const computed = window.getComputedStyle(table).fontSize;
@@ -340,6 +428,14 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             setHoveredTable(prev => prev ? { el: table, rect: table.getBoundingClientRect() } : null);
         });
     };
+
+    // v3.12: 컨텐츠가 처음 그려질 때 / hover 될 때 data-* 가 있으면 inline style 도 동기화.
+    //   (저장된 HTML 의 data-fit-mode/data-wrap-text 만으로도 새로고침 후 상태 복원)
+    useEffect(() => {
+        if (!contentRef.current) return;
+        const tables = contentRef.current.querySelectorAll<HTMLTableElement>('table[data-fit-mode], table[data-wrap-text]');
+        tables.forEach((t) => applyTableState(t));
+    }, [block.content]);
 
     return (
         <Box ref={setNodeRef} style={style}>
@@ -424,6 +520,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                         }}
                         onMouseOver={handleEditorMouseOver}
                         onMouseOut={handleEditorMouseOut}
+                        onPaste={handlePaste}
                         data-placeholder={isCheckbox ? '체크리스트 항목...' : '메모를 작성하세요...'}
                         sx={{
                             fontSize: '0.9rem',
@@ -833,11 +930,40 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         queryClient.invalidateQueries({ queryKey: ['stats'] });
     }, [queryClient, taskId]);
 
+    // v3.12: 활동(체크박스) 변경 응답에 담긴 task_progress / task_status 를
+    //   tasks 캐시 + selectedTask store 에 즉시 반영. 100% → <100% 다운그레이드도
+    //   새로고침 없이 Task Details/Board 양쪽에서 일관되게 보이도록.
+    const applyTaskSync = useCallback((response: any) => {
+        const tProgress: number | null | undefined = response?.task_progress;
+        const tStatus: string | null | undefined = response?.task_status;
+        if (typeof tProgress !== 'number' && typeof tStatus !== 'string') return;
+        queryClient.setQueriesData<Task[]>(
+            { queryKey: ['tasks'] },
+            (old) => Array.isArray(old)
+                ? old.map(t => {
+                    if (t.id !== taskId) return t;
+                    const patch: Partial<Task> = {};
+                    if (typeof tProgress === 'number') patch.progress = tProgress;
+                    if (typeof tStatus === 'string') patch.status = tStatus as Task['status'];
+                    return { ...t, ...patch };
+                })
+                : old,
+        );
+        const sel = useAppStore.getState().selectedTask;
+        if (sel && sel.id === taskId) {
+            const patch: Partial<Task> = {};
+            if (typeof tProgress === 'number') patch.progress = tProgress;
+            if (typeof tStatus === 'string') patch.status = tStatus as Task['status'];
+            useAppStore.setState({ selectedTask: { ...sel, ...patch } });
+        }
+    }, [queryClient, taskId]);
+
     const createMut = useMutation({
         mutationFn: (data: { content: string; block_type: string; checked?: boolean; style?: any; order_index?: number }) =>
             api.createTaskActivity(taskId, data),
-        onSuccess: (newBlock) => {
+        onSuccess: (newBlock: any) => {
             pendingFocusRef.current = newBlock.id;
+            applyTaskSync(newBlock);
             invalidate();
         },
     });
@@ -845,7 +971,10 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     const updateMut = useMutation({
         mutationFn: ({ id, ...data }: { id: number } & Partial<TaskActivity>) =>
             api.updateTaskActivity(id, data),
-        onSuccess: invalidate,
+        onSuccess: (response: any) => {
+            applyTaskSync(response);
+            invalidate();
+        },
     });
 
     const deleteMut = useMutation({

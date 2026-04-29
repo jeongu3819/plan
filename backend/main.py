@@ -847,6 +847,10 @@ def _derive_task_status(current_status: str, progress: int) -> str:
         return current_status
     if progress >= 100:
         return "done"
+    # v3.12: progress 가 100% 미만으로 다시 떨어지면 done → in_progress 로 강제 다운그레이드.
+    #        (체크 해제 / Check Sheet 진행→미진행 / 항목 추가 등 모든 경로에서 동일하게 동작)
+    if current_status == "done" and progress < 100:
+        return "in_progress" if progress > 0 else "todo"
     if progress > 0 and current_status == "todo":
         return "in_progress"
     return current_status
@@ -3431,7 +3435,9 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
         activity.order_index = body["order_index"]
     db.commit()
     db.refresh(activity)
-    _sync_task_progress(db, activity.task_id)
+    task_progress = _sync_task_progress(db, activity.task_id)
+    task_after = db.query(Task).filter(Task.id == activity.task_id).first()
+    task_status = task_after.status if task_after else None
     if "content" in body:
         _sync_activity_mentions(db, activity.id, activity.content)
         db.commit()
@@ -3444,6 +3450,10 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
         "checked": activity.checked,
         "checked_at": activity.checked_at.isoformat() if activity.checked_at else None,
         "style": activity.style,
+        # v3.12: Task Status 즉시 반영용 — 체크 해제로 progress 가 100% 미만이 되면
+        #        프론트에서 selectedTask/store 캐시를 즉시 패치한다.
+        "task_progress": task_progress,
+        "task_status": task_status,
     }
 
 @app.put("/api/tasks/{task_id}/activities/reorder")
