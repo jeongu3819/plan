@@ -66,6 +66,9 @@ interface SortableBlockProps {
     onShowColorPicker: (id: number | null) => void;
     savedSelection: React.MutableRefObject<Range | null>;
     onImageClick: (src: string, alt?: string) => void;
+    taskId: number;
+    isUploading: boolean;
+    setIsUploading: (val: boolean) => void;
 }
 
 /** Format checked_at date for display */
@@ -81,7 +84,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     block, index, canEdit, focusedBlockId,
     onCheck, onContentChange, onFocus, onKeyDown, onToggleType, onDelete, onInsertAfter,
     blockRefs, showColorPicker, onShowColorPicker, savedSelection,
-    onImageClick,
+    onImageClick, taskId, isUploading, setIsUploading,
 }) => {
     const {
         attributes, listeners, setNodeRef, transform, transition, isDragging,
@@ -161,7 +164,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     // ── 이미지 / 테이블 hover-overlay 리사이즈 toolbar ──
     const [hoveredImg, setHoveredImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null);
     const [hoveredTable, setHoveredTable] = useState<{ el: HTMLTableElement; rect: DOMRect } | null>(null);
-    // v3.11: 단일 클릭 시 이미지를 "선택" 상태로 두고 모서리 drag handle 로 직접 리사이즈.
     const [selectedImg, setSelectedImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null);
     const dragRef = useRef<{ startX: number; startWidth: number; el: HTMLImageElement } | null>(null);
     const hideTimerRef = useRef<number | null>(null);
@@ -247,6 +249,34 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         onContentChange(block, html);
     }, [block, onContentChange]);
 
+    const applyTableState = (table: HTMLTableElement) => {
+        const fit = table.getAttribute('data-fit-mode') === 'fit';
+        const wrap = table.getAttribute('data-wrap-text') === 'true';
+        if (fit) {
+            table.style.width = '100%';
+            table.style.maxWidth = '100%';
+            table.style.tableLayout = 'fixed';
+        } else {
+            table.style.width = '';
+            table.style.maxWidth = '';
+            table.style.tableLayout = '';
+        }
+        const cellWrap = fit || wrap;
+        const cells = table.querySelectorAll('th, td');
+        cells.forEach((c) => {
+            const cell = c as HTMLElement;
+            if (cellWrap) {
+                cell.style.whiteSpace = 'normal';
+                cell.style.wordBreak = 'break-word';
+                cell.style.overflowWrap = 'anywhere';
+            } else {
+                cell.style.whiteSpace = '';
+                cell.style.wordBreak = '';
+                cell.style.overflowWrap = '';
+            }
+        });
+    };
+
     const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
         if (!canEdit) return;
 
@@ -281,7 +311,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     const cell = c as HTMLElement;
                     cell.style.border = '1px solid #E5E7EB';
                     cell.style.padding = '8px';
-                    // Let applyTableState handle width and wrap styles
                 });
                 applyTableState(cleanTable);
 
@@ -312,7 +341,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 const cleanTable = document.createElement('table');
                 cleanTable.className = 'work-note-table';
                 cleanTable.style.borderCollapse = 'collapse';
-                cleanTable.style.width = '100%';
                 cleanTable.setAttribute('data-fit-mode', 'fit');
                 
                 const tbody = document.createElement('tbody');
@@ -323,13 +351,12 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                         td.textContent = cell;
                         td.style.border = '1px solid #E5E7EB';
                         td.style.padding = '8px';
-                        td.style.whiteSpace = 'normal';
-                        td.style.wordBreak = 'break-word';
                         tr.appendChild(td);
                     });
                     tbody.appendChild(tr);
                 });
                 cleanTable.appendChild(tbody);
+                applyTableState(cleanTable);
 
                 const sel = window.getSelection();
                 const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
@@ -352,24 +379,30 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         const imageItems = items.filter((it) => it.type && it.type.startsWith('image/'));
         if (imageItems.length === 0) return;
         e.preventDefault();
+        
+        setIsUploading(true);
         let pendingCount = imageItems.length;
-        imageItems.forEach((item) => {
-            const file = item.getAsFile();
-            if (!file) {
+        
+        imageItems.forEach(async (item) => {
+            const fileBlob = item.getAsFile();
+            if (!fileBlob) {
                 pendingCount -= 1;
+                if (pendingCount <= 0) setIsUploading(false);
                 return;
             }
-            const reader = new FileReader();
-            reader.onload = () => {
-                const dataUrl = reader.result;
-                if (typeof dataUrl !== 'string') {
-                    pendingCount -= 1;
-                    if (pendingCount <= 0) persistContent();
-                    return;
-                }
+
+            const timestamp = Date.now();
+            const file = new File([fileBlob], `work-note-paste-${timestamp}.png`, { type: 'image/png' });
+
+            try {
+                const currentUserId = useAppStore.getState().currentUserId || 1;
+                const response = await api.uploadTaskFile(taskId, file, currentUserId);
+                const imageUrl = response.url;
+
                 const img = document.createElement('img');
-                img.src = dataUrl;
+                img.src = imageUrl;
                 img.alt = '붙여넣은 이미지';
+                
                 const sel = window.getSelection();
                 const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
                 if (range && contentRef.current && contentRef.current.contains(range.commonAncestorContainer)) {
@@ -382,16 +415,18 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 } else if (contentRef.current) {
                     contentRef.current.appendChild(img);
                 }
+            } catch (err) {
+                console.error('Image upload failed:', err);
+                alert('이미지 업로드에 실패했습니다. (서버 용량 부족 또는 네트워크 오류)');
+            } finally {
                 pendingCount -= 1;
-                if (pendingCount <= 0) persistContent();
-            };
-            reader.onerror = () => {
-                pendingCount -= 1;
-                if (pendingCount <= 0) persistContent();
-            };
-            reader.readAsDataURL(file);
+                if (pendingCount <= 0) {
+                    setIsUploading(false);
+                    persistContent();
+                }
+            }
         });
-    }, [canEdit, persistContent]);
+    }, [canEdit, taskId, persistContent, setIsUploading]);
 
     const resizeImage = (img: HTMLImageElement, action: 'shrink' | 'grow' | 'fit' | 'reset') => {
         if (action === 'reset') {
@@ -451,34 +486,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         window.addEventListener('pointerup', onUp);
         window.addEventListener('pointercancel', onUp);
     }, [persistContent]);
-
-    const applyTableState = (table: HTMLTableElement) => {
-        const fit = table.getAttribute('data-fit-mode') === 'fit';
-        const wrap = table.getAttribute('data-wrap-text') === 'true';
-        if (fit) {
-            table.style.width = '100%';
-            table.style.maxWidth = '100%';
-            table.style.tableLayout = 'fixed';
-        } else {
-            table.style.width = '';
-            table.style.maxWidth = '';
-            table.style.tableLayout = '';
-        }
-        const cellWrap = fit || wrap;
-        const cells = table.querySelectorAll('th, td');
-        cells.forEach((c) => {
-            const cell = c as HTMLElement;
-            if (cellWrap) {
-                cell.style.whiteSpace = 'normal';
-                cell.style.wordBreak = 'break-word';
-                cell.style.overflowWrap = 'anywhere';
-            } else {
-                cell.style.whiteSpace = '';
-                cell.style.wordBreak = '';
-                cell.style.overflowWrap = '';
-            }
-        });
-    };
 
     const resizeTable = (table: HTMLTableElement, action: 'fit' | 'natural' | 'wrap' | 'fontUp' | 'fontDown') => {
         if (action === 'fit') {
@@ -566,7 +573,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 <Box sx={{ flex: 1, minWidth: 0, position: 'relative' }}>
                     <Box
                         ref={contentRef}
-                        contentEditable={canEdit}
+                        contentEditable={canEdit && !isUploading}
                         suppressContentEditableWarning
                         onBlur={handleBlur}
                         onFocus={() => onFocus(block.id)}
@@ -963,6 +970,7 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     const queryClient = useQueryClient();
     const [focusedBlockId, setFocusedBlockId] = useState<number | null>(null);
     const [showColorPicker, setShowColorPicker] = useState<number | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
     const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map());
     const pendingFocusRef = useRef<number | null>(null);
     const savedSelection = useRef<Range | null>(null);
@@ -1263,23 +1271,33 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                 </Box>
 
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <LinearProgress
-                        variant="determinate"
-                        value={progress}
-                        sx={{
-                            flex: 1, height: 6, borderRadius: 3,
-                            bgcolor: '#E5E7EB',
-                            '& .MuiLinearProgress-bar': {
-                                bgcolor: progress >= 100 ? '#22C55E' : '#2955FF',
-                                borderRadius: 3,
-                            },
-                        }}
-                    />
+                    <Box sx={{ flex: 1, position: 'relative' }}>
+                        <LinearProgress
+                            variant="determinate"
+                            value={progress}
+                            sx={{
+                                height: 6, borderRadius: 3,
+                                bgcolor: '#E5E7EB',
+                                '& .MuiLinearProgress-bar': {
+                                    bgcolor: progress >= 100 ? '#22C55E' : '#2955FF',
+                                    borderRadius: 3,
+                                },
+                            }}
+                        />
+                        {isUploading && (
+                            <LinearProgress 
+                                sx={{ 
+                                    position: 'absolute', top: 0, left: 0, right: 0, height: 6, borderRadius: 3,
+                                    '& .MuiLinearProgress-bar': { bgcolor: '#F59E0B' }
+                                }} 
+                            />
+                        )}
+                    </Box>
                     <Typography variant="caption" sx={{
                         fontWeight: 700, fontSize: '0.75rem', minWidth: 48, textAlign: 'right',
                         color: progress >= 100 ? '#22C55E' : '#6B7280',
                     }}>
-                        {totalCheckboxes > 0 ? `${checkedCount}/${totalCheckboxes}` : '0/0'}
+                        {isUploading ? '업로드 중...' : (totalCheckboxes > 0 ? `${checkedCount}/${totalCheckboxes}` : '0/0')}
                     </Typography>
                 </Box>
             </Box>
@@ -1325,6 +1343,9 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                                 onShowColorPicker={setShowColorPicker}
                                 savedSelection={savedSelection}
                                 onImageClick={handleImageClick}
+                                taskId={taskId}
+                                isUploading={isUploading}
+                                setIsUploading={setIsUploading}
                             />
                         ))}
                     </SortableContext>

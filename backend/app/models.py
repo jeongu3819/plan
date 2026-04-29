@@ -151,6 +151,8 @@ class Task(Base):
     archived_at = Column(DateTime, nullable=True)
 
 
+from sqlalchemy.dialects.mysql import LONGTEXT
+
 class TaskActivity(Base):
     __tablename__ = "task_activities"
 
@@ -158,7 +160,7 @@ class TaskActivity(Base):
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     block_type = Column(String(20), nullable=False, default="checkbox")  # checkbox / text
     order_index = Column(Integer, nullable=False, default=0)
-    content = Column(Text, nullable=False, default="")
+    content = Column(LONGTEXT().with_variant(Text, "sqlite").with_variant(Text, "postgresql"), nullable=False, default="")
     checked = Column(Boolean, nullable=False, default=False)
     checked_at = Column(DateTime, nullable=True)  # 체크 완료 시각
     style = Column(JSON, nullable=True)  # {"bold": true, "color": "#EF4444"}

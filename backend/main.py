@@ -3419,8 +3419,18 @@ def update_task_activity(activity_id: int, body: dict = Body(...), db: Session =
     activity = db.query(TaskActivityModel).filter(TaskActivityModel.id == activity_id).first()
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
+    
     if "content" in body:
-        activity.content = body["content"]
+        content = body["content"]
+        # base64 이미지 직접 저장 시도 차단 (근본 원인 해결 유도)
+        if "data:image/" in content and ";base64," in content:
+            if len(content) > 100000: # 대략 100KB 이상
+                raise HTTPException(
+                    status_code=413, 
+                    detail="이미지 용량이 너무 큽니다. 이미지는 본문에 직접 저장할 수 없으며, 업로드 후 URL 방식으로 저장해야 합니다."
+                )
+        activity.content = content
+
     if "block_type" in body:
         activity.block_type = body["block_type"]
     if "checked" in body:
