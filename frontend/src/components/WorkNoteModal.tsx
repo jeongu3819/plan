@@ -162,8 +162,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     const [hoveredImg, setHoveredImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null);
     const [hoveredTable, setHoveredTable] = useState<{ el: HTMLTableElement; rect: DOMRect } | null>(null);
     // v3.11: 단일 클릭 시 이미지를 "선택" 상태로 두고 모서리 drag handle 로 직접 리사이즈.
-    //   - 선택 상태에선 hover 가 풀려도 toolbar/handle 이 유지된다.
-    //   - 더블클릭 또는 toolbar "확대 보기" 버튼이 있어야 lightbox 가 열린다.
     const [selectedImg, setSelectedImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null);
     const dragRef = useRef<{ startX: number; startWidth: number; el: HTMLImageElement } | null>(null);
     const hideTimerRef = useRef<number | null>(null);
@@ -176,13 +174,12 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     const scheduleHide = () => {
         cancelHideTimer();
         hideTimerRef.current = window.setTimeout(() => {
-            // 선택된 이미지/테이블이 있으면 hover 해제로 toolbar 가 사라지지 않게 한다.
             if (!selectedImg) setHoveredImg(null);
             setHoveredTable(null);
         }, 250);
     };
     useEffect(() => () => cancelHideTimer(), []);
-    // 스크롤되면 toolbar 위치가 stale → 좌표만 갱신 (선택 유지)
+
     useEffect(() => {
         if (!hoveredImg && !hoveredTable && !selectedImg) return;
         const handler = () => {
@@ -197,13 +194,11 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         return () => window.removeEventListener('scroll', handler, true);
     }, [hoveredImg, hoveredTable, selectedImg]);
 
-    // 외부 클릭 시 이미지 선택 해제 (block content 영역 밖)
     useEffect(() => {
         if (!selectedImg) return;
         const handler = (e: MouseEvent) => {
             const t = e.target as HTMLElement | null;
             if (!t) return;
-            // 이미지 자체 / toolbar / resize handle 클릭은 무시
             if (t.closest('[data-img-toolbar="1"]')) return;
             if (t.closest('[data-img-resize-handle="1"]')) return;
             if (t === selectedImg.el) return;
@@ -252,15 +247,11 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         onContentChange(block, html);
     }, [block, onContentChange]);
 
-    // v3.12: 클립보드 이미지(스크린샷/캡처)를 base64 data URL 로 영구 저장.
-    //   - 브라우저가 기본으로 만들어주는 blob: URL 은 모달을 닫으면 사라진다.
-    //   - 따라서 paste 이벤트를 가로채 FileReader 로 data URL 을 만들어 직접 <img> 삽입.
-    //   - persistContent 호출 → 즉시 서버에 저장, 새로고침/재오픈 후에도 유지.
     const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
         if (!canEdit) return;
         const items = Array.from(e.clipboardData?.items || []);
         const imageItems = items.filter((it) => it.type && it.type.startsWith('image/'));
-        if (imageItems.length === 0) return; // 텍스트/HTML paste 는 기본 동작 유지
+        if (imageItems.length === 0) return;
         e.preventDefault();
         let pendingCount = imageItems.length;
         imageItems.forEach((item) => {
@@ -280,7 +271,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 const img = document.createElement('img');
                 img.src = dataUrl;
                 img.alt = '붙여넣은 이미지';
-                // caret 위치에 삽입 (없으면 컨테이너 끝)
                 const sel = window.getSelection();
                 const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
                 if (range && contentRef.current && contentRef.current.contains(range.commonAncestorContainer)) {
@@ -321,9 +311,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             img.style.height = 'auto';
             img.setAttribute('data-note-width', String(next));
         }
-        // 변경된 HTML을 즉시 저장 → 새로고침 후에도 유지
         persistContent();
-        // toolbar 위치 갱신 (이미지 크기 변경 후)
         requestAnimationFrame(() => {
             const rect = img.getBoundingClientRect();
             setHoveredImg(prev => prev ? { el: img, rect } : null);
@@ -331,7 +319,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         });
     };
 
-    // v3.11: 모서리 drag 로 width 직접 조절 (height: auto 유지로 비율 보존)
     const startImageDragResize = useCallback((startEvent: React.PointerEvent, img: HTMLImageElement) => {
         startEvent.preventDefault();
         startEvent.stopPropagation();
@@ -347,7 +334,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             ref.el.style.width = `${next}px`;
             ref.el.style.height = 'auto';
             ref.el.setAttribute('data-note-width', String(next));
-            // 선택 상자 위치 즉시 반영
             const rect = ref.el.getBoundingClientRect();
             setSelectedImg({ el: ref.el, rect });
             setHoveredImg(prev => prev ? { el: ref.el, rect } : prev);
@@ -359,7 +345,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             const ref = dragRef.current;
             dragRef.current = null;
             if (ref) {
-                // drag 종료 시점에 1회만 저장 → 매 프레임 mutation 회피
                 persistContent();
             }
         };
@@ -368,10 +353,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         window.addEventListener('pointercancel', onUp);
     }, [persistContent]);
 
-    // v3.12: data-* 만 토글하면 Excel/Word 에서 paste 한 table 의 inline style 이
-    //   상위 sx 셀렉터를 이기기 때문에 폭맞춤/원본/줄바꿈이 시각적으로 동작하지 않는다.
-    //   → inline style 을 직접 set/clear 하는 방식으로 강제 적용.
-    //   data-* 도 그대로 유지해서 sx fallback + 새로고침 후에도 상태가 보존되게 한다.
     const applyTableState = (table: HTMLTableElement) => {
         const fit = table.getAttribute('data-fit-mode') === 'fit';
         const wrap = table.getAttribute('data-wrap-text') === 'true';
@@ -384,7 +365,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             table.style.maxWidth = '';
             table.style.tableLayout = '';
         }
-        const cellWrap = fit || wrap; // fit 모드는 자동 줄바꿈, 또는 명시적 wrap
+        const cellWrap = fit || wrap;
         const cells = table.querySelectorAll('th, td');
         cells.forEach((c) => {
             const cell = c as HTMLElement;
@@ -413,7 +394,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             else table.setAttribute('data-wrap-text', 'true');
             applyTableState(table);
         } else {
-            // 폰트 +/- (transform scale 미사용, font-size 직접 조정)
             const computed = window.getComputedStyle(table).fontSize;
             const px = parseFloat(computed) || 14;
             const next = action === 'fontUp' ? Math.min(22, px + 1) : Math.max(10, px - 1);
@@ -429,8 +409,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         });
     };
 
-    // v3.12: 컨텐츠가 처음 그려질 때 / hover 될 때 data-* 가 있으면 inline style 도 동기화.
-    //   (저장된 HTML 의 data-fit-mode/data-wrap-text 만으로도 새로고침 후 상태 복원)
     useEffect(() => {
         if (!contentRef.current) return;
         const tables = contentRef.current.querySelectorAll<HTMLTableElement>('table[data-fit-mode], table[data-wrap-text]');
@@ -450,7 +428,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     '&:hover .insert-btn': { opacity: 1 },
                 }}
             >
-                {/* Drag handle */}
                 {canEdit && (
                     <Box
                         className="drag-handle"
@@ -466,7 +443,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     </Box>
                 )}
 
-                {/* Checkbox / type indicator */}
                 <Box sx={{
                     display: 'flex', alignItems: 'center', pt: 0.6,
                     minWidth: 28, justifyContent: 'center',
@@ -488,7 +464,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     )}
                 </Box>
 
-                {/* Content - Rich text editable */}
                 <Box sx={{ flex: 1, minWidth: 0, position: 'relative' }}>
                     <Box
                         ref={contentRef}
@@ -498,8 +473,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                         onFocus={() => onFocus(block.id)}
                         onKeyDown={e => canEdit && handleKeyDownInternal(e)}
                         onClick={(e) => {
-                            // v3.11: 단일 클릭 = 이미지 선택(테두리/handle 표시).
-                            //        라이트박스는 더블클릭 또는 toolbar "확대 보기" 버튼.
                             const target = e.target as HTMLElement;
                             if (target instanceof HTMLImageElement) {
                                 e.preventDefault();
@@ -533,7 +506,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             transition: 'background 0.15s',
                             wordBreak: 'break-word',
                             whiteSpace: 'pre-wrap',
-                            // 큰 image/table 등은 잘리지 않고 가로 스크롤로 노출
                             overflowX: 'auto',
                             textDecoration: isCheckbox && block.checked ? 'line-through' : 'none',
                             opacity: isCheckbox && block.checked ? 0.5 : 1,
@@ -547,8 +519,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 pointerEvents: 'none',
                             },
                             '& b, & strong': { fontWeight: 700 },
-                            // 이미지: 원본 크기 유지, 큰 이미지는 가로 스크롤로 표시.
-                            // 단일 클릭=선택(모서리 drag 로 리사이즈), 더블클릭=확대 보기.
                             '& img': {
                                 maxWidth: 'none',
                                 height: 'auto',
@@ -559,7 +529,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 userSelect: 'none',
                                 WebkitUserDrag: 'none',
                             },
-                            // 테이블: 원본 폭 유지, 셀 내용 줄바꿈 안 함 → 가로 스크롤로 노출
                             '& table': {
                                 width: 'max-content',
                                 maxWidth: 'none',
@@ -567,7 +536,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 my: 0.5,
                                 fontSize: '0.85rem',
                             },
-                            // 폭맞춤 모드: 컨테이너 폭에 맞추고 텍스트 줄바꿈
                             '& table[data-fit-mode="fit"]': {
                                 width: '100%',
                             },
@@ -589,7 +557,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             },
                         }}
                     />
-                    {/* Shift+Enter hint for checkbox blocks */}
                     {isCheckbox && canEdit && focusedBlockId === block.id && isEmpty && (
                         <Typography
                             variant="caption"
@@ -602,7 +569,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             Shift+Enter 줄바꿈
                         </Typography>
                     )}
-                    {/* Checked date display */}
                     {isCheckbox && block.checked && block.checked_at && (
                         <Typography
                             variant="caption"
@@ -617,7 +583,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                     )}
                 </Box>
 
-                {/* Block actions */}
                 {canEdit && (
                     <Box
                         className="block-actions"
@@ -663,7 +628,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 <FormatColorTextIcon sx={{ fontSize: '0.85rem' }} />
                             </IconButton>
                         </Tooltip>
-                        {/* Color picker dropdown */}
                         {showColorPicker === block.id && (
                             <Box sx={{
                                 position: 'absolute', top: '100%', right: 0, zIndex: 20,
@@ -707,7 +671,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 )}
             </Box>
 
-            {/* Insert between button */}
             {canEdit && (
                 <Box
                     className="insert-btn"
@@ -739,7 +702,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 </Box>
             )}
 
-            {/* 이미지 toolbar — hover 또는 선택 상태일 때 노출. 기존 -, +, 100%, 원본 + 확대 보기. */}
             {canEdit && (() => {
                 const active = selectedImg ?? hoveredImg;
                 if (!active) return null;
@@ -799,10 +761,8 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 );
             })()}
 
-            {/* v3.11: 선택된 이미지에 테두리 + 모서리 drag handle. 모서리를 잡고 마우스로 width 조절. */}
             {canEdit && selectedImg && (
                 <>
-                    {/* 선택 박스(border) — 비클릭, 시각 표시만 */}
                     <Box
                         sx={{
                             position: 'fixed',
@@ -817,7 +777,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                             boxSizing: 'border-box',
                         }}
                     />
-                    {/* 우측 하단 모서리 drag handle */}
                     <Box
                         data-img-resize-handle="1"
                         onPointerDown={(e) => startImageDragResize(e, selectedImg.el)}
@@ -839,7 +798,6 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 </>
             )}
 
-            {/* 테이블 hover 리사이즈 toolbar — 폭맞춤/원본/줄바꿈/폰트± */}
             {canEdit && hoveredTable && (() => {
                 const fitMode = hoveredTable.el.getAttribute('data-fit-mode') === 'fit';
                 const wrapped = hoveredTable.el.getAttribute('data-wrap-text') === 'true';
@@ -909,11 +867,56 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     const blockRefs = useRef<Map<number, HTMLDivElement>>(new Map());
     const pendingFocusRef = useRef<number | null>(null);
     const savedSelection = useRef<Range | null>(null);
-    // 이미지 라이트박스
     const [previewImage, setPreviewImage] = useState<{ src: string; alt?: string } | null>(null);
     const handleImageClick = useCallback((src: string, alt?: string) => {
         setPreviewImage({ src, alt });
     }, []);
+
+    const PAPER_KEY = 'workNote.paperSize.v1';
+    const [paperSize, setPaperSize] = useState<{ w: number; h: number }>(() => {
+        try {
+            const saved = localStorage.getItem(PAPER_KEY);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (typeof parsed?.w === 'number' && typeof parsed?.h === 'number') return parsed;
+            }
+        } catch { /* ignore */ }
+        return { w: 820, h: Math.round(window.innerHeight * 0.9) };
+    });
+
+    const paperDragRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
+    const startPaperResize = useCallback((e: React.PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        paperDragRef.current = {
+            startX: e.clientX, startY: e.clientY,
+            startW: paperSize.w, startH: paperSize.h,
+        };
+        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        const onMove = (ev: PointerEvent) => {
+            const ref = paperDragRef.current;
+            if (!ref) return;
+            const dw = ev.clientX - ref.startX;
+            const dh = ev.clientY - ref.startY;
+            const nextW = Math.max(420, Math.min(window.innerWidth - 24, ref.startW + dw));
+            const nextH = Math.max(360, Math.min(window.innerHeight - 24, ref.startH + dh));
+            setPaperSize({ w: nextW, h: nextH });
+        };
+        const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+            paperDragRef.current = null;
+            try { localStorage.setItem(PAPER_KEY, JSON.stringify(paperSize)); } catch { /* ignore */ }
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+    }, [paperSize]);
+
+    useEffect(() => {
+        try { localStorage.setItem(PAPER_KEY, JSON.stringify(paperSize)); } catch { /* ignore */ }
+    }, [paperSize.w, paperSize.h]);
 
     const { data: blocks = [] } = useQuery<TaskActivity[]>({
         queryKey: ['activities', taskId],
@@ -924,15 +927,11 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     const invalidate = useCallback(() => {
         queryClient.invalidateQueries({ queryKey: ['activities', taskId] });
         queryClient.invalidateQueries({ queryKey: ['tasks'] });
-        // 체크박스 변경으로 progress가 바뀌므로 로드맵/통계도 갱신
         queryClient.invalidateQueries({ queryKey: ['roadmap'] });
         queryClient.invalidateQueries({ queryKey: ['globalRoadmap'] });
         queryClient.invalidateQueries({ queryKey: ['stats'] });
     }, [queryClient, taskId]);
 
-    // v3.12: 활동(체크박스) 변경 응답에 담긴 task_progress / task_status 를
-    //   tasks 캐시 + selectedTask store 에 즉시 반영. 100% → <100% 다운그레이드도
-    //   새로고침 없이 Task Details/Board 양쪽에서 일관되게 보이도록.
     const applyTaskSync = useCallback((response: any) => {
         const tProgress: number | null | undefined = response?.task_progress;
         const tStatus: string | null | undefined = response?.task_status;
@@ -987,7 +986,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         onSuccess: invalidate,
     });
 
-    // Focus newly created block
     useEffect(() => {
         if (pendingFocusRef.current && blocks.length > 0) {
             const targetId = pendingFocusRef.current;
@@ -997,7 +995,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                     const el = blockRefs.current.get(targetId);
                     if (el) {
                         el.focus();
-                        // Place cursor at end
                         const range = document.createRange();
                         range.selectNodeContents(el);
                         range.collapse(false);
@@ -1043,13 +1040,11 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
 
     const handleKeyDown = (e: React.KeyboardEvent, block: TaskActivity, index: number) => {
         if (e.key === 'Enter' && !e.shiftKey) {
-            // Checkbox blocks: Enter creates a new checkbox block
             if (block.block_type === 'checkbox') {
                 e.preventDefault();
                 const orderIndex = block.order_index + 1;
                 createMut.mutate({ content: '', block_type: 'checkbox', order_index: orderIndex });
             }
-            // Text blocks: Enter = natural new line (don't prevent default)
         }
         if (e.key === 'Backspace') {
             const el = e.target as HTMLDivElement;
@@ -1062,7 +1057,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                         const prevEl = blockRefs.current.get(prevId);
                         if (prevEl) {
                             prevEl.focus();
-                            // Place cursor at end
                             const range = document.createRange();
                             range.selectNodeContents(prevEl);
                             range.collapse(false);
@@ -1089,7 +1083,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         });
     };
 
-    // DnD
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
         useSensor(KeyboardSensor),
@@ -1105,64 +1098,15 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         reorderMut.mutate(newOrder);
     };
 
-    // Close color picker when clicking outside
     useEffect(() => {
         if (showColorPicker === null) return;
         const handler = () => setShowColorPicker(null);
-        // Use mousedown so it doesn't conflict with onMouseDown handlers that stopPropagation
         const timer = setTimeout(() => document.addEventListener('mousedown', handler), 0);
         return () => {
             clearTimeout(timer);
             document.removeEventListener('mousedown', handler);
         };
     }, [showColorPicker]);
-
-    // v3.11: Work Note 박스 자체를 모서리 drag 로 너비/높이 조절. 크기는 localStorage 에 저장.
-    const PAPER_KEY = 'workNote.paperSize.v1';
-    const [paperSize, setPaperSize] = useState<{ w: number; h: number }>(() => {
-        try {
-            const saved = localStorage.getItem(PAPER_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (typeof parsed?.w === 'number' && typeof parsed?.h === 'number') return parsed;
-            }
-        } catch { /* ignore */ }
-        return { w: 820, h: Math.round(window.innerHeight * 0.9) };
-    });
-    const paperDragRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
-    const startPaperResize = useCallback((e: React.PointerEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        paperDragRef.current = {
-            startX: e.clientX, startY: e.clientY,
-            startW: paperSize.w, startH: paperSize.h,
-        };
-        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-        const onMove = (ev: PointerEvent) => {
-            const ref = paperDragRef.current;
-            if (!ref) return;
-            const dw = ev.clientX - ref.startX;
-            const dh = ev.clientY - ref.startY;
-            const nextW = Math.max(420, Math.min(window.innerWidth - 24, ref.startW + dw));
-            const nextH = Math.max(360, Math.min(window.innerHeight - 24, ref.startH + dh));
-            setPaperSize({ w: nextW, h: nextH });
-        };
-        const onUp = () => {
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            window.removeEventListener('pointercancel', onUp);
-            paperDragRef.current = null;
-            try { localStorage.setItem(PAPER_KEY, JSON.stringify(paperSize)); } catch { /* ignore */ }
-        };
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
-        window.addEventListener('pointercancel', onUp);
-    }, [paperSize]);
-
-    // 사이즈 변할 때마다 localStorage 동기 (드래그 중 잦은 호출 방지 위해 throttle 대신 onUp 에서도 저장)
-    useEffect(() => {
-        try { localStorage.setItem(PAPER_KEY, JSON.stringify(paperSize)); } catch { /* ignore */ }
-    }, [paperSize.w, paperSize.h]);
 
     return (
         <Dialog
@@ -1171,9 +1115,9 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
             maxWidth={false}
             PaperProps={{
                 sx: {
-                    width: paperSize.w,
+                    width: paperSize.w + 'px',
                     maxWidth: '98vw',
-                    height: paperSize.h,
+                    height: paperSize.h + 'px',
                     maxHeight: '98vh',
                     borderRadius: 3,
                     display: 'flex',
@@ -1183,7 +1127,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                 },
             }}
         >
-            {/* Header */}
             <Box sx={{
                 px: 3, py: 2.5,
                 borderBottom: '1px solid #E5E7EB',
@@ -1214,7 +1157,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                     </Box>
                 </Box>
 
-                {/* Progress bar */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                     <LinearProgress
                         variant="determinate"
@@ -1237,7 +1179,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                 </Box>
             </Box>
 
-            {/* Body - Block Editor */}
             <Box sx={{
                 flex: 1, overflowY: 'auto', px: 3, py: 2,
                 '&::-webkit-scrollbar': { width: 4 },
@@ -1285,7 +1226,6 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                 </DndContext>
             </Box>
 
-            {/* Footer - Add buttons */}
             {canEdit && (
                 <Box sx={{
                     px: 3, py: 1.5,
@@ -1338,14 +1278,12 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                 </Box>
             )}
 
-            {/* 이미지 라이트박스 — 이미지 더블클릭 또는 toolbar "확대 보기" 버튼으로 열림 */}
             <ImagePreviewModal
                 src={previewImage?.src ?? null}
                 alt={previewImage?.alt}
                 onClose={() => setPreviewImage(null)}
             />
 
-            {/* v3.11: Work Note 박스 모서리 drag handle — 너비/높이 동시 조절. 크기는 localStorage 에 영속화. */}
             <Box
                 onPointerDown={startPaperResize}
                 onMouseDown={(e) => e.preventDefault()}
