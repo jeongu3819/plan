@@ -965,6 +965,9 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
             applyTaskSync(newBlock);
             invalidate();
         },
+        onError: (err) => {
+            alert('노트 블록 생성 실패: ' + (err instanceof Error ? err.message : String(err)));
+        }
     });
 
     const updateMut = useMutation({
@@ -974,6 +977,9 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
             applyTaskSync(response);
             invalidate();
         },
+        onError: (err) => {
+            alert('노트 블록 저장 실패. 이미지 용량이 너무 크거나 네트워크 문제일 수 있습니다.\n에러: ' + (err instanceof Error ? err.message : String(err)));
+        }
     });
 
     const deleteMut = useMutation({

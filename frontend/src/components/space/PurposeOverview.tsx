@@ -77,7 +77,7 @@ function StatCard({ label, value, color, icon }: { label: string; value: number;
   );
 }
 
-function TaskList({ title, tasks, color, icon, onTaskClick, emptyText }: {
+export function TaskList({ title, tasks, color, icon, onTaskClick, emptyText }: {
   title: string; tasks: any[]; color: string; icon: React.ReactNode;
   onTaskClick?: (taskId: number, projectId: number) => void; emptyText?: string;
 }) {
@@ -131,7 +131,7 @@ function TaskList({ title, tasks, color, icon, onTaskClick, emptyText }: {
   );
 }
 
-function SheetList({ title, sheets, color, onSheetClick, emptyText, hideIfEmpty }: {
+export function SheetList({ title, sheets, color, onSheetClick, emptyText, hideIfEmpty }: {
   title: string; sheets: any[]; color: string; onSheetClick?: (id: number) => void;
   emptyText?: string; hideIfEmpty?: boolean;
 }) {
@@ -248,7 +248,7 @@ function SheetList({ title, sheets, color, onSheetClick, emptyText, hideIfEmpty 
 //   - 완료된 항목 숨기기 토글 (기본 ON: progress<100 만 표시)
 //   - Project 별 active/completed 카운트 + 평균 진행률 + expand/collapse
 //   - 각 group 은 5개까지 자연스럽게 보이고 그 이상은 내부 세로 스크롤로 확인 가능
-function ProjectGroupedSheetList({
+export function ProjectGroupedSheetList({
   title,
   activeSheets,
   nearCompletedSheets,

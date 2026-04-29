@@ -71,11 +71,11 @@ FRONTEND_REDIRECT_URI = (
 )
 
 # ===== CORS =====
-def _parse_origins(v: str):
-    return [x.strip() for x in (v or "").split(",") if x.strip()]
+def _parse_origins(val: str) -> list[str]:
+    return [x.strip() for x in val.split(",") if x.strip()]
 
 CORS_ORIGINS = _parse_origins(
-    os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
 )
 
 # ===== S3 / Backup =====

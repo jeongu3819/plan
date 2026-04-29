@@ -35,6 +35,9 @@ import UpcomingIcon from '@mui/icons-material/Upcoming';
 import PersonIcon from '@mui/icons-material/Person';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import FolderIcon from '@mui/icons-material/Folder';
+import ScheduleIcon from '@mui/icons-material/Schedule';
+import DescriptionIcon from '@mui/icons-material/Description';
+import PriorityHighIcon from '@mui/icons-material/PriorityHigh';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
@@ -52,9 +55,8 @@ import { useNavigate } from 'react-router-dom';
 import { useSpaceNav } from '../hooks/useSpaceNav';
 import { useDensityScores } from '../hooks/useDensityScores';
 import ZeroStateDashboard from '../components/ZeroStateDashboard';
-import PurposeOverview from '../components/space/PurposeOverview';
+import { TaskList, ProjectGroupedSheetList } from '../components/space/PurposeOverview';
 import SheetExecutionPopup from '../components/sheets/SheetExecutionPopup';
-import type { SpacePurpose } from '../types';
 import {
   format,
   differenceInDays,
@@ -66,6 +68,10 @@ import {
   isToday as isDateToday,
   addMonths,
   subMonths,
+  startOfWeek,
+  endOfWeek,
+  addWeeks,
+  subWeeks,
 } from 'date-fns';
 import {
   DndContext,
@@ -153,12 +159,16 @@ interface WidgetDef {
 }
 
 const ALL_WIDGETS: WidgetDef[] = [
+  { id: 'calendar', title: '주간 및 월간 작업 Calendar', icon: <CalendarMonthIcon /> },
+  { id: 'today_tasks', title: '오늘 해야 할 작업', icon: <ScheduleIcon /> },
+  { id: 'check_sheets', title: 'Check sheet 현황', icon: <DescriptionIcon /> },
+  { id: 'incomplete_tasks', title: '미완료/이월 작업', icon: <WarningAmberIcon /> },
+  { id: 'high_priority', title: '우선순위 높은 항목', icon: <PriorityHighIcon /> },
   { id: 'overview', title: 'Overview', icon: <AssessmentIcon /> },
   { id: 'overdue', title: 'Overdue Tasks', icon: <WarningAmberIcon /> },
   { id: 'upcoming', title: 'Upcoming Tasks', icon: <UpcomingIcon /> },
   { id: 'mytasks', title: 'My Tasks', icon: <PersonIcon /> },
   { id: 'projects', title: 'Projects', icon: <FolderIcon /> },
-  { id: 'calendar', title: 'Calendar', icon: <CalendarMonthIcon /> },
 ];
 
 const DEFAULT_VISIBLE = ALL_WIDGETS.map(w => w.id);
@@ -309,6 +319,7 @@ const HomePage: React.FC = () => {
   const [popupExecId, setPopupExecId] = useState<number | null>(null);
 
   const [calMonth, setCalMonth] = useState(new Date());
+  const [calViewMode, setCalViewMode] = useState<'week' | 'month'>('week');
   const [overviewFilter, setOverviewFilter] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [hideDoneTasks, setHideDoneTasks] = useState(false);
@@ -325,12 +336,11 @@ const HomePage: React.FC = () => {
   });
 
   // v3.0 목적 기반 Overview
-  const { data: overviewData, isLoading: overviewLoading } = useQuery({
+  const { data: overviewData } = useQuery({
     queryKey: ['spaceOverview', currentSpaceId, currentUserId],
     queryFn: () => api.getSpaceOverview(currentSpaceId!, currentUserId),
     enabled: !!currentSpaceId && currentUserId > 0,
   });
-  const spacePurpose = (overviewData?.purpose || 'project_management') as SpacePurpose;
 
   // Density Scores for My Tasks widget
   const myTasksForDensity = stats?.my_tasks || [];
@@ -995,10 +1005,10 @@ const HomePage: React.FC = () => {
           </>
         );
       case 'calendar': {
-        const mStart = startOfMonth(calMonth);
-        const mEnd = endOfMonth(calMonth);
+        const mStart = calViewMode === 'week' ? startOfWeek(calMonth) : startOfMonth(calMonth);
+        const mEnd = calViewMode === 'week' ? endOfWeek(calMonth) : endOfMonth(calMonth);
         const mDays = eachDayOfInterval({ start: mStart, end: mEnd });
-        const pad = getDay(mStart);
+        const pad = calViewMode === 'week' ? 0 : getDay(mStart);
         const allTasks: Task[] = [
           ...(stats?.overdue || []),
           ...(stats?.upcoming || []),
@@ -1041,10 +1051,14 @@ const HomePage: React.FC = () => {
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+                <Box sx={{ display: 'flex', bgcolor: 'rgba(0,0,0,0.04)', borderRadius: 1.5, p: 0.3, mr: 1 }}>
+                  <Typography onClick={() => setCalViewMode('week')} sx={{ px: 1, py: 0.2, fontSize: '0.7rem', fontWeight: 700, borderRadius: 1, cursor: 'pointer', bgcolor: calViewMode === 'week' ? '#fff' : 'transparent', color: calViewMode === 'week' ? '#2955FF' : '#9CA3AF', boxShadow: calViewMode === 'week' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', transition: 'all 0.2s' }}>Week</Typography>
+                  <Typography onClick={() => setCalViewMode('month')} sx={{ px: 1, py: 0.2, fontSize: '0.7rem', fontWeight: 700, borderRadius: 1, cursor: 'pointer', bgcolor: calViewMode === 'month' ? '#fff' : 'transparent', color: calViewMode === 'month' ? '#2955FF' : '#9CA3AF', boxShadow: calViewMode === 'month' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', transition: 'all 0.2s' }}>Month</Typography>
+                </Box>
                 <IconButton
                   size="small"
                   onClick={() => {
-                    setCalMonth(subMonths(calMonth, 1));
+                    setCalMonth(calViewMode === 'week' ? subWeeks(calMonth, 1) : subMonths(calMonth, 1));
                     setSelectedDate(null);
                   }}
                   sx={{ p: 0.3 }}
@@ -1055,12 +1069,12 @@ const HomePage: React.FC = () => {
                   variant="caption"
                   sx={{ fontWeight: 700, fontSize: '0.8rem', minWidth: 90, textAlign: 'center' }}
                 >
-                  {format(calMonth, 'yyyy년 M월')}
+                  {calViewMode === 'week' ? `${format(mStart, 'M/d')} - ${format(mEnd, 'M/d')}` : format(calMonth, 'yyyy년 M월')}
                 </Typography>
                 <IconButton
                   size="small"
                   onClick={() => {
-                    setCalMonth(addMonths(calMonth, 1));
+                    setCalMonth(calViewMode === 'week' ? addWeeks(calMonth, 1) : addMonths(calMonth, 1));
                     setSelectedDate(null);
                   }}
                   sx={{ p: 0.3 }}
@@ -1281,6 +1295,30 @@ const HomePage: React.FC = () => {
           </>
         );
       }
+      case 'today_tasks':
+        return (
+          <Box sx={{ height: '100%', overflowY: 'auto' }}>
+            <TaskList title={def.title} tasks={overviewData?.today_tasks || []} color="#2955FF" icon={def.icon} onTaskClick={(taskId: number, projectId: number) => openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] } as any, projectId)} emptyText="오늘 마감 작업 없음" />
+          </Box>
+        );
+      case 'check_sheets':
+        return (
+          <Box sx={{ height: '100%', overflowY: 'auto' }}>
+            <ProjectGroupedSheetList title={def.title} activeSheets={overviewData?.active_sheets || []} nearCompletedSheets={overviewData?.near_completed_sheets || []} completedSheets={overviewData?.recent_completed_sheets || []} color="#16A34A" onSheetClick={setPopupExecId} emptyText="진행 중인 체크시트가 없습니다" />
+          </Box>
+        );
+      case 'incomplete_tasks':
+        return (
+          <Box sx={{ height: '100%', overflowY: 'auto' }}>
+            <TaskList title={def.title} tasks={overviewData?.incomplete_carried_over || []} color="#EF4444" icon={def.icon} onTaskClick={(taskId: number, projectId: number) => openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] } as any, projectId)} emptyText="미완료 작업 없음" />
+          </Box>
+        );
+      case 'high_priority':
+        return (
+          <Box sx={{ height: '100%', overflowY: 'auto' }}>
+            <TaskList title={def.title} tasks={overviewData?.high_priority_tasks || []} color="#F59E0B" icon={def.icon} onTaskClick={(taskId: number, projectId: number) => openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] } as any, projectId)} emptyText="우선순위 항목 없음" />
+          </Box>
+        );
       default:
         return null;
     }
@@ -1492,26 +1530,6 @@ const HomePage: React.FC = () => {
         </Box>
       ) : (
         <>
-        {/* ── v3.0 목적 기반 Overview ── */}
-        {spacePurpose && spacePurpose !== 'project_management' && (
-          <Box sx={{
-            mb: 2, opacity: introPhase === 'done' ? 1 : 0,
-            transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
-            transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
-          }}>
-            <PurposeOverview
-              data={overviewData}
-              loading={overviewLoading}
-              purpose={spacePurpose}
-              onTaskClick={(taskId, projectId) => {
-                openDrawer({ id: taskId, project_id: projectId, title: '', status: 'todo', assignee_ids: [] }, projectId);
-              }}
-              onSheetClick={(executionId) => {
-                setPopupExecId(executionId);
-              }}
-            />
-          </Box>
-        )}
         <SheetExecutionPopup
           open={popupExecId !== null}
           executionId={popupExecId}
