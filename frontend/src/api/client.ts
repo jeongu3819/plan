@@ -1110,6 +1110,14 @@ export const api = {
     const res = await client.patch(`/sheet-executions/${executionId}/cells/${cellRef}`, body, { params: { user_id: requireUserId(userId) } });
     return res.data;
   },
+  updateSheetHiddenCols: async (executionId: number, hiddenCols: number[], userId: number): Promise<{ hidden_cols: number[] }> => {
+    const res = await client.patch(
+      `/sheet-executions/${executionId}/hidden-cols`,
+      { hidden_cols: hiddenCols },
+      { params: { user_id: requireUserId(userId) } },
+    );
+    return res.data;
+  },
   copySheetExecution: async (executionId: number, title: string, includeData: boolean, userId: number): Promise<any> => {
     const res = await client.post(`/sheet-executions/${executionId}/copy`, null, { params: { title, include_data: includeData, user_id: requireUserId(userId) } });
     return res.data;

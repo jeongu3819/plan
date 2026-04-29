@@ -257,6 +257,7 @@ export function ProjectGroupedSheetList({
   color,
   onSheetClick,
   emptyText,
+  flat,
 }: {
   title: string;
   activeSheets: any[];
@@ -266,6 +267,8 @@ export function ProjectGroupedSheetList({
   color: string;
   onSheetClick?: (id: number) => void;
   emptyText?: string;
+  /** flat: 외곽 Paper/패딩 제거 — Dashboard 위젯 안에 배치될 때 박스-인-박스 회피용 */
+  flat?: boolean;
 }) {
   const [hideCompleted, setHideCompleted] = React.useState(true);
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
@@ -332,8 +335,14 @@ export function ProjectGroupedSheetList({
   const totalActive = activeSheets.length;
   const totalCompleted = completedSheets?.length || 0;
 
+  const Wrapper: React.ElementType = flat ? Box : Paper;
+  const wrapperSx = flat
+    ? { p: 0, display: 'flex', flexDirection: 'column', height: '100%', bgcolor: 'transparent' }
+    : { p: 1.75, borderRadius: 2, borderColor: alpha(color, 0.2), display: 'flex', flexDirection: 'column', height: '100%' };
+  const wrapperProps = flat ? {} : { variant: 'outlined' as const };
+
   return (
-    <Paper variant="outlined" sx={{ p: 1.75, borderRadius: 2, borderColor: alpha(color, 0.2), display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <Wrapper {...wrapperProps} sx={wrapperSx}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 1.25, flexWrap: 'wrap' }}>
         <DescriptionIcon sx={{ fontSize: 22, color }} />
         <Typography variant="subtitle1" fontWeight={700} sx={{ fontSize: '1rem' }}>{title}</Typography>
@@ -414,7 +423,7 @@ export function ProjectGroupedSheetList({
                             display: 'flex', alignItems: 'center', gap: 1,
                             py: 0.6, px: 0.9, borderRadius: 1, cursor: 'pointer',
                             border: `1px solid ${alpha(color, 0.1)}`,
-                            bgcolor: '#fff',
+                            bgcolor: 'background.paper',
                             '&:hover': { bgcolor: alpha(color, 0.04), borderColor: alpha(color, 0.3) },
                             transition: 'all 0.15s',
                           }}
@@ -461,7 +470,7 @@ export function ProjectGroupedSheetList({
           })}
         </Box>
       )}
-    </Paper>
+    </Wrapper>
   );
 }
 

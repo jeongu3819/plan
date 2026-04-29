@@ -1130,12 +1130,13 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { LinearProgress } from '@mui/material';
 import { useSpaceNav } from '../../hooks/useSpaceNav';
-import { useNavigate as useNavigateSheet } from 'react-router-dom';
+import SheetExecutionPopup from '../../components/sheets/SheetExecutionPopup';
 
-const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }> = ({ projectId, currentUserId: _currentUserId }) => {
+const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }> = ({ projectId, currentUserId }) => {
   const currentSpaceId = useAppStore(state => state.currentSpaceId); void currentSpaceId;
-  const { spacePath } = useSpaceNav();
-  const navigate = useNavigateSheet();
+  const { spaceNav } = useSpaceNav();
+  const queryClient = useQueryClient();
+  const [popupExecId, setPopupExecId] = useState<number | null>(null);
 
   const { data } = useQuery({
     queryKey: ['projectSheetSummary', projectId],
@@ -1146,6 +1147,26 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
   const activeExecs = data?.active_executions || [];
   const recentCompleted = data?.recent_completed || [];
   const hasAny = (data?.total_executions || 0) > 0;
+
+  // 미연결(또는 비-진행중) sheet 만 삭제 허용 — 백엔드 가드와 동일 기준.
+  const canDelete = (exec: any): boolean => {
+    if (!exec) return false;
+    if (exec.status === 'in_progress' && exec.task_id != null) return false;
+    return true;
+  };
+
+  const handleDelete = async (exec: any, ev: React.MouseEvent) => {
+    ev.stopPropagation();
+    if (!canDelete(exec)) return;
+    if (!window.confirm(`"${exec.title}" Sheet 실행본을 삭제하시겠습니까?\n삭제 후 복구할 수 없습니다.`)) return;
+    try {
+      await api.deleteSheetExecution(exec.id, currentUserId);
+      queryClient.invalidateQueries({ queryKey: ['projectSheetSummary', projectId] });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || '알 수 없는 오류';
+      alert(`Sheet 삭제 실패: ${detail}`);
+    }
+  };
 
   return (
     <Paper sx={{ p: 3, mb: 3, borderRadius: 2 }} variant="outlined">
@@ -1160,7 +1181,7 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
         <Button
           size="small"
           variant="outlined"
-          onClick={() => navigate(`${spacePath}/sheets`)}
+          onClick={() => spaceNav('/sheets')}
           sx={{ fontSize: '0.75rem', borderColor: '#7C3AED', color: '#7C3AED' }}
         >
           Sheet 관리
@@ -1172,7 +1193,7 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
           이 프로젝트에 연결된 Sheet 실행이 없습니다.{' '}
           <Box
             component="span"
-            onClick={() => navigate(`${spacePath}/sheets`)}
+            onClick={() => spaceNav('/sheets')}
             sx={{ color: '#7C3AED', cursor: 'pointer', textDecoration: 'underline' }}
           >
             Sheet 업로드하러 가기
@@ -1189,7 +1210,7 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
               {activeExecs.map((exec: any) => (
                 <Box
                   key={exec.id}
-                  onClick={() => navigate(`${spacePath}/sheets/execution/${exec.id}`)}
+                  onClick={() => setPopupExecId(exec.id)}
                   sx={{
                     display: 'flex', alignItems: 'center', gap: 1.5, py: 0.8, px: 1.5,
                     borderRadius: 1.5, cursor: 'pointer', bgcolor: '#FFFBEB',
@@ -1210,6 +1231,16 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
                   <Typography variant="caption" sx={{ fontSize: '0.65rem', color: '#D97706', flexShrink: 0, fontWeight: 700 }}>
                     {exec.progress}%
                   </Typography>
+                  {canDelete(exec) && (
+                    <IconButton
+                      size="small"
+                      onClick={(ev) => handleDelete(exec, ev)}
+                      title="Task 미연결 Sheet 삭제"
+                      sx={{ p: 0.4, color: '#9CA3AF', '&:hover': { color: '#EF4444', bgcolor: '#FEE2E2' } }}
+                    >
+                      <DeleteOutlineIcon sx={{ fontSize: '1rem' }} />
+                    </IconButton>
+                  )}
                 </Box>
               ))}
             </Box>
@@ -1224,7 +1255,7 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
               {recentCompleted.slice(0, 5).map((exec: any) => (
                 <Box
                   key={exec.id}
-                  onClick={() => navigate(`${spacePath}/sheets/execution/${exec.id}`)}
+                  onClick={() => setPopupExecId(exec.id)}
                   sx={{
                     display: 'flex', alignItems: 'center', gap: 1.5, py: 0.6, px: 1.5,
                     borderRadius: 1.5, cursor: 'pointer',
@@ -1238,12 +1269,31 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
                   <Typography variant="caption" sx={{ fontSize: '0.62rem', color: '#9CA3AF', flexShrink: 0 }}>
                     {exec.completed_at?.slice(0, 10)}
                   </Typography>
+                  {canDelete(exec) && (
+                    <IconButton
+                      size="small"
+                      onClick={(ev) => handleDelete(exec, ev)}
+                      title="Sheet 실행본 삭제"
+                      sx={{ p: 0.4, color: '#9CA3AF', '&:hover': { color: '#EF4444', bgcolor: '#FEE2E2' } }}
+                    >
+                      <DeleteOutlineIcon sx={{ fontSize: '0.95rem' }} />
+                    </IconButton>
+                  )}
                 </Box>
               ))}
             </Box>
           )}
         </Box>
       )}
+      <SheetExecutionPopup
+        open={popupExecId != null}
+        executionId={popupExecId}
+        userId={currentUserId}
+        onClose={() => {
+          setPopupExecId(null);
+          queryClient.invalidateQueries({ queryKey: ['projectSheetSummary', projectId] });
+        }}
+      />
     </Paper>
   );
 };

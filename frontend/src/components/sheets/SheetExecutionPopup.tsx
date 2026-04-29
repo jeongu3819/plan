@@ -2,7 +2,7 @@
  * SheetExecutionPopup — 풀스크린 팝업에서 체크시트 직접 사용
  * Excel과 유사한 형태로 렌더링, 웹에서 직접 체크, 진행률 실시간 표시
  */
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import {
   Dialog, AppBar, Toolbar, Typography, IconButton, Box,
   LinearProgress, Chip, alpha, Button, DialogTitle, DialogContent, DialogActions,
@@ -104,6 +104,26 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     },
   });
 
+  // 삭제(숨김) 컬럼 관리 — execution 단위로 저장
+  const hiddenCols: number[] = (execution as any)?.hidden_cols || [];
+  const [pendingDeleteCol, setPendingDeleteCol] = useState<number | null>(null);
+  const hiddenColsMut = useMutation({
+    mutationFn: (cols: number[]) => api.updateSheetHiddenCols(executionId!, cols, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
+    },
+    onError: (e: any) => alert(e?.response?.data?.detail || '컬럼 삭제 실패'),
+  });
+  const handleDeleteColumn = useCallback((colIdx: number) => {
+    setPendingDeleteCol(colIdx);
+  }, []);
+  const confirmDeleteColumn = () => {
+    if (pendingDeleteCol == null) return;
+    const next = Array.from(new Set([...hiddenCols, pendingDeleteCol])).sort((a, b) => a - b);
+    hiddenColsMut.mutate(next);
+    setPendingDeleteCol(null);
+  };
+
   // v3.11: ALL 진행 — 시트 내 미진행/빈/X 항목을 일괄 진행 처리.
   //   N/A 는 건너뛰고, 진행으로 바뀐 행은 backend 가 진행일자 컬럼에 오늘 날짜를 기록한다.
   const markAllMut = useMutation({
@@ -166,18 +186,21 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   const totalCount = execution?.total_items ?? 0;
   const columnRoles = structure?.column_roles;
 
-  // 항목별 매핑
-  const checkedMap = new Map<string, boolean>();
-  const checkedAtMap = new Map<string, string>();
-  const valueMap = new Map<string, string>();
-  
-  if (execution?.items) {
-    for (const item of execution.items) {
-      checkedMap.set(item.cell_ref, item.checked);
-      if (item.checked_at) checkedAtMap.set(item.cell_ref, item.checked_at);
-      if (item.value) valueMap.set(item.cell_ref, item.value);
+  // 항목별 매핑 — execution.items가 바뀔 때만 재생성하여 SheetRenderer의 useMemo가
+  // 매 부모 렌더마다 무효화되지 않게 한다 (입력 시 grid 전체 리렌더 방지).
+  const { checkedMap, checkedAtMap, valueMap } = useMemo(() => {
+    const cMap = new Map<string, boolean>();
+    const aMap = new Map<string, string>();
+    const vMap = new Map<string, string>();
+    if (execution?.items) {
+      for (const item of execution.items) {
+        cMap.set(item.cell_ref, item.checked);
+        if (item.checked_at) aMap.set(item.cell_ref, item.checked_at);
+        if (item.value) vMap.set(item.cell_ref, item.value);
+      }
     }
-  }
+    return { checkedMap: cMap, checkedAtMap: aMap, valueMap: vMap };
+  }, [execution?.items]);
 
   return (
     <Dialog
@@ -303,6 +326,9 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
               onValueChange={handleValueChange}
               onStatusChange={handleStatusChange}
               readOnly={execution?.status === 'completed'}
+              hiddenCols={hiddenCols}
+              onDeleteColumn={execution?.status === 'completed' ? undefined : handleDeleteColumn}
+              freeTextEdit
             />
           </Box>
         ) : (
@@ -336,6 +362,29 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             sx={{ bgcolor: '#22C55E', '&:hover': { bgcolor: '#16A34A' } }}
           >
             모두 진행
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 컬럼 삭제 확인 */}
+      <Dialog open={pendingDeleteCol != null} onClose={() => setPendingDeleteCol(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>이 컬럼을 삭제할까요?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: '#374151', lineHeight: 1.7 }}>
+            · 컬럼 <b>{pendingDeleteCol != null ? colToLetter(pendingDeleteCol) : ''}</b> 가 이 실행본에서 숨겨집니다.<br />
+            · <b>원본 양식(template)</b> 은 변경되지 않으며 다른 실행본에는 영향이 없습니다.<br />
+            · 이미 입력된 데이터는 보존됩니다 (다시 표시할 수 있음).
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPendingDeleteCol(null)} sx={{ color: '#6B7280' }}>취소</Button>
+          <Button
+            variant="contained"
+            disabled={hiddenColsMut.isPending}
+            onClick={confirmDeleteColumn}
+            sx={{ bgcolor: '#DC2626', '&:hover': { bgcolor: '#B91C1C' } }}
+          >
+            삭제
           </Button>
         </DialogActions>
       </Dialog>

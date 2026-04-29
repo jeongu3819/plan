@@ -1289,8 +1289,7 @@ const HomePage: React.FC = () => {
           </>
         );
       case 'check_sheets':
-        // ProjectGroupedSheetList ships its own outer Paper; render it directly without
-        // an extra wrapper so the SortableWidget Paper is the only outer card.
+        // SortableWidget Paper 안에 들어가므로 flat 모드로 외곽 Paper 제거 → 박스-인-박스 회피.
         return (
           <ProjectGroupedSheetList
             title={def.title}
@@ -1300,6 +1299,7 @@ const HomePage: React.FC = () => {
             color="#16A34A"
             onSheetClick={setPopupExecId}
             emptyText="진행 중인 체크시트가 없습니다"
+            flat
           />
         );
       case 'incomplete_tasks':
@@ -1478,12 +1478,9 @@ const HomePage: React.FC = () => {
 
   // Globally suppressed:
   //   - 'calendar': rendered above the grid (its grid slot would be an empty card)
-  //   - 'incomplete_tasks': duplicate of Overdue Tasks
+  //   - 'overdue': duplicate of '미완료/이월 작업' (incomplete_tasks)
   //   - 'upcoming': duplicate of "우선순위 높은 항목" (kept) — also superseded for project_management
-  // For project_management spaces the user requested hiding the four
-  // overview-style boxes (today_tasks, check_sheets, incomplete_tasks, high_priority)
-  // since the default widgets already cover that space.
-  const FORCE_HIDDEN_GLOBAL = new Set(['calendar', 'upcoming']);
+  const FORCE_HIDDEN_GLOBAL = new Set(['calendar', 'upcoming', 'overdue']);
   const FORCE_HIDDEN_PM = new Set(['check_sheets']);
   const isHiddenForPurpose = (id: string) =>
     FORCE_HIDDEN_GLOBAL.has(id) ||
@@ -1763,7 +1760,7 @@ const HomePage: React.FC = () => {
         </Button>
         <Divider sx={{ mb: 2 }} />
         <List disablePadding>
-          {ALL_WIDGETS.map(w => (
+          {ALL_WIDGETS.filter(w => !['calendar', 'upcoming', 'overdue'].includes(w.id)).map(w => (
             <ListItemButton
               key={w.id}
               onClick={() => toggleWidget(w.id)}

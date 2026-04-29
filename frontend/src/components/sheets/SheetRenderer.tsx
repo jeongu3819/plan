@@ -3,7 +3,7 @@
  * 병합셀, 색상, 폰트, 테두리, 줄바꿈을 최대한 유지하여 웹에서 표시
  * v3.1: column_roles 기반 체크 + 점검일시 연동, checkedMap/checkedAtMap 직접 지원
  */
-import { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import { Box, Checkbox, Typography, Tooltip, TextField, Select, MenuItem } from '@mui/material';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import type { SheetStructure, SheetCell, SheetExecutionItem, ColumnRoleMapping } from '../../types';
@@ -41,6 +41,12 @@ interface Props {
    *  모두 숨기고 원본 셀 값만 표시한다. SheetTemplatePage 같은 양식 확인용 화면에서 사용.
    *  실제 점검 화면(SheetExecutionPopup)에서는 false로 두어야 한다. */
   templatePreview?: boolean;
+  /** 실행본에서 숨김 처리된 컬럼 인덱스. template은 그대로 두고 렌더링 시점에만 가린다. */
+  hiddenCols?: number[];
+  /** 헤더 셀에 컬럼 삭제 버튼을 표시하고 클릭 시 호출. 미제공 시 버튼 숨김. */
+  onDeleteColumn?: (colIdx: number) => void;
+  /** 모든 일반 텍스트 셀(헤더 아래/체크/상태/점검일시/숨김 제외)을 자유 편집 허용 */
+  freeTextEdit?: boolean;
 }
 
 const DEFAULT_ROW_HEIGHT = 22; // ~15pt in Excel
@@ -55,6 +61,61 @@ function borderStyle(style?: string): string {
   if (style === 'dotted') return '1px dotted #D1D5DB';
   return '1px solid #D1D5DB';
 }
+
+/**
+ * InlineCellEditor — 셀 편집 시 자체 state로 입력을 처리해
+ * 키 입력마다 SheetRenderer 전체가 리렌더되지 않게 한다.
+ */
+interface InlineCellEditorProps {
+  initialValue: string;
+  editorType: 'text' | 'date' | string;
+  fontSizePx: number;
+  bold?: boolean;
+  fontColor?: string;
+  align?: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}
+const InlineCellEditor = React.memo(function InlineCellEditor({
+  initialValue, editorType, fontSizePx, bold, fontColor, align, onCommit, onCancel,
+}: InlineCellEditorProps) {
+  const [value, setValue] = useState<string>(initialValue);
+  return (
+    <TextField
+      autoFocus
+      variant="standard"
+      size="small"
+      type={editorType === 'date' ? 'date' : 'text'}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => {
+        if (value !== initialValue) onCommit(value);
+        else onCancel();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          setValue(initialValue);
+          onCancel();
+        }
+      }}
+      InputProps={{
+        disableUnderline: true,
+        style: {
+          fontSize: `${fontSizePx}px`,
+          fontWeight: bold ? 700 : 400,
+          color: fontColor || '#111827',
+          width: '100%',
+          textAlign: (align as any) || 'left',
+        },
+      }}
+      sx={{ p: 0, m: 0, width: '100%' }}
+    />
+  );
+});
 
 /** 점검일시를 보기 좋은 형식으로 변환 */
 function formatCheckedAt(iso?: string): string {
@@ -79,6 +140,7 @@ export default function SheetRenderer({
   columnRoles,
   onCheckChange, onValueChange, onStatusChange, readOnly,
   templatePreview,
+  hiddenCols, onDeleteColumn, freeTextEdit,
 }: Props) {
   const { cells, merges, col_widths, row_heights, total_rows, total_cols, checkable_cells } = structure;
 
@@ -167,28 +229,44 @@ export default function SheetRenderer({
   }, [effectiveRoles, readOnly]);
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState<string>('');
+
+  // 실행본에서 숨긴 컬럼 인덱스 (Set lookup)
+  const hiddenColSet = useMemo(() => new Set<number>(hiddenCols || []), [hiddenCols]);
 
   // Build hidden cells set + merge origin lookup
   //  v3.5: HTML <table> + rowSpan/colSpan으로 렌더링하므로 hidden 셀은 그냥 skip하면 됨
   //        (브라우저 table layout이 자동으로 병합 영역을 처리)
+  //  hiddenCols가 있으면 병합 origin을 첫 가시 컬럼으로 옮기고 colSpan을 가시 개수로 줄인다.
   const { hiddenCells, mergeAt } = useMemo(() => {
     const set = new Set<string>();
     const originMap = new Map<string, { rowSpan: number; colSpan: number }>();
     for (const merge of (merges || [])) {
       const rs = merge.endRow - merge.startRow + 1;
-      const cs = merge.endCol - merge.startCol + 1;
-      originMap.set(`${merge.startRow}-${merge.startCol}`, { rowSpan: rs, colSpan: cs });
+      let visibleCount = 0;
+      let firstVisibleCol = -1;
+      for (let c = merge.startCol; c <= merge.endCol; c++) {
+        if (!hiddenColSet.has(c)) {
+          visibleCount++;
+          if (firstVisibleCol < 0) firstVisibleCol = c;
+        }
+      }
+      if (visibleCount === 0 || firstVisibleCol < 0) {
+        // 병합 전체가 가려진 경우 — 모두 hidden 처리
+        for (let r = merge.startRow; r <= merge.endRow; r++) {
+          for (let c = merge.startCol; c <= merge.endCol; c++) set.add(`${r}-${c}`);
+        }
+        continue;
+      }
+      originMap.set(`${merge.startRow}-${firstVisibleCol}`, { rowSpan: rs, colSpan: visibleCount });
       for (let r = merge.startRow; r <= merge.endRow; r++) {
         for (let c = merge.startCol; c <= merge.endCol; c++) {
-          if (r !== merge.startRow || c !== merge.startCol) {
-            set.add(`${r}-${c}`);
-          }
+          if (r === merge.startRow && c === firstVisibleCol) continue;
+          set.add(`${r}-${c}`);
         }
       }
     }
     return { hiddenCells: set, mergeAt: originMap };
-  }, [merges]);
+  }, [merges, hiddenColSet]);
 
   const colWidths = useMemo(() => {
     const widths: number[] = [];
@@ -200,6 +278,18 @@ export default function SheetRenderer({
     return widths;
   }, [col_widths, total_cols]);
 
+  // 보호 컬럼 (삭제 차단): 진행 상태/점검일시/진행일자
+  const protectedColSet = useMemo(() => {
+    const s = new Set<number>();
+    if (effectiveRoles) {
+      for (const key of ['check_status', 'checked_at', 'progress_date'] as const) {
+        const col = effectiveRoles[key]?.col;
+        if (typeof col === 'number' && col >= 0) s.add(col);
+      }
+    }
+    return s;
+  }, [effectiveRoles]);
+
   const rowHeights = useMemo(() => {
     const heights: number[] = [];
     for (let r = 0; r < total_rows; r++) {
@@ -210,7 +300,7 @@ export default function SheetRenderer({
     return heights;
   }, [row_heights, total_rows]);
 
-  const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+  const totalWidth = colWidths.reduce((a, b, i) => (hiddenColSet.has(i) ? a : a + b), 0);
 
   // Helper: get cell ref. v3.4 — 항상 A1 형식 통일.
   //   기존엔 checkable이 아닌 셀에 대해 `${row}-${col}` 폴백을 썼지만,
@@ -269,7 +359,7 @@ export default function SheetRenderer({
         >
           <colgroup>
             {colWidths.map((w, i) => (
-              <col key={i} style={{ width: w }} />
+              hiddenColSet.has(i) ? null : <col key={i} style={{ width: w }} />
             ))}
           </colgroup>
           <tbody>
@@ -277,6 +367,8 @@ export default function SheetRenderer({
               <tr key={rowIdx} style={{ height: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT }}>
                 {Array.from({ length: total_cols }, (_, colIdx) => {
                   const key = `${rowIdx}-${colIdx}`;
+                  // 실행본에서 삭제(숨김)된 컬럼은 렌더 자체를 건너뛴다
+                  if (hiddenColSet.has(colIdx)) return null;
                   // hidden cells are absorbed by their merge origin's rowSpan/colSpan
                   if (hiddenCells.has(key)) return null;
 
@@ -307,13 +399,24 @@ export default function SheetRenderer({
                   const cellValue = valueMap.get(cellRef) ?? execItem?.value ?? cell?.value ?? '';
 
                   // Editable 관련 — 상태셀은 Select로 처리하므로 inline 텍스트 에디터 제외
-                  const editorType = editingCell === cellRef ? editableCols.get(colIdx) : null;
-                  const isEditableHoverable =
-                    editableCols.has(colIdx) && rowIdx > headerRowIdx
+                  // freeTextEdit: 헤더 아래 / 체크/상태/점검일시/숨김 이외 모든 일반 셀을 텍스트 편집 허용
+                  const roleEditorType = editableCols.get(colIdx);
+                  const freeEditable = !!freeTextEdit && !readOnly && rowIdx > headerRowIdx
                     && !isCheckable && !isCheckedAtCol && !isStatusCell;
+                  const editorType = editingCell === cellRef
+                    ? (roleEditorType || (freeEditable ? 'text' : null))
+                    : null;
+                  const isEditableHoverable =
+                    rowIdx > headerRowIdx
+                    && !isCheckable && !isCheckedAtCol && !isStatusCell
+                    && (editableCols.has(colIdx) || freeEditable);
 
                   // 안전한 fontSize 계산 (Excel pt -> css px 변환 유지)
                   const fontSizePx = font?.fontSize ? Math.round(font.fontSize * 1.33) : 12;
+
+                  const showDeleteBtn = !!onDeleteColumn && !readOnly && !templatePreview
+                    && rowIdx === headerRowIdx
+                    && !protectedColSet.has(colIdx);
 
                   const tdStyle: React.CSSProperties = {
                     padding: '2px 4px',
@@ -328,6 +431,7 @@ export default function SheetRenderer({
                     overflow: 'hidden',
                     wordBreak: 'break-word',
                     overflowWrap: 'anywhere',
+                    position: showDeleteBtn ? 'relative' : undefined,
                   };
 
                   return (
@@ -338,7 +442,6 @@ export default function SheetRenderer({
                       onClick={() => {
                         if (isEditableHoverable && !readOnly) {
                           setEditingCell(cellRef);
-                          setEditValue(cellValue);
                         }
                       }}
                       onMouseEnter={(e) => {
@@ -350,36 +453,18 @@ export default function SheetRenderer({
                       style={tdStyle}
                     >
                       {editorType ? (
-                    <TextField
-                      autoFocus
-                      variant="standard"
-                      size="small"
-                      type={editorType === 'date' ? 'date' : 'text'}
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onBlur={() => {
-                        if (editValue !== cellValue) {
-                          onValueChange?.(cellRef, editValue);
-                        }
+                    <InlineCellEditor
+                      initialValue={cellValue}
+                      editorType={editorType}
+                      fontSizePx={fontSizePx}
+                      bold={font?.bold}
+                      fontColor={font?.fontColor}
+                      align={cell?.align}
+                      onCommit={(v) => {
+                        onValueChange?.(cellRef, v);
                         setEditingCell(null);
                       }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          (e.target as HTMLInputElement).blur();
-                        }
-                      }}
-                      InputProps={{
-                        disableUnderline: true,
-                        style: {
-                          fontSize: `${fontSizePx}px`,
-                          fontWeight: font?.bold ? 700 : 400,
-                          color: font?.fontColor || '#111827',
-                          width: '100%',
-                          textAlign: (cell?.align as any) || 'left',
-                        }
-                      }}
-                      sx={{ p: 0, m: 0, width: '100%' }}
+                      onCancel={() => setEditingCell(null)}
                     />
                   ) : isStatusCell ? (
                     (() => {
@@ -521,6 +606,37 @@ export default function SheetRenderer({
                         {cellValue}
                       </Typography>
                     </Tooltip>
+                  )}
+                  {showDeleteBtn && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onDeleteColumn?.(colIdx); }}
+                      title="이 컬럼 삭제"
+                      style={{
+                        position: 'absolute',
+                        top: 1,
+                        right: 1,
+                        width: 16,
+                        height: 16,
+                        padding: 0,
+                        border: 'none',
+                        borderRadius: '50%',
+                        background: 'rgba(239, 68, 68, 0.85)',
+                        color: '#fff',
+                        fontSize: 11,
+                        lineHeight: '14px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        opacity: 0.55,
+                        transition: 'opacity 0.15s',
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.55'; }}
+                    >
+                      ×
+                    </button>
                   )}
                     </td>
                   );

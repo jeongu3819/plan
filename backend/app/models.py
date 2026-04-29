@@ -561,6 +561,9 @@ class SheetExecution(Base):
     completed_at = Column(DateTime, nullable=True)
     completed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
+    # 사용자가 실행본에서 숨긴 컬럼 인덱스 배열 (template.structure는 그대로 유지)
+    hidden_cols = Column(JSON, nullable=True)
+
     __table_args__ = (
         Index("ix_sheet_exec_template", "template_id", "started_at"),
         Index("ix_sheet_exec_project", "project_id", "started_at"),

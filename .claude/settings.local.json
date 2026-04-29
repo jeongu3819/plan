@@ -27,7 +27,9 @@
       "Bash(git stash *)",
       "Bash(xargs grep *)",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(tee /tmp/tsc-out.txt)"
     ]
   }
 }

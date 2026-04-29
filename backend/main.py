@@ -138,6 +138,13 @@ def _run_migrations():
         if "sheet_type" not in cols:
             with engine.begin() as conn:
                 conn.execute(text('ALTER TABLE sheet_executions ADD COLUMN sheet_type VARCHAR(50) NOT NULL DEFAULT "inspection"'))
+        # 실행본에서 숨긴 컬럼 인덱스 배열
+        if "hidden_cols" not in cols:
+            with engine.begin() as conn:
+                if engine.dialect.name == "mysql":
+                    conn.execute(text("ALTER TABLE sheet_executions ADD COLUMN hidden_cols JSON NULL"))
+                else:
+                    conn.execute(text("ALTER TABLE sheet_executions ADD COLUMN hidden_cols TEXT"))
 
     if "sheet_execution_mappings" not in insp.get_table_names():
         from app.models import SheetExecutionMapping
@@ -230,12 +237,17 @@ app.include_router(auth.router)
 app.include_router(knox.router)
 
 # CORS
+# - allow_origin_regex: dev 환경에서 LAN IP / 임의 포트의 프론트가 붙어도 CORS 헤더가
+#   응답에 부착되도록 정규식으로 허용. (운영 origin 은 CORS_ORIGINS env 로 명시 관리.)
+#   500 응답에도 CORSMiddleware 가 헤더를 추가하므로 브라우저의 가짜 CORS 에러 메시지를 줄일 수 있다.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS or ["*"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1|10(\.\d+){3}|192\.168(\.\d+){2}|172\.(1[6-9]|2\d|3[01])(\.\d+){2})(:\d+)?",
     allow_credentials=False,  # Authorization Bearer 방식이면 보통 False로 충분
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # =========================
@@ -2230,7 +2242,7 @@ def delete_attachment(attachment_id: int, db: Session = Depends(get_db)):
     if att and att.get("type") == "file" and att.get("stored_name"):
         task_id = att.get("task_id")
         try:
-            from backend.app.utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
+            from app.utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
             if is_s3_configured():
                 s3_key = att.get("s3_key", "")
                 if not s3_key and task_id:
@@ -2273,77 +2285,108 @@ async def upload_task_file(
     request: Request = None,
     db: Session = Depends(get_db),
 ):
-    """Upload a file attachment to a task. S3 우선, S3 실패 시 로컬 저장."""
-    from backend.app.utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
+    """Upload a file attachment to a task. S3 우선, S3 실패 시 로컬 저장.
+
+    예외는 모두 try/except 로 감싸 traceback 을 서버 로그에 남기고
+    HTTPException(500, detail=...) 으로 변환한다. 프론트가 원인을 알 수 있도록
+    detail 에 예외 타입/메시지를 포함하며, CORSMiddleware 가 응답 헤더를 부착한다.
+    """
+    from app.utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
     import logging as _logging
+    import traceback as _traceback
 
-    state = load_state()
-    t = db.query(Task).filter(Task.id == task_id).first()
-    if not t:
-        raise HTTPException(status_code=404, detail="Task not found")
+    log = _logging.getLogger("main")
+    saved_to_local = False  # noqa: F841 — 진단용
+    try:
+        state = load_state()
+        t = db.query(Task).filter(Task.id == task_id).first()
+        if not t:
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    # Permission check: viewer cannot upload
-    if user_id and user_id > 0:
-        check_task_edit_permission(db, state, t.project_id, user_id)
+        # Permission check: viewer cannot upload
+        if user_id and user_id > 0:
+            check_task_edit_permission(db, state, t.project_id, user_id)
 
-    ext = os.path.splitext(file.filename or "")[1]
-    stored_name = f"{uuid.uuid4().hex}{ext}"
-    original_filename = file.filename or stored_name
+        ext = os.path.splitext(file.filename or "")[1]
+        stored_name = f"{uuid.uuid4().hex}{ext}"
+        original_filename = file.filename or stored_name
 
-    contents = await file.read()
-    s3_key = ""
-    saved_to_local = False
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="빈 파일입니다.")
 
-    if is_s3_configured():
-        # S3 업로드 시도
-        s3_result = upload_attachment_bytes_to_s3(
-            data=contents,
-            original_filename=original_filename,
-            stored_name=stored_name,
-            context_type="task",
-            context_id=task_id,
-        )
-        if s3_result["success"]:
-            s3_key = s3_result["s3_key"]
+        s3_key = ""
+
+        if is_s3_configured():
+            # S3 업로드 시도 (s3fs 가 외부에서 raise 하더라도 이 try 가 잡는다)
+            try:
+                s3_result = upload_attachment_bytes_to_s3(
+                    data=contents,
+                    original_filename=original_filename,
+                    stored_name=stored_name,
+                    context_type="task",
+                    context_id=task_id,
+                )
+            except Exception as s3e:
+                log.warning(f"S3 업로드 호출 자체 예외: {s3e}")
+                s3_result = {"success": False, "s3_key": "", "error": str(s3e)}
+
+            if s3_result.get("success"):
+                s3_key = s3_result["s3_key"]
+            else:
+                # S3 실패 → 로컬에 저장 (데이터 유실 방지)
+                log.warning(f"S3 업로드 실패, 로컬 저장으로 전환: {s3_result.get('error')}")
+                task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
+                os.makedirs(task_dir, exist_ok=True)
+                with open(os.path.join(task_dir, stored_name), "wb") as f:
+                    f.write(contents)
+                saved_to_local = True
         else:
-            # S3 실패 → 로컬에 저장 (데이터 유실 방지)
-            _logging.getLogger("main").warning(f"S3 업로드 실패, 로컬 저장으로 전환: {s3_result['error']}")
+            # S3 미설정 → 로컬 저장
             task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
             os.makedirs(task_dir, exist_ok=True)
             with open(os.path.join(task_dir, stored_name), "wb") as f:
                 f.write(contents)
             saved_to_local = True
-    else:
-        # S3 미설정 → 로컬 저장
-        task_dir = os.path.join(UPLOAD_DIR, "tasks", str(task_id))
-        os.makedirs(task_dir, exist_ok=True)
-        with open(os.path.join(task_dir, stored_name), "wb") as f:
-            f.write(contents)
-        saved_to_local = True
 
-    attachments = state.get("attachments", [])
-    new_att = {
-        "id": next_id(attachments),
-        "task_id": task_id,
-        "url": f"/api/tasks/{task_id}/files/{stored_name}/download",
-        "filename": original_filename,
-        "stored_name": stored_name,
-        "type": "file",
-        "size": len(contents),
-        "created_at": datetime.now().isoformat(),
-        "s3_key": s3_key,
-    }
-    attachments.append(new_att)
-    state["attachments"] = attachments
-    save_state(state)
-    return new_att
+        attachments = state.get("attachments", [])
+        new_att = {
+            "id": next_id(attachments),
+            "task_id": task_id,
+            "url": f"/api/tasks/{task_id}/files/{stored_name}/download",
+            "filename": original_filename,
+            "stored_name": stored_name,
+            "type": "file",
+            "size": len(contents),
+            "created_at": datetime.now().isoformat(),
+            "s3_key": s3_key,
+        }
+        attachments.append(new_att)
+        state["attachments"] = attachments
+        save_state(state)
+        return new_att
+
+    except HTTPException:
+        # 의도된 4xx/5xx 는 그대로 통과
+        raise
+    except Exception as e:
+        # 모든 예상치 못한 예외 → traceback 로깅 + 친절한 500 메시지 반환
+        log.error(
+            f"upload_task_file 실패 (task_id={task_id}, user_id={user_id}, "
+            f"filename={getattr(file, 'filename', None)!r}): {type(e).__name__}: {e}\n"
+            f"{_traceback.format_exc()}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"파일 업로드 처리 실패: {type(e).__name__}: {e}",
+        )
 
 
 @app.get("/api/tasks/{task_id}/files/{stored_name}/download")
 def download_task_file(task_id: int, stored_name: str):
     """Download a file attachment from a task. S3 우선, 없으면 로컬 fallback."""
     from fastapi.responses import Response
-    from backend.app.utils.s3.s3_utils import download_from_s3, is_s3_configured
+    from app.utils.s3.s3_utils import download_from_s3, is_s3_configured
 
     state = load_state()
     att = next(
@@ -2375,7 +2418,7 @@ def download_task_file(task_id: int, stored_name: str):
 
     # 2) s3_key가 없지만 S3 설정 + 메타데이터로 key 재구성 시도
     if not s3_key and is_s3_configured():
-        from backend.app.utils.s3.s3_utils import get_attachment_s3_key
+        from app.utils.s3.s3_utils import get_attachment_s3_key
         reconstructed_key = get_attachment_s3_key(filename, stored_name, "task", task_id)
         data = download_from_s3(reconstructed_key)
         if data is not None:
@@ -2427,7 +2470,7 @@ async def upload_project_file(
     db: Session = Depends(get_db),
 ):
     """프로젝트 파일 업로드. S3 우선, S3 실패 시 로컬 저장."""
-    from backend.app.utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
+    from app.utils.s3.s3_utils import upload_attachment_bytes_to_s3, is_s3_configured
     import logging as _logging
 
     state = load_state()
@@ -2492,7 +2535,7 @@ async def upload_project_file(
 def download_project_file(project_id: int, file_id: int, user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """프로젝트 파일 다운로드. S3 우선, 없으면 로컬 fallback."""
     from fastapi.responses import Response
-    from backend.app.utils.s3.s3_utils import download_from_s3, is_s3_configured, get_attachment_s3_key
+    from app.utils.s3.s3_utils import download_from_s3, is_s3_configured, get_attachment_s3_key
 
     state = load_state()
 
@@ -2555,7 +2598,7 @@ def download_project_file(project_id: int, file_id: int, user_id: Optional[int] 
 @app.delete("/api/projects/{project_id}/files/{file_id}")
 def delete_project_file(project_id: int, file_id: int):
     """프로젝트 파일 삭제. S3 + 로컬 모두에서 삭제."""
-    from backend.app.utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
+    from app.utils.s3.s3_utils import delete_from_s3, is_s3_configured, get_attachment_s3_key
 
     state = load_state()
     project_files = state.get("project_files", [])
@@ -3273,8 +3316,12 @@ def get_stats(user_id: Optional[int] = None, space_id: Optional[int] = None, db:
                 meta = get_project_meta(state, p["id"])
                 if int(meta.get("owner_id") or 0) == int(user_id):
                     member_pids.add(p["id"])
-            tasks = [t for t in tasks if t.get("project_id") in member_pids]
-            projects = [p for p in projects if p["id"] in member_pids]
+            # 공개 프로젝트는 미참여 멤버에게도 노출 (캘린더 가시성).
+            # private 프로젝트는 그대로 멤버 한정.
+            public_pids = {p["id"] for p in projects if (p.get("visibility") == "public")}
+            visible_pids = member_pids | public_pids
+            tasks = [t for t in tasks if t.get("project_id") in visible_pids]
+            projects = [p for p in projects if p["id"] in visible_pids]
 
     total = len(tasks)
     in_progress = len([t for t in tasks if t.get("status") == "in_progress"])
@@ -3302,8 +3349,8 @@ def get_stats(user_id: Optional[int] = None, space_id: Optional[int] = None, db:
 
     overdue = [t for t in tasks if t.get("due_date") and t["due_date"] < today_str and t.get("status") != "done"]
     upcoming = [t for t in tasks if t.get("due_date") and t["due_date"] >= today_str and t.get("status") != "done"]
-    if user_id:
-        upcoming = [t for t in upcoming if user_id in (t.get("assignee_ids") or [])]
+    # 캘린더 가시성을 위해 upcoming 은 assignee 한정 필터를 두지 않는다.
+    # (개인용 본인 task 는 my_tasks 로 별도 제공.)
     upcoming.sort(key=lambda x: x.get("due_date", ""))
 
     my_tasks = []
@@ -5790,7 +5837,7 @@ def get_backup_status(user_id: int = Query(...), db: Session = Depends(get_db)):
     if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
         raise HTTPException(status_code=403, detail="Super admin only")
 
-    from backend.app.utils.s3.s3_utils import is_s3_configured, list_s3_files
+    from app.utils.s3.s3_utils import is_s3_configured, list_s3_files
     from app.services.backup_scheduler import BACKUP_LOG_DIR, BACKUP_HOUR, BACKUP_MINUTE
 
     # 최근 로그 파일 읽기
@@ -5839,7 +5886,7 @@ def list_s3_storage(
     if not user or (user.loginid or "").lower() not in [lid.lower() for lid in SUPER_ADMIN_LOGINIDS]:
         raise HTTPException(status_code=403, detail="Super admin only")
 
-    from backend.app.utils.s3.s3_utils import list_s3_files, is_s3_configured
+    from app.utils.s3.s3_utils import list_s3_files, is_s3_configured
     if not is_s3_configured():
         return {"files": [], "message": "S3 not configured"}
 
@@ -5891,8 +5938,16 @@ def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = D
     next_week_end = (date.today() + timedelta(days=(14 - date.today().weekday()))).isoformat()
     next_week_tasks = [t for t in tasks if t.due_date and next_week_start <= t.due_date < next_week_end and t.status not in ("done",)]
 
-    # 우선순위 높은 Task
-    high_priority = [t for t in tasks if t.priority == "high" and t.status not in ("done", "hold")]
+    # 우선순위 높은 Task: priority=high 이거나 마감 7일 이내 (overdue 포함, done/hold 제외).
+    # 프론트에서 overdue→today→7d→high 정렬과 D-N 라벨링을 수행한다.
+    seven_ahead = (date.today() + timedelta(days=7)).isoformat()
+    high_priority = [
+        t for t in tasks
+        if t.status not in ("done", "hold") and (
+            t.priority == "high"
+            or (t.due_date and t.due_date <= seven_ahead)
+        )
+    ]
 
     # Sheet 실행 현황
     # 진행 중 sheet 는 status=="in_progress" + progress<100 + task_id 가 있는 것만 집계.
@@ -5921,7 +5976,8 @@ def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = D
         meta = get_task_meta(state, t.id)
         return {
             "id": t.id, "title": t.title, "status": t.status, "priority": t.priority,
-            "due_date": t.due_date, "progress": meta.get("progress", 0),
+            "start_date": t.start_date, "due_date": t.due_date,
+            "progress": meta.get("progress", 0),
             "assignee_ids": t.assignee_ids or [], "project_id": t.project_id,
         }
 
@@ -6417,6 +6473,7 @@ def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
         "completed_by": execution.completed_by,
         "template_structure": template.structure if template else {},
         "template_name": template.name if template else "",
+        "hidden_cols": execution.hidden_cols or [],
         "items": [
             {
                 "id": item.id,
@@ -6655,6 +6712,46 @@ def upsert_sheet_execution_cell(
         "task_progress": task_progress,
         "task_status": task_status,
     }
+
+
+@app.patch("/api/sheet-executions/{execution_id}/hidden-cols")
+def update_sheet_hidden_cols(
+    execution_id: int,
+    body: dict = Body(...),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """실행본에서 숨길 컬럼 인덱스 배열 저장 (template은 변경하지 않음).
+    body: { "hidden_cols": [int, ...] }
+    """
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    if execution.status == "completed":
+        raise HTTPException(400, "이미 완료된 실행입니다")
+
+    raw = body.get("hidden_cols") or []
+    if not isinstance(raw, list):
+        raise HTTPException(400, "hidden_cols must be an array")
+    cleaned = sorted({int(v) for v in raw if isinstance(v, (int, float)) and int(v) >= 0})
+
+    # role 컬럼은 삭제 불가 (진행률 계산에 영향)
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+    structure = (template.structure if template else {}) or {}
+    roles = structure.get("column_roles") or {}
+    protected: set[int] = set()
+    for key in ("check_status", "checked_at", "progress_date"):
+        col = (roles.get(key) or {}).get("col")
+        if isinstance(col, int) and col >= 0:
+            protected.add(col)
+    blocked = [c for c in cleaned if c in protected]
+    if blocked:
+        raise HTTPException(400, f"진행 상태/점검일자 컬럼은 삭제할 수 없습니다 (col={blocked})")
+
+    execution.hidden_cols = cleaned
+    db.commit()
+    return {"hidden_cols": cleaned}
+
 
 @app.post("/api/sheet-executions/{execution_id}/copy")
 def copy_sheet_execution(
