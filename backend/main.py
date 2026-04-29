@@ -5884,9 +5884,18 @@ def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = D
         SheetExecution.progress < 100,
         SheetExecution.task_id.isnot(None),
     ).all() if project_ids or True else []
+    # v3.11: progress=100 인데 아직 status="in_progress" 인 시트도 별도 노출.
+    #   "진행 중 Sheet" 카드 카운트(active_sheets.length)는 그대로 유지(<100 만 카운트)하되,
+    #   Check Sheet 현황 목록의 "완료된 항목 숨기기 OFF" 시에는 100% 시트도 표시되도록.
+    sheet_executions_near_completed = db.query(SheetExecution).filter(
+        SheetExecution.space_id == space_id,
+        SheetExecution.status == "in_progress",
+        SheetExecution.progress >= 100,
+        SheetExecution.task_id.isnot(None),
+    ).all()
     sheet_recent_completed = db.query(SheetExecution).filter(
         SheetExecution.space_id == space_id, SheetExecution.status == "completed"
-    ).order_by(SheetExecution.completed_at.desc()).limit(5).all()
+    ).order_by(SheetExecution.completed_at.desc()).limit(20).all()
 
     def _task_brief(t):
         meta = get_task_meta(state, t.id)
@@ -5929,6 +5938,9 @@ def get_space_overview(space_id: int, user_id: int = Query(...), db: Session = D
         "week_done_count": len(week_done),
         "next_week_tasks": [_task_brief(t) for t in next_week_tasks[:10]],
         "active_sheets": [_exec_brief(e) for e in sheet_executions_active],
+        # v3.11: 100% 도달했지만 아직 status="in_progress" 인 시트 — Check Sheet 현황 목록에서
+        #        "완료된 항목 숨기기 OFF" 시 표시 대상에 포함된다. 진행 중 카운트엔 미포함.
+        "near_completed_sheets": [_exec_brief(e) for e in sheet_executions_near_completed],
         "recent_completed_sheets": [_exec_brief(e) for e in sheet_recent_completed],
     }
 
@@ -6601,10 +6613,16 @@ def upsert_sheet_execution_cell(
 
     # v3.4: task progress 동기화 (시트만 있는 task 대응)
     # v3.6: 동기화된 task progress를 응답에 포함해서 프론트가 즉시 반영하게 함
+    # v3.11: task_status 도 함께 응답 — Check Sheet 100% 완료 시 Task Details Status
+    #        (Done) 가 새로고침 없이 즉시 반영되도록.
     task_progress: int | None = None
+    task_status: str | None = None
     if execution.task_id:
         try:
             task_progress = _sync_task_progress(db, execution.task_id)
+            task_after = db.query(Task).filter(Task.id == execution.task_id).first()
+            if task_after:
+                task_status = task_after.status
         except Exception:
             pass
 
@@ -6615,6 +6633,7 @@ def upsert_sheet_execution_cell(
         "total_items": total,
         "task_id": execution.task_id,
         "task_progress": task_progress,
+        "task_status": task_status,
     }
 
 @app.post("/api/sheet-executions/{execution_id}/copy")
@@ -6786,23 +6805,74 @@ def mark_all_sheet_progress(
         SheetExecutionItem.execution_id == execution_id
     ).all()
 
+    # v3.11: 진행일자 컬럼 위치 (template.column_role_mapping.progress_date.col)
+    #        ALL 진행으로 'O' 가 되는 행은 같은 row의 progress_date 컬럼 셀에 오늘 날짜를
+    #        함께 기록한다. 개별 dropdown 변경 시 프론트가 같은 행위를 하므로 일관 유지.
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+    progress_date_col: int | None = None
+    try:
+        roles = (template.column_role_mapping if template else None) or {}
+        # 일부 양식은 structure.column_roles 에만 매핑이 있을 수 있어 폴백 확인
+        if not roles and template and isinstance(template.structure, dict):
+            roles = template.structure.get("column_roles") or {}
+        pd = roles.get("progress_date") if isinstance(roles, dict) else None
+        if isinstance(pd, dict) and isinstance(pd.get("col"), int):
+            progress_date_col = pd["col"]
+    except Exception:
+        progress_date_col = None
+
+    def _col_letter(col_idx: int) -> str:
+        s = ""
+        n = col_idx + 1
+        while n > 0:
+            n -= 1
+            s = chr(65 + (n % 26)) + s
+            n //= 26
+        return s
+
+    today_ymd = datetime.now(KST).strftime("%Y-%m-%d")
+
+    # 같은 execution 내 (row_idx, col_idx) → SheetExecutionItem 빠른 lookup
+    items_by_rc: dict[tuple[int, int], SheetExecutionItem] = {
+        (it.row_idx, it.col_idx): it for it in items
+    }
+
     now = datetime.now(KST)
     updated_count = 0
     skipped_na_count = 0
+    progressed_rows: set[int] = set()
     for it in items:
         if it.value == "N/A":
             if body.keep_na:
                 skipped_na_count += 1
                 continue
-        if it.checked:
+        if it.checked and (it.value or "").strip().upper() == "O":
             continue
         it.checked = True
         it.checked_by = user_id
         it.checked_at = now
-        # value 가 비어 있으면 "O" 로 채워서 일반 진행 항목과 표시 일관성 유지
-        if not (it.value or "").strip():
-            it.value = "O"
+        # 미진행/빈 값/null/X → 모두 'O'(진행) 로 통일.
+        # 기존엔 value="X"(미진행) 인 행이 checked=True 인데 value="X" 로 남는 모순 발생.
+        it.value = "O"
         updated_count += 1
+        progressed_rows.add(it.row_idx)
+
+    # 진행일자 컬럼이 있고 진행으로 바뀐 행이 있으면 해당 행의 진행일자 셀에 오늘 날짜 기록
+    if progress_date_col is not None and progressed_rows:
+        col_letter = _col_letter(progress_date_col)
+        for row_idx in progressed_rows:
+            existing = items_by_rc.get((row_idx, progress_date_col))
+            if existing is not None:
+                existing.value = today_ymd
+            else:
+                db.add(SheetExecutionItem(
+                    execution_id=execution_id,
+                    cell_ref=f"{col_letter}{row_idx + 1}",
+                    row_idx=row_idx,
+                    col_idx=progress_date_col,
+                    checked=False,
+                    value=today_ymd,
+                ))
 
     if updated_count > 0:
         db.add(SheetExecutionLog(

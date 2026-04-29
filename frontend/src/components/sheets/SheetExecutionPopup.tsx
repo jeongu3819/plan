@@ -5,13 +5,14 @@
 import { useCallback } from 'react';
 import {
   Dialog, AppBar, Toolbar, Typography, IconButton, Box,
-  LinearProgress, Chip, alpha,
+  LinearProgress, Chip, alpha, Button, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import DoneAllIcon from '@mui/icons-material/DoneAll';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
@@ -57,36 +58,64 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     refetchInterval: 30000,
   });
 
+  // v3.11: 응답의 task_progress + task_status 를 caches/store 에 즉시 반영
+  //   - Check Sheet 100% 시 Task Details Status 가 새로고침 없이 Done 으로 보이게 함
+  //   - 단일 dropdown 변경 / ALL 진행 양쪽에서 같은 로직을 쓰므로 헬퍼로 분리
+  const applyTaskSync = (response: any) => {
+    const taskId: number | null | undefined = response?.task_id;
+    const taskProgress: number | null | undefined = response?.task_progress;
+    const taskStatus: string | null | undefined = response?.task_status;
+    if (taskId != null && (typeof taskProgress === 'number' || typeof taskStatus === 'string')) {
+      queryClient.setQueriesData<Task[]>(
+        { queryKey: ['tasks'] },
+        (old) => Array.isArray(old)
+          ? old.map(t => {
+              if (t.id !== taskId) return t;
+              const patch: Partial<Task> = {};
+              if (typeof taskProgress === 'number') patch.progress = taskProgress;
+              if (typeof taskStatus === 'string') patch.status = taskStatus as Task['status'];
+              return { ...t, ...patch };
+            })
+          : old,
+      );
+      const sel = useAppStore.getState().selectedTask;
+      if (sel && sel.id === taskId) {
+        const patch: Partial<Task> = {};
+        if (typeof taskProgress === 'number') patch.progress = taskProgress;
+        if (typeof taskStatus === 'string') patch.status = taskStatus as Task['status'];
+        useAppStore.setState({ selectedTask: { ...sel, ...patch } });
+      }
+      queryClient.invalidateQueries({ queryKey: ['taskSheetSummary', taskId] });
+    } else {
+      queryClient.invalidateQueries({ queryKey: ['taskSheetSummary'] });
+    }
+    // Dashboard / Sheets 화면도 즉시 갱신
+    queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
+    queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
+  };
+
   const upsertMut = useMutation({
     mutationFn: ({ cellRef, data }: { cellRef: string; data: any }) =>
       api.upsertSheetExecutionCell(executionId!, cellRef, data, userId),
     onSuccess: (response: any) => {
       // 시트 자체는 invalidate (item 목록/메타가 바뀌었으므로)
       queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
-
-      // v3.6: 응답에 task_progress가 있으면 task list 캐시를 직접 패치 — 전체 invalidate 금지.
-      //       (스펙 14.1: 전체 task list 강제 새로고침 지양)
-      const taskId: number | null | undefined = response?.task_id;
-      const taskProgress: number | null | undefined = response?.task_progress;
-      if (taskId != null && typeof taskProgress === 'number') {
-        queryClient.setQueriesData<Task[]>(
-          { queryKey: ['tasks'] },
-          (old) => Array.isArray(old)
-            ? old.map(t => t.id === taskId ? { ...t, progress: taskProgress } : t)
-            : old,
-        );
-        // TaskDrawer는 store의 selectedTask를 표시 → 같은 task면 store도 즉시 패치
-        const sel = useAppStore.getState().selectedTask;
-        if (sel && sel.id === taskId) {
-          useAppStore.setState({ selectedTask: { ...sel, progress: taskProgress } });
-        }
-        queryClient.invalidateQueries({ queryKey: ['taskSheetSummary', taskId] });
-      } else {
-        // task와 무관한 시트면 summary만 갱신 (TaskSheetPanel 사용처)
-        queryClient.invalidateQueries({ queryKey: ['taskSheetSummary'] });
-      }
+      applyTaskSync(response);
     },
   });
+
+  // v3.11: ALL 진행 — 시트 내 미진행/빈/X 항목을 일괄 진행 처리.
+  //   N/A 는 건너뛰고, 진행으로 바뀐 행은 backend 가 진행일자 컬럼에 오늘 날짜를 기록한다.
+  const markAllMut = useMutation({
+    mutationFn: () => api.markAllSheetProgress(executionId!, true, userId),
+    onSuccess: (response: any) => {
+      queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
+      applyTaskSync(response);
+    },
+    onError: (e: any) => alert(e?.response?.data?.detail || 'ALL 진행 처리 실패'),
+  });
+
+  const [confirmAllOpen, setConfirmAllOpen] = useState(false);
 
   const [downloading, setDownloading] = useState(false);
 
@@ -207,11 +236,27 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             />
           </Box>
 
-          {(upsertMut.isPending || downloading) && (
+          {(upsertMut.isPending || markAllMut.isPending || downloading) && (
             <Chip
-              label={downloading ? "다운로드 중..." : "저장 중..."}
+              label={downloading ? "다운로드 중..." : markAllMut.isPending ? "ALL 진행 중..." : "저장 중..."}
               size="small"
               sx={{ bgcolor: alpha('#F59E0B', 0.15), color: '#F59E0B', height: 22, fontSize: '0.62rem' }}
+            />
+          )}
+
+          {/* v3.11: ALL 진행 — 미진행/빈/X 일괄 진행 처리. completed 시트엔 비활성. */}
+          {execution?.status !== 'completed' && (
+            <Chip
+              icon={<DoneAllIcon sx={{ fontSize: 14, color: '#fff !important' }} />}
+              label="ALL 진행"
+              onClick={() => setConfirmAllOpen(true)}
+              size="small"
+              disabled={markAllMut.isPending || upsertMut.isPending}
+              sx={{
+                bgcolor: alpha('#22C55E', 0.85), color: '#fff',
+                fontWeight: 700, fontSize: '0.72rem', height: 26, cursor: 'pointer',
+                '&:hover': { bgcolor: '#22C55E' },
+              }}
             />
           )}
 
@@ -268,6 +313,32 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
           </Box>
         )}
       </Box>
+
+      {/* v3.11: ALL 진행 확인 모달 */}
+      <Dialog open={confirmAllOpen} onClose={() => setConfirmAllOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>모든 항목을 진행 처리할까요?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: '#374151', lineHeight: 1.7 }}>
+            · 미진행 / 빈 값 항목을 모두 <b>진행</b>으로 변경합니다.<br />
+            · 진행으로 바뀐 행의 <b>진행일자</b>는 오늘 날짜로 자동 입력됩니다.<br />
+            · 이미 <b>N/A</b>로 표시된 항목은 그대로 유지됩니다.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setConfirmAllOpen(false)} sx={{ color: '#6B7280' }}>취소</Button>
+          <Button
+            variant="contained"
+            disabled={markAllMut.isPending}
+            onClick={() => {
+              setConfirmAllOpen(false);
+              markAllMut.mutate();
+            }}
+            sx={{ bgcolor: '#22C55E', '&:hover': { bgcolor: '#16A34A' } }}
+          >
+            모두 진행
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

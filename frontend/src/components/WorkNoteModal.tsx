@@ -15,6 +15,7 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
 import { TaskActivity } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -159,6 +160,11 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     // ── 이미지 / 테이블 hover-overlay 리사이즈 toolbar ──
     const [hoveredImg, setHoveredImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null);
     const [hoveredTable, setHoveredTable] = useState<{ el: HTMLTableElement; rect: DOMRect } | null>(null);
+    // v3.11: 단일 클릭 시 이미지를 "선택" 상태로 두고 모서리 drag handle 로 직접 리사이즈.
+    //   - 선택 상태에선 hover 가 풀려도 toolbar/handle 이 유지된다.
+    //   - 더블클릭 또는 toolbar "확대 보기" 버튼이 있어야 lightbox 가 열린다.
+    const [selectedImg, setSelectedImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null);
+    const dragRef = useRef<{ startX: number; startWidth: number; el: HTMLImageElement } | null>(null);
     const hideTimerRef = useRef<number | null>(null);
     const cancelHideTimer = () => {
         if (hideTimerRef.current !== null) {
@@ -169,21 +175,42 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     const scheduleHide = () => {
         cancelHideTimer();
         hideTimerRef.current = window.setTimeout(() => {
-            setHoveredImg(null);
+            // 선택된 이미지/테이블이 있으면 hover 해제로 toolbar 가 사라지지 않게 한다.
+            if (!selectedImg) setHoveredImg(null);
             setHoveredTable(null);
         }, 250);
     };
     useEffect(() => () => cancelHideTimer(), []);
-    // 스크롤되면 toolbar 위치가 stale → 숨김
+    // 스크롤되면 toolbar 위치가 stale → 좌표만 갱신 (선택 유지)
     useEffect(() => {
-        if (!hoveredImg && !hoveredTable) return;
+        if (!hoveredImg && !hoveredTable && !selectedImg) return;
         const handler = () => {
-            setHoveredImg(null);
+            if (selectedImg?.el) {
+                setSelectedImg({ el: selectedImg.el, rect: selectedImg.el.getBoundingClientRect() });
+            } else {
+                setHoveredImg(null);
+            }
             setHoveredTable(null);
         };
         window.addEventListener('scroll', handler, true);
         return () => window.removeEventListener('scroll', handler, true);
-    }, [hoveredImg, hoveredTable]);
+    }, [hoveredImg, hoveredTable, selectedImg]);
+
+    // 외부 클릭 시 이미지 선택 해제 (block content 영역 밖)
+    useEffect(() => {
+        if (!selectedImg) return;
+        const handler = (e: MouseEvent) => {
+            const t = e.target as HTMLElement | null;
+            if (!t) return;
+            // 이미지 자체 / toolbar / resize handle 클릭은 무시
+            if (t.closest('[data-img-toolbar="1"]')) return;
+            if (t.closest('[data-img-resize-handle="1"]')) return;
+            if (t === selectedImg.el) return;
+            setSelectedImg(null);
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [selectedImg]);
 
     const handleEditorMouseOver = (e: React.MouseEvent) => {
         if (!canEdit) return;
@@ -217,6 +244,13 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
         }
     };
 
+    const persistContent = useCallback(() => {
+        if (!contentRef.current) return;
+        const html = contentRef.current.innerHTML;
+        lastSavedContent.current = html;
+        onContentChange(block, html);
+    }, [block, onContentChange]);
+
     const resizeImage = (img: HTMLImageElement, action: 'shrink' | 'grow' | 'fit' | 'reset') => {
         if (action === 'reset') {
             img.style.width = '';
@@ -235,16 +269,51 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             img.setAttribute('data-note-width', String(next));
         }
         // 변경된 HTML을 즉시 저장 → 새로고침 후에도 유지
-        if (contentRef.current) {
-            const html = contentRef.current.innerHTML;
-            lastSavedContent.current = html;
-            onContentChange(block, html);
-        }
+        persistContent();
         // toolbar 위치 갱신 (이미지 크기 변경 후)
         requestAnimationFrame(() => {
-            setHoveredImg(prev => prev ? { el: img, rect: img.getBoundingClientRect() } : null);
+            const rect = img.getBoundingClientRect();
+            setHoveredImg(prev => prev ? { el: img, rect } : null);
+            setSelectedImg(prev => prev && prev.el === img ? { el: img, rect } : prev);
         });
     };
+
+    // v3.11: 모서리 drag 로 width 직접 조절 (height: auto 유지로 비율 보존)
+    const startImageDragResize = useCallback((startEvent: React.PointerEvent, img: HTMLImageElement) => {
+        startEvent.preventDefault();
+        startEvent.stopPropagation();
+        const startWidth = img.offsetWidth || img.naturalWidth || 200;
+        dragRef.current = { startX: startEvent.clientX, startWidth, el: img };
+        (startEvent.target as HTMLElement).setPointerCapture?.(startEvent.pointerId);
+
+        const onMove = (e: PointerEvent) => {
+            const ref = dragRef.current;
+            if (!ref) return;
+            const dx = e.clientX - ref.startX;
+            const next = Math.max(50, Math.min(2000, Math.round(ref.startWidth + dx)));
+            ref.el.style.width = `${next}px`;
+            ref.el.style.height = 'auto';
+            ref.el.setAttribute('data-note-width', String(next));
+            // 선택 상자 위치 즉시 반영
+            const rect = ref.el.getBoundingClientRect();
+            setSelectedImg({ el: ref.el, rect });
+            setHoveredImg(prev => prev ? { el: ref.el, rect } : prev);
+        };
+        const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+            const ref = dragRef.current;
+            dragRef.current = null;
+            if (ref) {
+                // drag 종료 시점에 1회만 저장 → 매 프레임 mutation 회피
+                persistContent();
+            }
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+    }, [persistContent]);
 
     const resizeTable = (table: HTMLTableElement, action: 'fit' | 'natural' | 'wrap' | 'fontUp' | 'fontDown') => {
         if (action === 'fit') {
@@ -333,7 +402,19 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                         onFocus={() => onFocus(block.id)}
                         onKeyDown={e => canEdit && handleKeyDownInternal(e)}
                         onClick={(e) => {
-                            // 이미지 클릭 → 라이트박스로 확대 보기
+                            // v3.11: 단일 클릭 = 이미지 선택(테두리/handle 표시).
+                            //        라이트박스는 더블클릭 또는 toolbar "확대 보기" 버튼.
+                            const target = e.target as HTMLElement;
+                            if (target instanceof HTMLImageElement) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                cancelHideTimer();
+                                const rect = target.getBoundingClientRect();
+                                setSelectedImg({ el: target, rect });
+                                setHoveredImg({ el: target, rect });
+                            }
+                        }}
+                        onDoubleClick={(e) => {
                             const target = e.target as HTMLElement;
                             if (target instanceof HTMLImageElement) {
                                 e.preventDefault();
@@ -369,14 +450,17 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                                 pointerEvents: 'none',
                             },
                             '& b, & strong': { fontWeight: 700 },
-                            // 이미지: 원본 크기 유지, 큰 이미지는 가로 스크롤로 표시 (라이트박스로 확대 가능)
+                            // 이미지: 원본 크기 유지, 큰 이미지는 가로 스크롤로 표시.
+                            // 단일 클릭=선택(모서리 drag 로 리사이즈), 더블클릭=확대 보기.
                             '& img': {
                                 maxWidth: 'none',
                                 height: 'auto',
-                                cursor: 'zoom-in',
+                                cursor: 'pointer',
                                 borderRadius: 1,
                                 display: 'block',
                                 my: 0.5,
+                                userSelect: 'none',
+                                WebkitUserDrag: 'none',
                             },
                             // 테이블: 원본 폭 유지, 셀 내용 줄바꿈 안 함 → 가로 스크롤로 노출
                             '& table': {
@@ -558,51 +642,104 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
                 </Box>
             )}
 
-            {/* 이미지 hover 리사이즈 toolbar — 이미지 위에 떠 있는 컨트롤 */}
-            {canEdit && hoveredImg && (
-                <Box
-                    onMouseEnter={cancelHideTimer}
-                    onMouseLeave={scheduleHide}
-                    onMouseDown={(e) => e.preventDefault()}
-                    sx={{
-                        position: 'fixed',
-                        top: Math.max(4, hoveredImg.rect.top + 4),
-                        left: hoveredImg.rect.right - 4,
-                        transform: 'translateX(-100%)',
-                        zIndex: 1500,
-                        display: 'flex', alignItems: 'center', gap: 0.25,
-                        px: 0.5, py: 0.25, borderRadius: 999,
-                        bgcolor: 'rgba(30,30,30,0.92)',
-                        backdropFilter: 'blur(6px)',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
-                    }}
-                >
-                    <Tooltip title="축소 (-50px)" arrow>
-                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'shrink')}
-                            sx={{ color: '#fff', p: 0.4 }}>
-                            <RemoveIcon sx={{ fontSize: '0.85rem' }} />
-                        </IconButton>
-                    </Tooltip>
-                    <Tooltip title="확대 (+50px)" arrow>
-                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'grow')}
-                            sx={{ color: '#fff', p: 0.4 }}>
-                            <AddIcon sx={{ fontSize: '0.85rem' }} />
-                        </IconButton>
-                    </Tooltip>
-                    <Box sx={{ width: 1, height: 14, bgcolor: 'rgba(255,255,255,0.25)', mx: 0.25 }} />
-                    <Tooltip title="컨테이너 폭에 맞춤" arrow>
-                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'fit')}
-                            sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 32, borderRadius: 999 }}>
-                            100%
-                        </IconButton>
-                    </Tooltip>
-                    <Tooltip title="원본 크기로 복원" arrow>
-                        <IconButton size="small" onClick={() => resizeImage(hoveredImg.el, 'reset')}
-                            sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 32, borderRadius: 999 }}>
-                            원본
-                        </IconButton>
-                    </Tooltip>
-                </Box>
+            {/* 이미지 toolbar — hover 또는 선택 상태일 때 노출. 기존 -, +, 100%, 원본 + 확대 보기. */}
+            {canEdit && (() => {
+                const active = selectedImg ?? hoveredImg;
+                if (!active) return null;
+                return (
+                    <Box
+                        data-img-toolbar="1"
+                        onMouseEnter={cancelHideTimer}
+                        onMouseLeave={scheduleHide}
+                        onMouseDown={(e) => e.preventDefault()}
+                        sx={{
+                            position: 'fixed',
+                            top: Math.max(4, active.rect.top + 4),
+                            left: active.rect.right - 4,
+                            transform: 'translateX(-100%)',
+                            zIndex: 1500,
+                            display: 'flex', alignItems: 'center', gap: 0.25,
+                            px: 0.5, py: 0.25, borderRadius: 999,
+                            bgcolor: 'rgba(30,30,30,0.92)',
+                            backdropFilter: 'blur(6px)',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+                        }}
+                    >
+                        <Tooltip title="축소 (-50px)" arrow>
+                            <IconButton size="small" onClick={() => resizeImage(active.el, 'shrink')}
+                                sx={{ color: '#fff', p: 0.4 }}>
+                                <RemoveIcon sx={{ fontSize: '0.85rem' }} />
+                            </IconButton>
+                        </Tooltip>
+                        <Tooltip title="확대 (+50px)" arrow>
+                            <IconButton size="small" onClick={() => resizeImage(active.el, 'grow')}
+                                sx={{ color: '#fff', p: 0.4 }}>
+                                <AddIcon sx={{ fontSize: '0.85rem' }} />
+                            </IconButton>
+                        </Tooltip>
+                        <Box sx={{ width: 1, height: 14, bgcolor: 'rgba(255,255,255,0.25)', mx: 0.25 }} />
+                        <Tooltip title="컨테이너 폭에 맞춤" arrow>
+                            <IconButton size="small" onClick={() => resizeImage(active.el, 'fit')}
+                                sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 32, borderRadius: 999 }}>
+                                100%
+                            </IconButton>
+                        </Tooltip>
+                        <Tooltip title="원본 크기로 복원" arrow>
+                            <IconButton size="small" onClick={() => resizeImage(active.el, 'reset')}
+                                sx={{ color: '#fff', p: 0.4, fontSize: '0.65rem', fontWeight: 700, minWidth: 32, borderRadius: 999 }}>
+                                원본
+                            </IconButton>
+                        </Tooltip>
+                        <Box sx={{ width: 1, height: 14, bgcolor: 'rgba(255,255,255,0.25)', mx: 0.25 }} />
+                        <Tooltip title="확대 보기" arrow>
+                            <IconButton size="small"
+                                onClick={() => onImageClick(active.el.src, active.el.alt)}
+                                sx={{ color: '#fff', p: 0.4 }}>
+                                <ZoomOutMapIcon sx={{ fontSize: '0.85rem' }} />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                );
+            })()}
+
+            {/* v3.11: 선택된 이미지에 테두리 + 모서리 drag handle. 모서리를 잡고 마우스로 width 조절. */}
+            {canEdit && selectedImg && (
+                <>
+                    {/* 선택 박스(border) — 비클릭, 시각 표시만 */}
+                    <Box
+                        sx={{
+                            position: 'fixed',
+                            top: selectedImg.rect.top - 2,
+                            left: selectedImg.rect.left - 2,
+                            width: selectedImg.rect.width + 4,
+                            height: selectedImg.rect.height + 4,
+                            border: '2px solid #2955FF',
+                            borderRadius: 1,
+                            pointerEvents: 'none',
+                            zIndex: 1499,
+                            boxSizing: 'border-box',
+                        }}
+                    />
+                    {/* 우측 하단 모서리 drag handle */}
+                    <Box
+                        data-img-resize-handle="1"
+                        onPointerDown={(e) => startImageDragResize(e, selectedImg.el)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        sx={{
+                            position: 'fixed',
+                            top: selectedImg.rect.bottom - 8,
+                            left: selectedImg.rect.right - 8,
+                            width: 16, height: 16,
+                            bgcolor: '#2955FF',
+                            border: '2px solid #fff',
+                            borderRadius: 0.5,
+                            cursor: 'nwse-resize',
+                            zIndex: 1501,
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+                            touchAction: 'none',
+                        }}
+                    />
+                </>
             )}
 
             {/* 테이블 hover 리사이즈 toolbar — 폭맞춤/원본/줄바꿈/폰트± */}
@@ -851,6 +988,53 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
         };
     }, [showColorPicker]);
 
+    // v3.11: Work Note 박스 자체를 모서리 drag 로 너비/높이 조절. 크기는 localStorage 에 저장.
+    const PAPER_KEY = 'workNote.paperSize.v1';
+    const [paperSize, setPaperSize] = useState<{ w: number; h: number }>(() => {
+        try {
+            const saved = localStorage.getItem(PAPER_KEY);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (typeof parsed?.w === 'number' && typeof parsed?.h === 'number') return parsed;
+            }
+        } catch { /* ignore */ }
+        return { w: 820, h: Math.round(window.innerHeight * 0.9) };
+    });
+    const paperDragRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
+    const startPaperResize = useCallback((e: React.PointerEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        paperDragRef.current = {
+            startX: e.clientX, startY: e.clientY,
+            startW: paperSize.w, startH: paperSize.h,
+        };
+        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        const onMove = (ev: PointerEvent) => {
+            const ref = paperDragRef.current;
+            if (!ref) return;
+            const dw = ev.clientX - ref.startX;
+            const dh = ev.clientY - ref.startY;
+            const nextW = Math.max(420, Math.min(window.innerWidth - 24, ref.startW + dw));
+            const nextH = Math.max(360, Math.min(window.innerHeight - 24, ref.startH + dh));
+            setPaperSize({ w: nextW, h: nextH });
+        };
+        const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+            paperDragRef.current = null;
+            try { localStorage.setItem(PAPER_KEY, JSON.stringify(paperSize)); } catch { /* ignore */ }
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+    }, [paperSize]);
+
+    // 사이즈 변할 때마다 localStorage 동기 (드래그 중 잦은 호출 방지 위해 throttle 대신 onUp 에서도 저장)
+    useEffect(() => {
+        try { localStorage.setItem(PAPER_KEY, JSON.stringify(paperSize)); } catch { /* ignore */ }
+    }, [paperSize.w, paperSize.h]);
+
     return (
         <Dialog
             open={open}
@@ -858,14 +1042,15 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
             maxWidth={false}
             PaperProps={{
                 sx: {
-                    width: '820px',
-                    maxWidth: '92vw',
-                    height: '90vh',
-                    maxHeight: '90vh',
+                    width: paperSize.w,
+                    maxWidth: '98vw',
+                    height: paperSize.h,
+                    maxHeight: '98vh',
                     borderRadius: 3,
                     display: 'flex',
                     flexDirection: 'column',
                     overflow: 'hidden',
+                    position: 'relative',
                 },
             }}
         >
@@ -1024,11 +1209,30 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
                 </Box>
             )}
 
-            {/* 이미지 라이트박스 — 이미지 클릭 시 확대/축소 보기 */}
+            {/* 이미지 라이트박스 — 이미지 더블클릭 또는 toolbar "확대 보기" 버튼으로 열림 */}
             <ImagePreviewModal
                 src={previewImage?.src ?? null}
                 alt={previewImage?.alt}
                 onClose={() => setPreviewImage(null)}
+            />
+
+            {/* v3.11: Work Note 박스 모서리 drag handle — 너비/높이 동시 조절. 크기는 localStorage 에 영속화. */}
+            <Box
+                onPointerDown={startPaperResize}
+                onMouseDown={(e) => e.preventDefault()}
+                aria-label="작업노트 크기 조절"
+                sx={{
+                    position: 'absolute',
+                    right: 4, bottom: 4,
+                    width: 16, height: 16,
+                    cursor: 'nwse-resize',
+                    zIndex: 10,
+                    background: `linear-gradient(135deg, transparent 0 50%, #9CA3AF 50% 60%, transparent 60% 70%, #9CA3AF 70% 80%, transparent 80% 90%, #9CA3AF 90% 100%)`,
+                    borderRadius: '0 0 12px 0',
+                    touchAction: 'none',
+                    opacity: 0.7,
+                    '&:hover': { opacity: 1 },
+                }}
             />
         </Dialog>
     );

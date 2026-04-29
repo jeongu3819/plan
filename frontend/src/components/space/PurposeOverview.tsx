@@ -49,6 +49,8 @@ interface OverviewData {
   week_done_count: number;
   next_week_tasks: any[];
   active_sheets: any[];
+  // v3.11: 100% 인데 status="in_progress" 인 시트 — "완료된 항목 숨기기 OFF" 시 표시
+  near_completed_sheets?: any[];
   recent_completed_sheets: any[];
   incomplete_carried_over?: any[];
   dev_in_progress?: any[];
@@ -249,6 +251,7 @@ function SheetList({ title, sheets, color, onSheetClick, emptyText, hideIfEmpty 
 function ProjectGroupedSheetList({
   title,
   activeSheets,
+  nearCompletedSheets,
   completedSheets,
   color,
   onSheetClick,
@@ -256,6 +259,8 @@ function ProjectGroupedSheetList({
 }: {
   title: string;
   activeSheets: any[];
+  // v3.11: 100% 도달했지만 아직 status="in_progress" 인 시트
+  nearCompletedSheets?: any[];
   completedSheets?: any[];
   color: string;
   onSheetClick?: (id: number) => void;
@@ -264,11 +269,19 @@ function ProjectGroupedSheetList({
   const [hideCompleted, setHideCompleted] = React.useState(true);
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
 
-  // 표시 대상 시트: 완료 숨기기 OFF 면 active + recent_completed 모두 합쳐서 grouping
+  // 표시 대상 시트:
+  //   - 완료 숨기기 ON: active(progress<100) 만
+  //   - 완료 숨기기 OFF: active + near_completed(100%/in_progress) + recent_completed
+  //     "진행 중 Sheet" 카드 카운트는 active_sheets.length 그대로 사용하므로 분리되어 있음.
   const displaySheets = React.useMemo(() => {
     if (hideCompleted) return activeSheets;
-    return [...activeSheets, ...(completedSheets || [])];
-  }, [activeSheets, completedSheets, hideCompleted]);
+    const seen = new Set<number>();
+    const merged: any[] = [];
+    for (const s of [...activeSheets, ...(nearCompletedSheets || []), ...(completedSheets || [])]) {
+      if (s && !seen.has(s.id)) { seen.add(s.id); merged.push(s); }
+    }
+    return merged;
+  }, [activeSheets, nearCompletedSheets, completedSheets, hideCompleted]);
 
   // project_id 기준 grouping (null 은 "프로젝트 미연결" 한 그룹)
   const groups = React.useMemo(() => {
@@ -479,10 +492,11 @@ function ProjectManagementOverview({ data, onTaskClick, onSheetClick }: { data: 
           </Paper>
         </Box>
       </Box>
-      {data.active_sheets.length > 0 && (
+      {(data.active_sheets.length > 0 || (data.near_completed_sheets || []).length > 0 || data.recent_completed_sheets.length > 0) && (
         <ProjectGroupedSheetList
           title="Check Sheet 현황"
           activeSheets={data.active_sheets}
+          nearCompletedSheets={data.near_completed_sheets}
           completedSheets={data.recent_completed_sheets}
           color="#7C3AED"
           onSheetClick={onSheetClick}
@@ -515,6 +529,7 @@ function EquipmentOpsOverview({ data, onTaskClick, onSheetClick }: { data: Overv
         <ProjectGroupedSheetList
           title="Check Sheet 현황"
           activeSheets={data.active_sheets}
+          nearCompletedSheets={data.near_completed_sheets}
           completedSheets={data.recent_completed_sheets}
           color="#16A34A"
           onSheetClick={onSheetClick}
