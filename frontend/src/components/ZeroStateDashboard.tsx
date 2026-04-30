@@ -13,7 +13,7 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import CampaignIcon from '@mui/icons-material/Campaign';
 import CodeIcon from '@mui/icons-material/Code';
-import BarChartIcon from '@mui/icons-material/BarChart';
+import SettingsIcon from '@mui/icons-material/Settings';
 import SavingsIcon from '@mui/icons-material/Savings';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
