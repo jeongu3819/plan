@@ -7200,11 +7200,15 @@ def delete_sheet_execution(
     if not execution:
         raise HTTPException(404, "Execution not found")
 
+    # in_progress + task_id 가 살아있는 task 를 가리킬 때만 차단.
+    # task 가 이미 archive(soft-delete) 되었거나 사라졌다면 사실상 미연결이므로 삭제 허용.
     if execution.status == "in_progress" and execution.task_id is not None:
-        raise HTTPException(
-            400,
-            "Task 에 연결된 진행 중 시트는 삭제할 수 없습니다. 먼저 연결 해제 후 삭제하세요.",
-        )
+        linked_task = db.query(Task).filter(Task.id == execution.task_id).first()
+        if linked_task is not None and linked_task.archived_at is None:
+            raise HTTPException(
+                400,
+                "Task 에 연결된 진행 중 시트는 삭제할 수 없습니다. 먼저 연결 해제 후 삭제하세요.",
+            )
 
     # SheetExecutionMapping 수동 정리 (cascade 없을 수 있음)
     try:
@@ -7428,21 +7432,37 @@ def get_project_sheet_summary(project_id: int, db: Session = Depends(get_db)):
     execs = db.query(SheetExecution).filter(SheetExecution.project_id == project_id).order_by(SheetExecution.started_at.desc()).all()
     active = [e for e in execs if e.status == "in_progress"]
     completed = [e for e in execs if e.status == "completed"]
+
+    # 연결된 task 의 archive 상태를 한 번에 조회 — 프론트가 삭제 가능 여부를 백엔드와 동일 기준으로 판단할 수 있도록.
+    linked_task_ids = {e.task_id for e in execs if e.task_id is not None}
+    task_archived_map: dict[int, bool] = {}
+    if linked_task_ids:
+        for t in db.query(Task).filter(Task.id.in_(linked_task_ids)).all():
+            task_archived_map[t.id] = t.archived_at is not None
+
+    def _serialize(e: SheetExecution, *, include_completed: bool = False) -> dict:
+        # task_id 가 가리키는 task 가 사라졌으면 archived 로 간주(미연결과 동일하게 취급).
+        task_archived = True if e.task_id is not None and task_archived_map.get(e.task_id, True) else False
+        d = {
+            "id": e.id,
+            "title": e.title,
+            "progress": e.progress,
+            "template_id": e.template_id,
+            "task_id": e.task_id,
+            "task_archived": task_archived,
+            "started_at": iso(e.started_at),
+        }
+        if include_completed:
+            d["completed_at"] = iso(e.completed_at)
+        return d
+
     return {
         "project_id": project_id,
         "total_executions": len(execs),
         "active_count": len(active),
         "completed_count": len(completed),
-        "active_executions": [
-            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
-             "started_at": iso(e.started_at)}
-            for e in active
-        ],
-        "recent_completed": [
-            {"id": e.id, "title": e.title, "progress": e.progress, "template_id": e.template_id,
-             "completed_at": iso(e.completed_at)}
-            for e in completed[:10]
-        ],
+        "active_executions": [_serialize(e) for e in active],
+        "recent_completed": [_serialize(e, include_completed=True) for e in completed[:10]],
     }
 
 

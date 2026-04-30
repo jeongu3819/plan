@@ -1149,9 +1149,10 @@ const SheetProjectSection: React.FC<{ projectId: number; currentUserId: number }
   const hasAny = (data?.total_executions || 0) > 0;
 
   // 미연결(또는 비-진행중) sheet 만 삭제 허용 — 백엔드 가드와 동일 기준.
+  // task_id 가 살아있는 task 를 가리키는 진행 중 시트만 차단; archive 된 task 는 사실상 미연결로 본다.
   const canDelete = (exec: any): boolean => {
     if (!exec) return false;
-    if (exec.status === 'in_progress' && exec.task_id != null) return false;
+    if (exec.status === 'in_progress' && exec.task_id != null && !exec.task_archived) return false;
     return true;
   };
 

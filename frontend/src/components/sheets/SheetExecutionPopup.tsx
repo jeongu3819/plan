@@ -18,6 +18,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
+import { useUser } from '../../context/UserContext';
 import SheetRenderer, { type StatusValue } from './SheetRenderer';
 import type { SheetExecution, Task } from '../../types';
 
@@ -42,6 +43,12 @@ function todayYmd(): string {
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
+/** 담당자 셀이 비어있는지 판정 — 빈 문자열, 공백, '-' 만 비어있다고 본다. */
+function isAssigneeEmpty(v: string | undefined | null): boolean {
+  const s = (v ?? '').toString().trim();
+  return s === '' || s === '-';
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -51,6 +58,9 @@ interface Props {
 
 export default function SheetExecutionPopup({ open, executionId, userId, onClose }: Props) {
   const queryClient = useQueryClient();
+  const { user: me } = useUser();
+  // 사이드바 하단과 동일 소스: SSO 로그인 사용자 이름. 빈 문자열이면 자동 입력 비활성.
+  const currentUserName = (me?.username || '').trim();
 
   // 로컬 변경 사항 (수동 저장용)
   const [pendingChanges, setPendingChanges] = useState<Map<string, { checked?: boolean; value?: string; memo?: string }>>(new Map());
@@ -196,6 +206,8 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
 
   // v3.4: 상태 select 변경 — value/checked 동시 갱신 + 진행일자 자동 연동
   const progressDateCol = execution?.template_structure?.column_roles?.progress_date?.col;
+  const assigneeCol = execution?.template_structure?.column_roles?.assignee?.col;
+
   const handleStatusChange = useCallback(
     (cellRef: string, status: StatusValue, rowIdx: number, _colIdx: number) => {
       const checked = status === 'O';
@@ -212,10 +224,23 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
           const existingDate = next.get(dateRef) || {};
           next.set(dateRef, { ...existingDate, value: dateValue });
         }
+
+        // 담당자 자동 기록 — 진행(O) 선택 시에만, 비어있을 때만 채운다.
+        // 미진행으로 되돌려도 담당자는 유지(자동 클리어 X). 사용자가 직접 수정 가능.
+        if (status === 'O' && currentUserName && assigneeCol !== undefined && assigneeCol >= 0) {
+          const assigneeRef = refOf(rowIdx, assigneeCol);
+          const pendingAssignee = next.get(assigneeRef)?.value;
+          const serverAssignee = execution?.items?.find(i => i.cell_ref === assigneeRef)?.value;
+          const currentAssignee = pendingAssignee !== undefined ? pendingAssignee : serverAssignee;
+          if (isAssigneeEmpty(currentAssignee)) {
+            const existingAssignee = next.get(assigneeRef) || {};
+            next.set(assigneeRef, { ...existingAssignee, value: currentUserName });
+          }
+        }
         return next;
       });
     },
-    [progressDateCol],
+    [progressDateCol, assigneeCol, currentUserName, execution?.items],
   );
 
   // v3.13: ALL 진행 — 서버 호출 대신 pendingChanges 에 staging.
@@ -248,9 +273,23 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
           next.set(dateRef, { ...existingDate, value: today });
         }
       }
+
+      // ALL 진행 — 새로 'O' 가 된 행의 담당자 셀도 비어있으면 채운다.
+      if (currentUserName && assigneeCol !== undefined && assigneeCol >= 0) {
+        for (const rowIdx of progressedRows) {
+          const assigneeRef = refOf(rowIdx, assigneeCol);
+          const pendingAssignee = next.get(assigneeRef)?.value;
+          const serverAssignee = execution?.items?.find(i => i.cell_ref === assigneeRef)?.value;
+          const currentAssignee = pendingAssignee !== undefined ? pendingAssignee : serverAssignee;
+          if (isAssigneeEmpty(currentAssignee)) {
+            const existingAssignee = next.get(assigneeRef) || {};
+            next.set(assigneeRef, { ...existingAssignee, value: currentUserName });
+          }
+        }
+      }
       return next;
     });
-  }, [execution?.template_structure?.checkable_cells, execution?.items, progressDateCol]);
+  }, [execution?.template_structure?.checkable_cells, execution?.items, progressDateCol, assigneeCol, currentUserName]);
 
   const handleDownloadClick = async () => {
     if (!executionId || downloading) return;
