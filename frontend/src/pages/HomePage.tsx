@@ -676,6 +676,44 @@ const HomePage: React.FC = () => {
     return savedLayout || {};
   })();
 
+  const saveMutation = useMutation({
+    mutationFn: (spaceLayout: any) => {
+      const prev = (savedLayout as any) || {};
+      const prevBySpace = (prev.bySpace && typeof prev.bySpace === 'object') ? prev.bySpace : {};
+      const merged = {
+        ...prev,
+        bySpace: {
+          ...prevBySpace,
+          [spaceKey]: {
+            ...(prevBySpace[spaceKey] || {}),
+            ...spaceLayout,
+          },
+        },
+      };
+      return api.saveUserLayout(currentUserId, merged);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['layout', currentUserId] });
+    },
+  });
+
+  const patchLayoutCache = (patch: Record<string, any>) => {
+    queryClient.setQueryData(['layout', currentUserId], (old: any) => {
+      const base = old || {};
+      const baseBySpace = (base.bySpace && typeof base.bySpace === 'object') ? base.bySpace : {};
+      return {
+        ...base,
+        bySpace: {
+          ...baseBySpace,
+          [spaceKey]: {
+            ...(baseBySpace[spaceKey] || {}),
+            ...patch,
+          },
+        },
+      };
+    });
+  };
+
   const widgetOrder: string[] =
     layoutForSpace?.widgetOrder && Array.isArray(layoutForSpace.widgetOrder)
       ? (layoutForSpace.widgetOrder as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
