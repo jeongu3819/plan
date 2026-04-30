@@ -3662,9 +3662,39 @@ def get_project_graph(project_id: int, db: Session = Depends(get_db)):
         else:
             edges.append({"source": f"project-{project_id}", "target": t_id})
 
+        # Extract image URLs from task activities (Work Note)
+        activities = db.query(TaskActivityModel).filter(TaskActivityModel.task_id == t["id"]).all()
+        content_img_urls = set()
+        img_regex = re.compile(r'<img[^>]+src=["\']([^">]+)["\']', re.IGNORECASE)
+        for act in activities:
+            if act.content:
+                matches = img_regex.findall(act.content)
+                for m in matches:
+                    # Normalize URL (remove query params or absolute parts if needed for matching)
+                    # But usually exact match or path match is enough
+                    content_img_urls.add(m)
+
+        def is_image_ext(filename):
+            if not filename: return False
+            ext = filename.split(".")[-1].lower()
+            return ext in ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]
+
         # Attachments from DB
         db_attachments = db.query(AttachmentModel).filter(AttachmentModel.task_id == t["id"]).all()
         for a in db_attachments:
+            is_img = is_image_ext(a.filename) or (a.type == "url" and is_image_ext(a.url))
+            
+            # If it's an image, check if it's in the content
+            if is_img:
+                # Try to find a match in content_img_urls
+                found = False
+                for c_url in content_img_urls:
+                    if (a.url and a.url in c_url) or (a.filename and a.filename in c_url):
+                        found = True
+                        break
+                if not found:
+                    continue # Skip deleted/unreferenced images
+
             a_id = f"attachment-{a.id}"
             nodes.append({
                 "id": a_id,
@@ -3675,17 +3705,30 @@ def get_project_graph(project_id: int, db: Session = Depends(get_db)):
             })
             edges.append({"source": t_id, "target": a_id})
 
-        # Fallback: sidecar attachments
+        # Fallback: sidecar attachments (filter images here too if possible)
         seen_att_ids = {a.id for a in db_attachments}
         for a in state.get("attachments", []):
             if int(a.get("task_id")) == t["id"] and a.get("id") not in seen_att_ids:
+                fname = a.get("filename")
+                aurl = a.get("url", "")
+                is_img = is_image_ext(fname) or (a.get("type") == "url" and is_image_ext(aurl))
+
+                if is_img:
+                    found = False
+                    for c_url in content_img_urls:
+                        if (aurl and aurl in c_url) or (fname and fname in c_url):
+                            found = True
+                            break
+                    if not found:
+                        continue
+
                 a_id = f"attachment-{a['id']}"
                 nodes.append({
                     "id": a_id,
                     "type": "attachment",
-                    "label": a.get("filename") or a.get("url", ""),
+                    "label": fname or aurl,
                     "attachment_type": a.get("type", "url"),
-                    "url": a.get("url", ""),
+                    "url": aurl,
                 })
                 edges.append({"source": t_id, "target": a_id})
 

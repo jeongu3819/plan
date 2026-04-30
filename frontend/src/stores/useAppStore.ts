@@ -13,7 +13,8 @@ interface AppState {
   isDrawerOpen: boolean;
   selectedTask: Task | null;
   drawerProjectId: number;
-  openDrawer: (task?: Task | null, projectId?: number) => void;
+  drawerInitialData: Partial<Task> | null;
+  openDrawer: (task?: Task | null, projectId?: number, initialData?: Partial<Task> | null) => void;
   closeDrawer: () => void;
 
   // Filter
@@ -54,13 +55,15 @@ export const useAppStore = create<AppState>()(
       isDrawerOpen: false,
       selectedTask: null,
       drawerProjectId: 1,
-      openDrawer: (task = null, projectId = 1) =>
+      drawerInitialData: null,
+      openDrawer: (task = null, projectId = 1, initialData = null) =>
         set({
           isDrawerOpen: true,
           selectedTask: task,
           drawerProjectId: projectId,
+          drawerInitialData: initialData,
         }),
-      closeDrawer: () => set({ isDrawerOpen: false, selectedTask: null }),
+      closeDrawer: () => set({ isDrawerOpen: false, selectedTask: null, drawerInitialData: null }),
 
       // Filter
       filterStatus: 'all',

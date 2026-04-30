@@ -476,6 +476,9 @@ const DashboardCalendar: React.FC<{
           return (
             <Box
               key={day.toISOString()}
+              onClick={() => {
+                openDrawer(null, 0, { start_date: dateKey, due_date: dateKey });
+              }}
               sx={{
                 minHeight: 110,
                 borderBottom: '1px solid #F3F4F6',
@@ -485,6 +488,8 @@ const DashboardCalendar: React.FC<{
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 0.3,
+                cursor: 'pointer',
+                '&:hover': { bgcolor: isTd ? '#F0F4FF' : holiday ? '#FEE2E2' : '#F9FAFB' },
                 ...(idx % 7 === 6 - pad && { borderRight: 'none' }),
               }}
             >

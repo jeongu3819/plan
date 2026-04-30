@@ -39,7 +39,7 @@ const formatFileSize = (bytes?: number): string => {
 };
 
 const TaskDrawer: React.FC = () => {
-    const { isDrawerOpen, closeDrawer, openDrawer, selectedTask, drawerProjectId, currentUserId } = useAppStore();
+    const { isDrawerOpen, closeDrawer, openDrawer, selectedTask, drawerProjectId, drawerInitialData, currentUserId, currentSpaceId } = useAppStore();
     const queryClient = useQueryClient();
     const pendingFollowUpRef = useRef<{ title: string; projectId: number } | null>(null);
     const [formData, setFormData] = useState<Partial<Task>>({});
@@ -50,6 +50,13 @@ const TaskDrawer: React.FC = () => {
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // Fetch space projects for creation selection
+    const { data: spaceProjects = [] } = useQuery<any[]>({
+        queryKey: ['spaceProjects', currentSpaceId],
+        queryFn: () => api.getProjects(currentSpaceId!),
+        enabled: !!currentSpaceId && !selectedTask,
+    });
+
     // Fetch users (all - for fallback/display)
     const { data: allUsers = [] } = useQuery<User[]>({
         queryKey: ['users'],
@@ -57,7 +64,7 @@ const TaskDrawer: React.FC = () => {
     });
 
     // Fetch project members - only assignable (not viewer)
-    const activeProjectId = selectedTask?.project_id || drawerProjectId;
+    const activeProjectId = selectedTask?.project_id || formData.project_id || drawerProjectId;
     const { data: projectMembers = [] } = useQuery<any[]>({
         queryKey: ['projectMembers', activeProjectId],
         queryFn: () => api.getProjectMembers(activeProjectId!),
@@ -109,7 +116,8 @@ const TaskDrawer: React.FC = () => {
                 assignee_ids: [],
                 tags: [],
                 progress: 0,
-                project_id: drawerProjectId,
+                project_id: drawerProjectId > 0 ? drawerProjectId : undefined,
+                ...(drawerInitialData || {}),
             });
             setSelectedAssignees([]);
         }
@@ -120,7 +128,7 @@ const TaskDrawer: React.FC = () => {
         setIsIssue(tags.includes('이슈'));
         setIsSpecial(tags.includes('특이사항'));
         setCreateFollowUp(false);
-    }, [selectedTask, isDrawerOpen, drawerProjectId]);
+    }, [selectedTask, isDrawerOpen, drawerProjectId, drawerInitialData]);
 
     // Sync assignees when users load (separate effect to avoid infinite loop)
     useEffect(() => {
@@ -139,6 +147,7 @@ const TaskDrawer: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
             queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
+            queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
             closeDrawer();
         },
     });
@@ -149,6 +158,7 @@ const TaskDrawer: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
             queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
+            queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
             const followUp = pendingFollowUpRef.current;
             pendingFollowUpRef.current = null;
             if (followUp) {
@@ -373,6 +383,35 @@ const TaskDrawer: React.FC = () => {
                     />
 
                     <Divider />
+
+                    {/* Project Selection (New Task only) */}
+                    {!selectedTask && (
+                        <Box>
+                            <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
+                                Project *
+                            </Typography>
+                            <TextField
+                                select
+                                fullWidth
+                                size="small"
+                                value={formData.project_id || ''}
+                                onChange={(e) => handleChange('project_id', Number(e.target.value))}
+                                disabled={!canEdit}
+                                SelectProps={{ displayEmpty: true }}
+                                error={!formData.project_id}
+                                helperText={!formData.project_id ? '프로젝트를 선택해주세요' : ''}
+                            >
+                                <MenuItem value="" disabled>
+                                    <Typography sx={{ color: '#9CA3AF', fontSize: '0.85rem' }}>프로젝트 선택</Typography>
+                                </MenuItem>
+                                {spaceProjects.map(p => (
+                                    <MenuItem key={p.id} value={p.id}>
+                                        {p.name}
+                                    </MenuItem>
+                                ))}
+                            </TextField>
+                        </Box>
+                    )}
 
                     {/* Status & Priority */}
                     <Box data-tour="status-priority-section">
