@@ -157,18 +157,24 @@ const TaskDrawer: React.FC = () => {
 
     const createMutation = useMutation({
         mutationFn: (newTask: Omit<Task, 'id'>) => api.createTask(newTask),
-        onSuccess: () => {
+        onSuccess: (createdTask) => {
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
             queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
             queryClient.invalidateQueries({ queryKey: ['sheetExecutions'] });
+            
             const followUp = pendingFollowUpRef.current;
             pendingFollowUpRef.current = null;
+            
             if (followUp) {
                 openDrawer(null, followUp.projectId);
                 setTimeout(() => setFormData(prev => ({ ...prev, title: followUp.title })), 30);
-            } else {
+            } else if (isCalendarCreateMode) {
+                // 캘린더 생성 모드면 생성 후 닫기
                 closeDrawer();
+            } else {
+                // 보드 등에서의 생성은 생성 후 바로 편집 모드로 전환 (상세 기능 활성화)
+                openDrawer(createdTask, createdTask.project_id);
             }
         },
     });
@@ -728,96 +734,102 @@ const TaskDrawer: React.FC = () => {
                         </Box>
                     )}
 
-                    {/* URL Attachments (only for existing tasks) */}
-                    {selectedTask?.id && (
-                        <Box>
+                    {/* v3.13: 보드 생성 시에도 상세 기능 영역 미리 노출 (단, 비활성 상태로 안내) */}
+                    {(!isCalendarCreateMode || selectedTask?.id) && (
+                        <>
+                        {/* URL Attachments */}
+                        <Box sx={{ opacity: selectedTask?.id ? 1 : 0.6 }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                                 <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
                                     <LinkIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom' }} />
-                                    URL 첨부 ({urlAttachments.length})
+                                    URL 첨부 ({selectedTask?.id ? urlAttachments.length : 0})
                                 </Typography>
-                                {canEdit && (
+                                {canEdit && selectedTask?.id && (
                                     <IconButton data-tour="url-add-btn" size="small" onClick={() => setShowAttachmentForm(!showAttachmentForm)} sx={{ color: '#2955FF' }}>
                                         <AddIcon sx={{ fontSize: '1rem' }} />
                                     </IconButton>
                                 )}
                             </Box>
 
-                            {/* Add Attachment Form */}
-                            {showAttachmentForm && canEdit && (
-                                <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1.5, bgcolor: '#F8F9FF', borderRadius: 1.5, border: '1px solid #E8EDFF' }}>
-                                    <TextField
-                                        data-tour="url-input"
-                                        size="small" placeholder="URL..." fullWidth
-                                        value={newAttachmentUrl}
-                                        onChange={e => setNewAttachmentUrl(e.target.value)}
-                                        InputProps={{ startAdornment: <LinkIcon sx={{ fontSize: '1rem', color: '#9CA3AF', mr: 0.5 }} /> }}
-                                        sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
-                                    />
-                                    <TextField
-                                        data-tour="url-name-input"
-                                        size="small" placeholder="Name..." sx={{ minWidth: 120, '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
-                                        value={newAttachmentName}
-                                        onChange={e => setNewAttachmentName(e.target.value)}
-                                    />
-                                    <Button data-tour="url-add-submit" size="small" variant="contained"
-                                        disabled={!newAttachmentUrl.trim()}
-                                        onClick={() => addAttachmentMutation.mutate({ url: newAttachmentUrl.trim(), filename: newAttachmentName.trim() || undefined })}
-                                        sx={{ bgcolor: '#2955FF', minWidth: 'auto', px: 2 }}
-                                    >
-                                        Add
-                                    </Button>
-                                </Box>
-                            )}
-
-                            {/* URL Attachment List */}
-                            {attachmentsLoading ? (
-                                <CircularProgress size={16} />
-                            ) : urlAttachments.length > 0 ? (
-                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                                    {urlAttachments.map(att => (
-                                        <Box key={att.id} sx={{
-                                            display: 'flex', alignItems: 'center', gap: 1, p: 1,
-                                            borderRadius: 1, border: '1px solid #E5E7EB',
-                                            '&:hover': { bgcolor: '#FAFBFF' },
-                                        }}>
-                                            <LinkIcon sx={{ fontSize: '0.9rem', color: '#2955FF' }} />
-                                            <Link
-                                                href={att.url}
-                                                target="_blank"
-                                                sx={{
-                                                    fontSize: '0.8rem', fontWeight: 500, flexGrow: 1,
-                                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                                }}
-                                            >
-                                                {att.filename || att.url}
-                                            </Link>
-                                            <IconButton size="small" href={att.url} target="_blank" sx={{ color: '#6B7280' }}>
-                                                <OpenInNewIcon sx={{ fontSize: '0.8rem' }} />
-                                            </IconButton>
-                                            {canEdit && (
-                                                <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
-                                                    <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
-                                                </IconButton>
-                                            )}
-                                        </Box>
-                                    ))}
-                                </Box>
+                            {!selectedTask?.id ? (
+                                <Typography variant="caption" sx={{ color: '#9CA3AF', fontStyle: 'italic' }}>Task 저장 후 URL을 첨부할 수 있습니다.</Typography>
                             ) : (
-                                <Typography variant="caption" sx={{ color: '#9CA3AF' }}>URL 첨부 없음</Typography>
+                                <>
+                                {/* Add Attachment Form */}
+                                {showAttachmentForm && canEdit && (
+                                    <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1.5, bgcolor: '#F8F9FF', borderRadius: 1.5, border: '1px solid #E8EDFF' }}>
+                                        <TextField
+                                            data-tour="url-input"
+                                            size="small" placeholder="URL..." fullWidth
+                                            value={newAttachmentUrl}
+                                            onChange={e => setNewAttachmentUrl(e.target.value)}
+                                            InputProps={{ startAdornment: <LinkIcon sx={{ fontSize: '1rem', color: '#9CA3AF', mr: 0.5 }} /> }}
+                                            sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
+                                        />
+                                        <TextField
+                                            data-tour="url-name-input"
+                                            size="small" placeholder="Name..." sx={{ minWidth: 120, '& .MuiOutlinedInput-root': { fontSize: '0.8rem' } }}
+                                            value={newAttachmentName}
+                                            onChange={e => setNewAttachmentName(e.target.value)}
+                                        />
+                                        <Button data-tour="url-add-submit" size="small" variant="contained"
+                                            disabled={!newAttachmentUrl.trim()}
+                                            onClick={() => addAttachmentMutation.mutate({ url: newAttachmentUrl.trim(), filename: newAttachmentName.trim() || undefined })}
+                                            sx={{ bgcolor: '#2955FF', minWidth: 'auto', px: 2 }}
+                                        >
+                                            Add
+                                        </Button>
+                                    </Box>
+                                )}
+
+                                {/* URL Attachment List */}
+                                {attachmentsLoading ? (
+                                    <CircularProgress size={16} />
+                                ) : urlAttachments.length > 0 ? (
+                                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                        {urlAttachments.map(att => (
+                                            <Box key={att.id} sx={{
+                                                display: 'flex', alignItems: 'center', gap: 1, p: 1,
+                                                borderRadius: 1, border: '1px solid #E5E7EB',
+                                                '&:hover': { bgcolor: '#FAFBFF' },
+                                            }}>
+                                                <LinkIcon sx={{ fontSize: '0.9rem', color: '#2955FF' }} />
+                                                <Link
+                                                    href={att.url}
+                                                    target="_blank"
+                                                    sx={{
+                                                        fontSize: '0.8rem', fontWeight: 500, flexGrow: 1,
+                                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                    }}
+                                                >
+                                                    {att.filename || att.url}
+                                                </Link>
+                                                <IconButton size="small" href={att.url} target="_blank" sx={{ color: '#6B7280' }}>
+                                                    <OpenInNewIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                                {canEdit && (
+                                                    <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
+                                                        <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                                    </IconButton>
+                                                )}
+                                            </Box>
+                                        ))}
+                                    </Box>
+                                ) : (
+                                    <Typography variant="caption" sx={{ color: '#9CA3AF' }}>URL 첨부 없음</Typography>
+                                )}
+                                </>
                             )}
                         </Box>
-                    )}
 
-                    {/* File Attachments (only for existing tasks) */}
-                    {selectedTask?.id && (
-                        <Box>
+                        {/* File Attachments */}
+                        <Box sx={{ opacity: selectedTask?.id ? 1 : 0.6 }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                                 <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
                                     <CloudUploadIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom' }} />
-                                    Files 업로드 ({fileAttachments.length})
+                                    Files 업로드 ({selectedTask?.id ? fileAttachments.length : 0})
                                 </Typography>
-                                {canEdit && (
+                                {canEdit && selectedTask?.id && (
                                     <Button
                                         size="small"
                                         startIcon={<CloudUploadIcon sx={{ fontSize: '0.8rem' }} />}
@@ -837,61 +849,70 @@ const TaskDrawer: React.FC = () => {
                                 />
                             </Box>
 
-                            {uploading && <LinearProgress sx={{ mb: 1, borderRadius: 1 }} />}
-
-                            {fileAttachments.length > 0 ? (
-                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                                    {fileAttachments.map(att => (
-                                        <Box key={att.id} sx={{
-                                            display: 'flex', alignItems: 'center', gap: 1, p: 1,
-                                            borderRadius: 1, border: '1px solid #E5E7EB',
-                                            '&:hover': { bgcolor: '#FAFBFF' },
-                                        }}>
-                                            <InsertDriveFileIcon sx={{ fontSize: '0.9rem', color: '#8B5CF6' }} />
-                                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                                                <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
-                                                    {att.filename || 'file'}
-                                                </Typography>
-                                                {att.size && (
-                                                    <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
-                                                        {formatFileSize(att.size)}
+                            {!selectedTask?.id ? (
+                                <Typography variant="caption" sx={{ color: '#9CA3AF', fontStyle: 'italic' }}>Task 저장 후 파일을 업로드할 수 있습니다.</Typography>
+                            ) : (
+                                <>
+                                {uploading && <LinearProgress sx={{ mb: 1, borderRadius: 1 }} />}
+                                {fileAttachments.length > 0 ? (
+                                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                        {fileAttachments.map(att => (
+                                            <Box key={att.id} sx={{
+                                                display: 'flex', alignItems: 'center', gap: 1, p: 1,
+                                                borderRadius: 1, border: '1px solid #E5E7EB',
+                                                '&:hover': { bgcolor: '#FAFBFF' },
+                                            }}>
+                                                <InsertDriveFileIcon sx={{ fontSize: '0.9rem', color: '#8B5CF6' }} />
+                                                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                                    <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                                                        {att.filename || 'file'}
                                                     </Typography>
+                                                    {att.size && (
+                                                        <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
+                                                            {formatFileSize(att.size)}
+                                                        </Typography>
+                                                    )}
+                                                </Box>
+                                                <Tooltip title="다운로드">
+                                                    <IconButton
+                                                        size="small"
+                                                        onClick={() => {
+                                                            const baseUrl = API_URL.replace(/\/api\/?$/, '');
+                                                            const fileUrl = att.url.startsWith('/') ? `${baseUrl}${att.url}` : `${baseUrl}/${att.url}`;
+                                                            window.open(fileUrl, '_blank');
+                                                        }}
+                                                        sx={{ color: '#2955FF' }}
+                                                    >
+                                                        <DownloadIcon sx={{ fontSize: '0.8rem' }} />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                {canEdit && (
+                                                    <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
+                                                        <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                                    </IconButton>
                                                 )}
                                             </Box>
-                                            <Tooltip title="다운로드">
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={() => {
-                                                        const baseUrl = API_URL.replace(/\/api\/?$/, '');
-                                                        const fileUrl = att.url.startsWith('/') ? `${baseUrl}${att.url}` : `${baseUrl}/${att.url}`;
-                                                        window.open(fileUrl, '_blank');
-                                                    }}
-                                                    sx={{ color: '#2955FF' }}
-                                                >
-                                                    <DownloadIcon sx={{ fontSize: '0.8rem' }} />
-                                                </IconButton>
-                                            </Tooltip>
-                                            {canEdit && (
-                                                <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
-                                                    <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
-                                                </IconButton>
-                                            )}
-                                        </Box>
-                                    ))}
-                                </Box>
-                            ) : (
-                                <Typography variant="caption" sx={{ color: '#9CA3AF' }}>첨부 파일 없음</Typography>
+                                        ))}
+                                    </Box>
+                                ) : (
+                                    <Typography variant="caption" sx={{ color: '#9CA3AF' }}>첨부 파일 없음</Typography>
+                                )}
+                                </>
                             )}
                         </Box>
-                    )}
 
-                    {/* Check Sheets (only for existing tasks) */}
-                    {selectedTask?.id && (
-                        <TaskSheetPanel
-                            taskId={selectedTask.id}
-                            projectId={selectedTask.project_id || drawerProjectId || undefined}
-                            canEdit={canEdit}
-                        />
+                        {/* Check Sheets */}
+                        <Box sx={{ opacity: selectedTask?.id ? 1 : 0.6 }}>
+                            <TaskSheetPanel
+                                taskId={selectedTask?.id || 0}
+                                projectId={selectedTask?.project_id || drawerProjectId || undefined}
+                                canEdit={canEdit && !!selectedTask?.id}
+                            />
+                            {!selectedTask?.id && (
+                                <Typography variant="caption" sx={{ color: '#9CA3AF', fontStyle: 'italic', mt: -1, display: 'block' }}>Task 저장 후 체크시트를 연결할 수 있습니다.</Typography>
+                            )}
+                        </Box>
+                        </>
                     )}
                 </Stack>
             </Box>

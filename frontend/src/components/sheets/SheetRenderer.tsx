@@ -81,45 +81,75 @@ const InlineCellEditor = React.memo(function InlineCellEditor({
 }: InlineCellEditorProps) {
   const [value, setValue] = useState<string>(initialValue);
   return (
-    <TextField
-      autoFocus
-      variant="standard"
-      size="small"
-      multiline={editorType !== 'date'}
-      rows={1}
-      maxRows={10}
-      type={editorType === 'date' ? 'date' : 'text'}
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={() => {
-        if (value !== initialValue) onCommit(value);
-        else onCancel();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          (e.target as any).blur();
-        } else if (e.key === 'Escape') {
-          e.preventDefault();
-          setValue(initialValue);
-          onCancel();
-        }
-      }}
-      InputProps={{
-        disableUnderline: true,
-        style: {
-          fontSize: `${fontSizePx}px`,
-          fontWeight: bold ? 700 : 400,
-          color: fontColor || '#111827',
-          width: '100%',
-          textAlign: (align as any) || 'left',
-          lineHeight: 1.2,
-        },
-      }}
-      helperText={editorType !== 'date' ? "Shift+Enter: 줄바꿈" : undefined}
-      FormHelperTextProps={{ sx: { fontSize: '0.6rem', mt: 0, mb: -0.5, opacity: 0.6, position: 'absolute', bottom: -12 } }}
-      sx={{ p: 0, m: 0, width: '100%' }}
-    />
+    <Box sx={{
+      position: 'relative',
+      width: '100%',
+      minHeight: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      bgcolor: '#fff',
+      boxShadow: '0 0 0 2px #2955FF',
+      zIndex: 100,
+      borderRadius: '2px',
+      overflow: 'visible',
+    }}>
+      <TextField
+        autoFocus
+        variant="standard"
+        size="small"
+        multiline={editorType !== 'date'}
+        minRows={editorType !== 'date' ? 2 : 1}
+        maxRows={15}
+        type={editorType === 'date' ? 'date' : 'text'}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => {
+          if (value !== initialValue) onCommit(value);
+          else onCancel();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            (e.target as any).blur();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setValue(initialValue);
+            onCancel();
+          }
+        }}
+        InputProps={{
+          disableUnderline: true,
+          style: {
+            fontSize: `${fontSizePx}px`,
+            fontWeight: bold ? 700 : 400,
+            color: fontColor || '#111827',
+            width: '100%',
+            textAlign: (align as any) || 'left',
+            lineHeight: 1.4,
+            padding: '4px 8px',
+          },
+        }}
+        sx={{ p: 0, m: 0, width: '100%' }}
+      />
+      {editorType !== 'date' && (
+        <Box sx={{
+          position: 'absolute',
+          bottom: -20,
+          right: 0,
+          bgcolor: 'rgba(26, 29, 41, 0.85)',
+          color: '#fff',
+          px: 0.8,
+          py: 0.2,
+          borderRadius: 0.5,
+          fontSize: '0.65rem',
+          pointerEvents: 'none',
+          zIndex: 101,
+          whiteSpace: 'nowrap',
+        }}>
+          Shift+Enter: 줄바꿈
+        </Box>
+      )}
+    </Box>
   );
 });
 
@@ -358,19 +388,19 @@ export default function SheetRenderer({
         <table
           style={{
             borderCollapse: 'collapse',
-            tableLayout: 'fixed',
+            tableLayout: 'auto', // v3.8: auto로 변경하여 내용에 따른 행 높이 증가 허용
             width: totalWidth,
             margin: 0,
           }}
         >
           <colgroup>
             {colWidths.map((w, i) => (
-              hiddenColSet.has(i) ? null : <col key={i} style={{ width: w }} />
+              hiddenColSet.has(i) ? null : <col key={i} style={{ width: w, minWidth: w, maxWidth: w }} />
             ))}
           </colgroup>
           <tbody>
             {Array.from({ length: total_rows }, (_, rowIdx) => (
-              <tr key={rowIdx} style={{ height: rowHeights[rowIdx] || DEFAULT_ROW_HEIGHT }}>
+              <tr key={rowIdx}>
                 {Array.from({ length: total_cols }, (_, colIdx) => {
                   const key = `${rowIdx}-${colIdx}`;
                   // 실행본에서 삭제(숨김)된 컬럼은 렌더 자체를 건너뛴다
