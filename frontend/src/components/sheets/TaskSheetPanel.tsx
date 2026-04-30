@@ -28,9 +28,12 @@ interface Props {
   taskId: number;
   projectId?: number;
   canEdit: boolean;
+  pendingSheets?: { templateId: number; title: string }[];
+  onAddPendingSheet?: (sheet: { templateId: number; title: string }) => void;
+  onRemovePendingSheet?: (index: number) => void;
 }
 
-export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
+export default function TaskSheetPanel({ taskId, projectId, canEdit, pendingSheets = [], onAddPendingSheet, onRemovePendingSheet }: Props) {
   const currentUserId = useAppStore(state => state.currentUserId);
   const currentSpaceId = useAppStore(state => state.currentSpaceId);
   const navigate = useNavigate();
@@ -48,7 +51,7 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
   const { data: summary, refetch } = useQuery({
     queryKey: ['taskSheetSummary', taskId],
     queryFn: () => api.getTaskSheetSummary(taskId),
-    enabled: !!taskId,
+    enabled: !!taskId && taskId > 0,
   });
 
   const { data: templatesData } = useQuery({
@@ -92,7 +95,7 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
 
   const active = summary?.active_executions || [];
   const completed = summary?.recent_completed || [];
-  const hasAny = (summary?.total_executions || 0) > 0;
+  const hasAny = (summary?.total_executions || 0) > 0 || pendingSheets.length > 0;
 
   const openPicker = () => {
     setSelectedTemplateId('');
@@ -102,6 +105,15 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
 
   const startExecution = async () => {
     if (!selectedTemplateId || !currentSpaceId) return;
+    
+    if (!taskId || taskId === 0) {
+      if (onAddPendingSheet) {
+        onAddPendingSheet({ templateId: Number(selectedTemplateId), title: execTitle.trim() });
+        setPickerOpen(false);
+      }
+      return;
+    }
+
     setStarting(true);
     try {
       const exec = await api.createSheetExecution({
@@ -126,7 +138,7 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
         <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
           <DescriptionIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom', color: '#7C3AED' }} />
-          Check Sheets ({summary?.total_executions || 0})
+          Check Sheets ({(summary?.total_executions || 0) + pendingSheets.length})
         </Typography>
         {canEdit && (
           <Button
@@ -149,6 +161,29 @@ export default function TaskSheetPanel({ taskId, projectId, canEdit }: Props) {
         </Typography>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+          {pendingSheets.map((sheet, idx) => {
+            const templateName = templates.find(t => t.id === sheet.templateId)?.name || 'Check Sheet';
+            return (
+              <Box
+                key={`pending-${idx}`}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 1, p: 1, borderRadius: 1.5,
+                  bgcolor: '#F3F4F6', border: '1px dashed #D1D5DB',
+                }}
+              >
+                <DescriptionIcon sx={{ fontSize: 14, color: '#9CA3AF', flexShrink: 0 }} />
+                <Typography variant="body2" sx={{ fontSize: '0.78rem', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#6B7280' }}>
+                  {sheet.title || `${templateName} (저장 후 시작)`}
+                </Typography>
+                <Chip label="대기 중" size="small" sx={{ height: 16, fontSize: '0.55rem', bgcolor: '#E5E7EB', color: '#4B5563' }} />
+                {canEdit && onRemovePendingSheet && (
+                  <IconButton size="small" onClick={() => onRemovePendingSheet(idx)} sx={{ p: 0.3, ml: 0.3 }}>
+                    <LinkOffIcon sx={{ fontSize: 13, color: '#9CA3AF' }} />
+                  </IconButton>
+                )}
+              </Box>
+            );
+          })}
           {active.map((exec: any) => (
             <Box
               key={exec.id}

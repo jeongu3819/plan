@@ -50,12 +50,17 @@ const TaskDrawer: React.FC = () => {
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // Pending state for new tasks
+    const [pendingUrls, setPendingUrls] = useState<{url: string, filename?: string}[]>([]);
+    const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+    const [pendingSheets, setPendingSheets] = useState<{templateId: number, title: string}[]>([]);
+
     // mode flag: calendar 날짜 클릭으로 생성 중인가?
     const isCalendarCreateMode = !selectedTask && (drawerInitialData as any)?.isCalendarCreate === true;
 
     // Fetch space projects for creation selection
     const { data: spaceProjects = [] } = useQuery<any[]>({
-        queryKey: ['spaceProjects', currentUserId, currentSpaceId],
+        queryKey: ['projects', currentUserId, currentSpaceId],
         queryFn: () => api.getProjects(currentUserId, currentSpaceId),
         enabled: !!currentSpaceId && isCalendarCreateMode,
     });
@@ -127,6 +132,9 @@ const TaskDrawer: React.FC = () => {
         setShowAttachmentForm(false);
         setNewAttachmentUrl('');
         setNewAttachmentName('');
+        setPendingUrls([]);
+        setPendingFiles([]);
+        setPendingSheets([]);
         const tags = selectedTask?.tags || [];
         setIsIssue(tags.includes('이슈'));
         setIsSpecial(tags.includes('특이사항'));
@@ -157,7 +165,24 @@ const TaskDrawer: React.FC = () => {
 
     const createMutation = useMutation({
         mutationFn: (newTask: Omit<Task, 'id'>) => api.createTask(newTask),
-        onSuccess: (createdTask) => {
+        onSuccess: async (createdTask) => {
+            // v3.14: Task 생성 성공 후 pending 상태의 파일, URL, 시트 처리
+            const uPromises = pendingUrls.map(att => api.createAttachment(createdTask.id, { ...att, type: 'url' }).catch(e => console.error(e)));
+            const fPromises = pendingFiles.map(file => api.uploadTaskFile(createdTask.id, file, currentUserId).catch(e => console.error(e)));
+            const sPromises = pendingSheets.map(sheet => {
+                if (!currentSpaceId) return Promise.resolve();
+                return api.createSheetExecution({
+                    template_id: sheet.templateId,
+                    task_id: createdTask.id,
+                    project_id: createdTask.project_id,
+                    title: sheet.title || undefined,
+                }, currentSpaceId, currentUserId).catch(e => console.error(e));
+            });
+
+            if (uPromises.length > 0 || fPromises.length > 0 || sPromises.length > 0) {
+                await Promise.all([...uPromises, ...fPromises, ...sPromises]);
+            }
+
             queryClient.invalidateQueries({ queryKey: ['tasks'] });
             queryClient.invalidateQueries({ queryKey: ['stats'] });
             queryClient.invalidateQueries({ queryKey: ['spaceOverview'] });
@@ -393,8 +418,8 @@ const TaskDrawer: React.FC = () => {
 
                     <Divider />
 
-                    {/* Project Selection (New Task only) */}
-                    {!selectedTask && (
+                    {/* Project Selection (Calendar Create Task only) */}
+                    {isCalendarCreateMode && (
                         <Box>
                             <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem', mb: 1, display: 'block' }}>
                                 Project *
@@ -413,11 +438,17 @@ const TaskDrawer: React.FC = () => {
                                 <MenuItem value="" disabled>
                                     <Typography sx={{ color: '#9CA3AF', fontSize: '0.85rem' }}>프로젝트 선택</Typography>
                                 </MenuItem>
-                                {spaceProjects.map(p => (
-                                    <MenuItem key={p.id} value={p.id}>
-                                        {p.name}
+                                {spaceProjects.length === 0 ? (
+                                    <MenuItem value="" disabled>
+                                        <Typography sx={{ fontSize: '0.85rem' }}>먼저 프로젝트를 생성해주세요</Typography>
                                     </MenuItem>
-                                ))}
+                                ) : (
+                                    spaceProjects.map(p => (
+                                        <MenuItem key={p.id} value={p.id}>
+                                            {p.name}
+                                        </MenuItem>
+                                    ))
+                                )}
                             </TextField>
                         </Box>
                     )}
@@ -500,18 +531,20 @@ const TaskDrawer: React.FC = () => {
                                     <Chip label="자동 계산" size="small" sx={{ ml: 1, height: 16, fontSize: '0.55rem', bgcolor: '#EEF2FF', color: '#2955FF' }} />
                                 )}
                             </Typography>
-                            {selectedTask?.id && (
-                                <Tooltip title="작업노트 열기" arrow>
+                            <Tooltip title={selectedTask?.id ? "작업노트 열기" : "저장 후 작성 가능합니다"} arrow>
+                                <span>
                                     <Button
                                         data-tour="work-note-btn"
                                         size="small"
                                         startIcon={<EditNoteIcon sx={{ fontSize: '0.9rem' }} />}
                                         onClick={() => setWorkNoteOpen(true)}
+                                        disabled={!selectedTask?.id}
                                         sx={{
                                             textTransform: 'none', fontSize: '0.7rem', fontWeight: 600,
                                             color: '#2955FF', borderRadius: 2, px: 1.2, py: 0.3,
                                             bgcolor: '#EEF2FF',
                                             '&:hover': { bgcolor: '#DBEAFE' },
+                                            '&.Mui-disabled': { bgcolor: '#F3F4F6', color: '#9CA3AF' }
                                         }}
                                     >
                                         작업노트
@@ -523,8 +556,8 @@ const TaskDrawer: React.FC = () => {
                                             />
                                         )}
                                     </Button>
-                                </Tooltip>
-                            )}
+                                </span>
+                            </Tooltip>
                         </Box>
 
                         {activityProgress !== null ? (
@@ -742,16 +775,15 @@ const TaskDrawer: React.FC = () => {
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                                 <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
                                     <LinkIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom' }} />
-                                    URL 첨부 ({selectedTask?.id ? urlAttachments.length : 0})
+                                    URL 첨부 ({(selectedTask?.id ? urlAttachments.length : 0) + pendingUrls.length})
                                 </Typography>
                                 {canEdit && (
-                                    <Tooltip title={selectedTask?.id ? "URL 추가" : "테스크 생성 후 추가 가능합니다"} arrow>
+                                    <Tooltip title="URL 추가" arrow>
                                         <span>
                                             <IconButton
                                                 data-tour="url-add-btn"
                                                 size="small"
                                                 onClick={() => setShowAttachmentForm(!showAttachmentForm)}
-                                                disabled={!selectedTask?.id}
                                                 sx={{ color: '#2955FF' }}
                                             >
                                                 <AddIcon sx={{ fontSize: '1rem' }} />
@@ -762,7 +794,7 @@ const TaskDrawer: React.FC = () => {
                             </Box>
 
                             {/* Add Attachment Form */}
-                            {showAttachmentForm && canEdit && selectedTask?.id && (
+                            {showAttachmentForm && canEdit && (
                                 <Box sx={{ display: 'flex', gap: 1, mb: 1.5, p: 1.5, bgcolor: '#F8F9FF', borderRadius: 1.5, border: '1px solid #E8EDFF' }}>
                                     <TextField
                                         data-tour="url-input"
@@ -780,7 +812,16 @@ const TaskDrawer: React.FC = () => {
                                     />
                                     <Button data-tour="url-add-submit" size="small" variant="contained"
                                         disabled={!newAttachmentUrl.trim()}
-                                        onClick={() => addAttachmentMutation.mutate({ url: newAttachmentUrl.trim(), filename: newAttachmentName.trim() || undefined })}
+                                        onClick={() => {
+                                            if (selectedTask?.id) {
+                                                addAttachmentMutation.mutate({ url: newAttachmentUrl.trim(), filename: newAttachmentName.trim() || undefined });
+                                            } else {
+                                                setPendingUrls(prev => [...prev, { url: newAttachmentUrl.trim(), filename: newAttachmentName.trim() || undefined }]);
+                                                setNewAttachmentUrl('');
+                                                setNewAttachmentName('');
+                                                setShowAttachmentForm(false);
+                                            }
+                                        }}
                                         sx={{ bgcolor: '#2955FF', minWidth: 'auto', px: 2 }}
                                     >
                                         Add
@@ -791,8 +832,25 @@ const TaskDrawer: React.FC = () => {
                             {/* URL Attachment List */}
                             {attachmentsLoading ? (
                                 <CircularProgress size={16} />
-                            ) : urlAttachments.length > 0 ? (
+                            ) : (urlAttachments.length > 0 || pendingUrls.length > 0) ? (
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                    {pendingUrls.map((att, idx) => (
+                                        <Box key={`pending-url-${idx}`} sx={{
+                                            display: 'flex', alignItems: 'center', gap: 1, p: 1,
+                                            borderRadius: 1, border: '1px dashed #D1D5DB', bgcolor: '#F3F4F6'
+                                        }}>
+                                            <LinkIcon sx={{ fontSize: '0.9rem', color: '#9CA3AF' }} />
+                                            <Typography variant="body2" sx={{ fontSize: '0.8rem', fontWeight: 500, flexGrow: 1, color: '#6B7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {att.filename || att.url}
+                                            </Typography>
+                                            <Chip label="대기 중" size="small" sx={{ height: 16, fontSize: '0.55rem', bgcolor: '#E5E7EB', color: '#4B5563' }} />
+                                            {canEdit && (
+                                                <IconButton size="small" onClick={() => setPendingUrls(prev => prev.filter((_, i) => i !== idx))} sx={{ color: '#9CA3AF', '&:hover': { color: '#EF4444' } }}>
+                                                    <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                            )}
+                                        </Box>
+                                    ))}
                                     {urlAttachments.map(att => (
                                         <Box key={att.id} sx={{
                                             display: 'flex', alignItems: 'center', gap: 1, p: 1,
@@ -823,7 +881,7 @@ const TaskDrawer: React.FC = () => {
                                 </Box>
                             ) : (
                                 <Typography variant="caption" sx={{ color: '#9CA3AF' }}>
-                                    {!selectedTask?.id ? "테스크 생성 후 추가 가능합니다" : "URL 첨부 없음"}
+                                    URL 첨부 없음
                                 </Typography>
                             )}
                         </Box>
@@ -833,16 +891,16 @@ const TaskDrawer: React.FC = () => {
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
                                 <Typography variant="caption" sx={{ fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', fontSize: '0.7rem' }}>
                                     <CloudUploadIcon sx={{ fontSize: '0.8rem', mr: 0.5, verticalAlign: 'text-bottom' }} />
-                                    Files 업로드 ({selectedTask?.id ? fileAttachments.length : 0})
+                                    Files 업로드 ({(selectedTask?.id ? fileAttachments.length : 0) + pendingFiles.length})
                                 </Typography>
                                 {canEdit && (
-                                    <Tooltip title={selectedTask?.id ? "파일 선택" : "테스크 생성 후 업로드 가능합니다"} arrow>
+                                    <Tooltip title="파일 선택" arrow>
                                         <span>
                                             <Button
                                                 size="small"
                                                 startIcon={<CloudUploadIcon sx={{ fontSize: '0.8rem' }} />}
                                                 onClick={() => fileInputRef.current?.click()}
-                                                disabled={uploading || !selectedTask?.id}
+                                                disabled={uploading}
                                                 sx={{ textTransform: 'none', fontSize: '0.7rem', color: '#2955FF' }}
                                             >
                                                 {uploading ? '업로드 중...' : '파일 선택'}
@@ -855,59 +913,86 @@ const TaskDrawer: React.FC = () => {
                                     type="file"
                                     multiple
                                     hidden
-                                    onChange={handleFileSelect}
+                                    onChange={(e) => {
+                                        const selectedFiles = e.target.files;
+                                        if (!selectedFiles) return;
+                                        if (selectedTask?.id) {
+                                            setUploading(true);
+                                            Array.from(selectedFiles).forEach((file) => uploadFileMutation.mutate(file));
+                                        } else {
+                                            setPendingFiles(prev => [...prev, ...Array.from(selectedFiles)]);
+                                        }
+                                        if (fileInputRef.current) fileInputRef.current.value = '';
+                                    }}
                                 />
                             </Box>
 
-                            {selectedTask?.id ? (
-                                <>
-                                {uploading && <LinearProgress sx={{ mb: 1, borderRadius: 1 }} />}
-                                {fileAttachments.length > 0 ? (
-                                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                                        {fileAttachments.map(att => (
-                                            <Box key={att.id} sx={{
-                                                display: 'flex', alignItems: 'center', gap: 1, p: 1,
-                                                borderRadius: 1, border: '1px solid #E5E7EB',
-                                                '&:hover': { bgcolor: '#FAFBFF' },
-                                            }}>
-                                                <InsertDriveFileIcon sx={{ fontSize: '0.9rem', color: '#8B5CF6' }} />
-                                                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                                                    <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
-                                                        {att.filename || 'file'}
+                            {uploading && <LinearProgress sx={{ mb: 1, borderRadius: 1 }} />}
+
+                            {(fileAttachments.length > 0 || pendingFiles.length > 0) ? (
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                    {pendingFiles.map((file, idx) => (
+                                        <Box key={`pending-file-${idx}`} sx={{
+                                            display: 'flex', alignItems: 'center', gap: 1, p: 1,
+                                            borderRadius: 1, border: '1px dashed #D1D5DB', bgcolor: '#F3F4F6'
+                                        }}>
+                                            <InsertDriveFileIcon sx={{ fontSize: '0.9rem', color: '#9CA3AF' }} />
+                                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                                <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 500, color: '#6B7280' }}>
+                                                    {file.name}
+                                                </Typography>
+                                                <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
+                                                    {formatFileSize(file.size)}
+                                                </Typography>
+                                            </Box>
+                                            <Chip label="대기 중" size="small" sx={{ height: 16, fontSize: '0.55rem', bgcolor: '#E5E7EB', color: '#4B5563' }} />
+                                            {canEdit && (
+                                                <IconButton size="small" onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))} sx={{ color: '#9CA3AF', '&:hover': { color: '#EF4444' } }}>
+                                                    <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                            )}
+                                        </Box>
+                                    ))}
+                                    {fileAttachments.map(att => (
+                                        <Box key={att.id} sx={{
+                                            display: 'flex', alignItems: 'center', gap: 1, p: 1,
+                                            borderRadius: 1, border: '1px solid #E5E7EB',
+                                            '&:hover': { bgcolor: '#FAFBFF' },
+                                        }}>
+                                            <InsertDriveFileIcon sx={{ fontSize: '0.9rem', color: '#8B5CF6' }} />
+                                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                                <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 500 }}>
+                                                    {att.filename || 'file'}
+                                                </Typography>
+                                                {att.size && (
+                                                    <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
+                                                        {formatFileSize(att.size)}
                                                     </Typography>
-                                                    {att.size && (
-                                                        <Typography variant="caption" sx={{ color: '#9CA3AF', fontSize: '0.65rem' }}>
-                                                            {formatFileSize(att.size)}
-                                                        </Typography>
-                                                    )}
-                                                </Box>
-                                                <Tooltip title="다운로드">
-                                                    <IconButton
-                                                        size="small"
-                                                        onClick={() => {
-                                                            const baseUrl = API_URL.replace(/\/api\/?$/, '');
-                                                            const fileUrl = att.url.startsWith('/') ? `${baseUrl}${att.url}` : `${baseUrl}/${att.url}`;
-                                                            window.open(fileUrl, '_blank');
-                                                        }}
-                                                        sx={{ color: '#2955FF' }}
-                                                    >
-                                                        <DownloadIcon sx={{ fontSize: '0.8rem' }} />
-                                                    </IconButton>
-                                                </Tooltip>
-                                                {canEdit && (
-                                                    <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
-                                                        <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
-                                                    </IconButton>
                                                 )}
                                             </Box>
-                                        ))}
-                                    </Box>
-                                ) : (
-                                    <Typography variant="caption" sx={{ color: '#9CA3AF' }}>첨부 파일 없음</Typography>
-                                )}
-                                </>
+                                            <Tooltip title="다운로드">
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={() => {
+                                                        const baseUrl = API_URL.replace(/\/api\/?$/, '');
+                                                        const fileUrl = att.url.startsWith('/') ? `${baseUrl}${att.url}` : `${baseUrl}/${att.url}`;
+                                                        window.open(fileUrl, '_blank');
+                                                    }}
+                                                    sx={{ color: '#2955FF' }}
+                                                >
+                                                    <DownloadIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                            </Tooltip>
+                                            {canEdit && (
+                                                <IconButton size="small" onClick={() => deleteAttachmentMutation.mutate(att.id)} sx={{ color: '#D1D5DB', '&:hover': { color: '#EF4444' } }}>
+                                                    <DeleteOutlineIcon sx={{ fontSize: '0.8rem' }} />
+                                                </IconButton>
+                                            )}
+                                        </Box>
+                                    ))}
+                                </Box>
                             ) : (
-                                <Typography variant="caption" sx={{ color: '#9CA3AF' }}>테스크 생성 후 업로드 가능합니다</Typography>
+                                <Typography variant="caption" sx={{ color: '#9CA3AF' }}>첨부 파일 없음</Typography>
                             )}
                         </Box>
 
@@ -916,11 +1001,11 @@ const TaskDrawer: React.FC = () => {
                             <TaskSheetPanel
                                 taskId={selectedTask?.id || 0}
                                 projectId={selectedTask?.project_id || drawerProjectId || undefined}
-                                canEdit={canEdit && !!selectedTask?.id}
+                                canEdit={canEdit}
+                                pendingSheets={pendingSheets}
+                                onAddPendingSheet={(sheet) => setPendingSheets(prev => [...prev, sheet])}
+                                onRemovePendingSheet={(idx) => setPendingSheets(prev => prev.filter((_, i) => i !== idx))}
                             />
-                            {!selectedTask?.id && (
-                                <Typography variant="caption" sx={{ color: '#9CA3AF', mt: -1, display: 'block' }}>테스크 생성 후 체크시트를 연결할 수 있습니다</Typography>
-                            )}
                         </Box>
                         </>
                     )}
