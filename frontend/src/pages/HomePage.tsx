@@ -200,7 +200,7 @@ const MAX_WIDGET_HEIGHT = 600;
 // ── Sortable Widget Wrapper with resizable height ──
 const SortableWidget: React.FC<{
   id: string;
-  height: number;
+  height: number | string;
   onHeightChange: (id: string, height: number) => void;
   children: React.ReactNode;
 }> = ({ id, height, onHeightChange, children }) => {
@@ -219,7 +219,7 @@ const SortableWidget: React.FC<{
     e.preventDefault();
     e.stopPropagation();
     const startY = e.clientY;
-    const startHeight = height;
+    const startHeight = typeof height === 'number' ? height : 400;
     const onMove = (ev: MouseEvent) => {
       const delta = ev.clientY - startY;
       const newH = Math.max(MIN_WIDGET_HEIGHT, Math.min(MAX_WIDGET_HEIGHT, startHeight + delta));
@@ -233,17 +233,20 @@ const SortableWidget: React.FC<{
     document.addEventListener('mouseup', onUp);
   };
 
+  const isCalendar = id === 'calendar';
+
   return (
     <Paper
       ref={setNodeRef}
       style={style}
       sx={{
-        p: 2.5,
+        p: isCalendar ? 1.5 : 2.5,
         borderRadius: 3,
         border: isDragging ? '2px solid #2955FF' : '1px solid rgba(0,0,0,0.08)',
         bgcolor: 'rgba(255,255,255,0.65)',
         backdropFilter: 'blur(12px)',
-        height,
+        height: isCalendar ? 'auto' : height,
+        minHeight: isCalendar ? 400 : 'unset',
         transition: 'box-shadow 0.2s, border 0.2s',
         boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
         '&:hover': { boxShadow: '0 6px 20px rgba(0,0,0,0.08)' },
@@ -253,6 +256,7 @@ const SortableWidget: React.FC<{
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
+        gridColumn: isCalendar ? { xs: '1', md: '1 / -1' } : 'auto',
       }}
     >
       <Box
@@ -263,50 +267,52 @@ const SortableWidget: React.FC<{
           position: 'absolute',
           top: 8,
           right: 8,
-          opacity: 0,
+          opacity: isCalendar ? 0.4 : 0,
           transition: 'opacity 0.2s',
           cursor: 'grab',
           color: '#CBD5E1',
-          '&:hover': { color: '#2955FF' },
+          '&:hover': { color: '#2955FF', opacity: 1 },
           '&:active': { cursor: 'grabbing' },
           zIndex: 5,
         }}
       >
         <DragIndicatorIcon sx={{ fontSize: '1.1rem' }} />
       </Box>
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.12)', borderRadius: 2 } }}>
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: isCalendar ? 'visible' : 'auto', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(0,0,0,0.12)', borderRadius: 2 } }}>
         {children}
       </Box>
       {/* Resize handle */}
-      <Box
-        className="resize-handle"
-        onMouseDown={handleResizeStart}
-        sx={{
-          position: 'absolute',
-          bottom: 0,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: 40,
-          height: 8,
-          cursor: 'ns-resize',
-          opacity: 0,
-          transition: 'opacity 0.2s',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 5,
-          '&::after': {
-            content: '""',
-            width: 28,
-            height: 3,
-            borderRadius: 2,
-            bgcolor: '#CBD5E1',
-          },
-          '&:hover::after': {
-            bgcolor: '#2955FF',
-          },
-        }}
-      />
+      {!isCalendar && (
+        <Box
+          className="resize-handle"
+          onMouseDown={handleResizeStart}
+          sx={{
+            position: 'absolute',
+            bottom: 0,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: 40,
+            height: 8,
+            cursor: 'ns-resize',
+            opacity: 0,
+            transition: 'opacity 0.2s',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 5,
+            '&::after': {
+              content: '""',
+              width: 28,
+              height: 3,
+              borderRadius: 2,
+              bgcolor: '#CBD5E1',
+            },
+            '&:hover::after': {
+              bgcolor: '#2955FF',
+            },
+          }}
+        />
+      )}
     </Paper>
   );
 };
@@ -352,9 +358,7 @@ const DashboardCalendar: React.FC<{
   openDrawer: (task: Task) => void;
   /** flat: 외곽 Paper/패딩 제거 — Dashboard widget 안에 들어갈 때 박스-인-박스 회피용 */
   flat?: boolean;
-  position?: 'top' | 'bottom';
-  onTogglePosition?: () => void;
-}> = ({ stats, overviewData, openDrawer, flat, position, onTogglePosition }) => {
+}> = ({ stats, overviewData, openDrawer, flat }) => {
   const [calMonth, setCalMonth] = useState(new Date());
   const [overflowAnchor, setOverflowAnchor] = useState<HTMLElement | null>(null);
   const [overflowDate, setOverflowDate] = useState<Date | null>(null);
@@ -427,23 +431,6 @@ const DashboardCalendar: React.FC<{
           <IconButton size="small" onClick={() => setCalMonth(addMonths(calMonth, 1))} sx={{ bgcolor: '#F3F4F6', '&:hover': { bgcolor: '#E5E7EB' } }}>
             <ChevronRightIcon />
           </IconButton>
-
-          {onTogglePosition && (
-            <Tooltip title={position === 'top' ? '아래로 이동' : '위로 이동'}>
-              <IconButton
-                size="small"
-                onClick={onTogglePosition}
-                sx={{
-                  ml: 1,
-                  bgcolor: 'rgba(41, 85, 255, 0.05)',
-                  color: '#2955FF',
-                  '&:hover': { bgcolor: 'rgba(41, 85, 255, 0.1)' },
-                }}
-              >
-                <DragIndicatorIcon sx={{ fontSize: '1.1rem' }} />
-              </IconButton>
-            </Tooltip>
-          )}
         </Box>
       </Box>
 
@@ -670,16 +657,14 @@ const HomePage: React.FC = () => {
 
   // ── Space-keyed layout helpers ──
   // Layout JSON 구조:
-  //   { bySpace: { [spaceId]: { widgetIds, widgetOrder, widgetHeights, gridLayouts, calendarPosition } },
+  //   { bySpace: { [spaceId]: { widgetIds, widgetOrder, widgetHeights, gridLayouts } },
   //     widgetIds?, widgetOrder?, widgetHeights?, gridLayouts?  ← 레거시 (단일 공간) }
-  // 공간이 정해지지 않은 경우엔 레거시 top-level 키를 그대로 사용한다.
   const spaceKey: string = currentSpaceId != null ? String(currentSpaceId) : '__no_space__';
   const layoutForSpace = (() => {
     const bySpace = (savedLayout as any)?.bySpace;
     if (bySpace && typeof bySpace === 'object' && bySpace[spaceKey]) {
       return bySpace[spaceKey];
     }
-    // 레거시 fallback — bySpace 가 없거나 이 공간 키가 없을 때 top-level 사용
     return savedLayout || {};
   })();
 
@@ -704,7 +689,6 @@ const HomePage: React.FC = () => {
     },
   });
 
-  // Optimistic updater — bySpace[spaceKey] 만 갱신하고 다른 공간/레거시 키는 보존.
   const patchLayoutCache = (patch: Record<string, any>) => {
     queryClient.setQueryData(['layout', currentUserId], (old: any) => {
       const base = old || {};
@@ -722,12 +706,10 @@ const HomePage: React.FC = () => {
     });
   };
 
-  // 공간 운영 목적 (project_management 면 캘린더 default-hidden) — 기본값 결정에 필요해서 일찍 평가.
   const spacePurposeForDefaults: string = (overviewData as any)?.purpose || 'project_management';
   const defaultVisibleForPurpose =
     spacePurposeForDefaults === 'project_management' ? DEFAULT_VISIBLE_PM : DEFAULT_VISIBLE;
 
-  // Visible widgets + order — saved preference or default
   const widgetOrder: string[] =
     layoutForSpace?.widgetOrder && Array.isArray(layoutForSpace.widgetOrder)
       ? (layoutForSpace.widgetOrder as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
@@ -738,15 +720,10 @@ const HomePage: React.FC = () => {
       ? (layoutForSpace.widgetIds as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
       : defaultVisibleForPurpose;
 
-  // Per-widget heights (persisted in layout)
   const widgetHeights: Record<string, number> =
     layoutForSpace?.widgetHeights && typeof layoutForSpace.widgetHeights === 'object'
       ? (layoutForSpace.widgetHeights as Record<string, number>)
       : {};
-
-  // 큰 calendar 가 grid 위/아래 어디에 위치할지 — 드래그 핸들 클릭으로 토글.
-  const calendarPosition: 'top' | 'bottom' =
-    layoutForSpace?.calendarPosition === 'bottom' ? 'bottom' : 'top';
 
   const defaultH = getDefaultWidgetHeight();
   const getWidgetHeight = (id: string) => widgetHeights[id] || defaultH;
@@ -774,26 +751,18 @@ const HomePage: React.FC = () => {
       widgetIds: defaultVisibleForPurpose,
       widgetOrder: defaultVisibleForPurpose,
       widgetHeights: {},
-      calendarPosition: 'top',
     });
     saveMutation.mutate({
       widgetIds: defaultVisibleForPurpose,
       widgetOrder: defaultVisibleForPurpose,
       widgetHeights: {},
       gridLayouts: {},
-      calendarPosition: 'top',
     });
   };
 
   const resetWidgetHeights = () => {
     patchLayoutCache({ widgetHeights: {} });
     saveMutation.mutate({ widgetIds: visibleWidgets, widgetOrder, widgetHeights: {}, gridLayouts: {} });
-  };
-
-  const toggleCalendarPosition = () => {
-    const next: 'top' | 'bottom' = calendarPosition === 'top' ? 'bottom' : 'top';
-    patchLayoutCache({ calendarPosition: next });
-    saveMutation.mutate({ widgetIds: visibleWidgets, widgetOrder, calendarPosition: next, gridLayouts: {} });
   };
 
   // ── DnD sensors ──
@@ -947,6 +916,15 @@ const HomePage: React.FC = () => {
     const def = ALL_WIDGETS.find(w => w.id === widgetId)!;
 
     switch (widgetId) {
+      case 'calendar':
+        return (
+          <DashboardCalendar
+            stats={stats}
+            overviewData={overviewData}
+            openDrawer={openDrawer}
+            flat
+          />
+        );
       case 'overview': {
         const statusFilterMap: Record<string, string> = {
           Total: 'all',
@@ -1564,8 +1542,7 @@ const HomePage: React.FC = () => {
   // Globally suppressed:
   //   - 'overdue': duplicate of '미완료/이월 작업' (incomplete_tasks)
   //   - 'upcoming': duplicate of "우선순위 높은 항목"
-  //   - 'calendar': 모든 공간에서 grid 바깥 full-width 로 렌더되므로 grid 에서는 항상 숨김
-  const FORCE_HIDDEN_GLOBAL = new Set(['upcoming', 'overdue', 'calendar']);
+  const FORCE_HIDDEN_GLOBAL = new Set(['upcoming', 'overdue']);
   const FORCE_HIDDEN_PM = new Set(['check_sheets']);
   const isHiddenForPurpose = (id: string) => {
     if (FORCE_HIDDEN_GLOBAL.has(id)) return true;

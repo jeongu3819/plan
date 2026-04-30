@@ -434,10 +434,10 @@ export default function SheetRenderer({
                     verticalAlign: 'middle',
                     textAlign: (cell?.align as any) || 'left',
                     cursor: isEditableHoverable ? 'text' : 'default',
-                    overflow: 'hidden',
                     wordBreak: 'break-word',
                     overflowWrap: 'anywhere',
                     position: showDeleteBtn ? 'relative' : undefined,
+                    height: 'inherit',
                   };
 
                   return (
