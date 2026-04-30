@@ -145,6 +145,13 @@ def _run_migrations():
                     conn.execute(text("ALTER TABLE sheet_executions ADD COLUMN hidden_cols JSON NULL"))
                 else:
                     conn.execute(text("ALTER TABLE sheet_executions ADD COLUMN hidden_cols TEXT"))
+        # 실행본에서 숨긴 행 인덱스 배열
+        if "hidden_rows" not in cols:
+            with engine.begin() as conn:
+                if engine.dialect.name == "mysql":
+                    conn.execute(text("ALTER TABLE sheet_executions ADD COLUMN hidden_rows JSON NULL"))
+                else:
+                    conn.execute(text("ALTER TABLE sheet_executions ADD COLUMN hidden_rows TEXT"))
 
     if "sheet_execution_mappings" not in insp.get_table_names():
         from app.models import SheetExecutionMapping
@@ -6541,6 +6548,7 @@ def get_sheet_execution(execution_id: int, db: Session = Depends(get_db)):
         "template_structure": template.structure if template else {},
         "template_name": template.name if template else "",
         "hidden_cols": execution.hidden_cols or [],
+        "hidden_rows": execution.hidden_rows or [],
         "items": [
             {
                 "id": item.id,
@@ -6818,6 +6826,39 @@ def update_sheet_hidden_cols(
     execution.hidden_cols = cleaned
     db.commit()
     return {"hidden_cols": cleaned}
+
+
+@app.patch("/api/sheet-executions/{execution_id}/hidden-rows")
+def update_sheet_hidden_rows(
+    execution_id: int,
+    body: dict = Body(...),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    """실행본에서 숨길 행 인덱스 배열 저장 (template은 변경하지 않음).
+    body: { "hidden_rows": [int, ...] }
+    """
+    execution = db.query(SheetExecution).filter(SheetExecution.id == execution_id).first()
+    if not execution:
+        raise HTTPException(404, "Execution not found")
+    if execution.status == "completed":
+        raise HTTPException(400, "이미 완료된 실행입니다")
+
+    raw = body.get("hidden_rows") or []
+    if not isinstance(raw, list):
+        raise HTTPException(400, "hidden_rows must be an array")
+    cleaned = sorted({int(v) for v in raw if isinstance(v, (int, float)) and int(v) >= 0})
+
+    # 헤더 행은 삭제 불가
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+    structure = (template.structure if template else {}) or {}
+    header_row_idx = structure.get("header_row_idx")
+    if isinstance(header_row_idx, int) and header_row_idx in cleaned:
+        raise HTTPException(400, f"헤더 행은 삭제할 수 없습니다 (row={header_row_idx})")
+
+    execution.hidden_rows = cleaned
+    db.commit()
+    return {"hidden_rows": cleaned}
 
 
 @app.post("/api/sheet-executions/{execution_id}/copy")

@@ -1118,6 +1118,14 @@ export const api = {
     );
     return res.data;
   },
+  updateSheetHiddenRows: async (executionId: number, hiddenRows: number[], userId: number): Promise<{ hidden_rows: number[] }> => {
+    const res = await client.patch(
+      `/sheet-executions/${executionId}/hidden-rows`,
+      { hidden_rows: hiddenRows },
+      { params: { user_id: requireUserId(userId) } },
+    );
+    return res.data;
+  },
   copySheetExecution: async (executionId: number, title: string, includeData: boolean, userId: number): Promise<any> => {
     const res = await client.post(`/sheet-executions/${executionId}/copy`, null, { params: { title, include_data: includeData, user_id: requireUserId(userId) } });
     return res.data;

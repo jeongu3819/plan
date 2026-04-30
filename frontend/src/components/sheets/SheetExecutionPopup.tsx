@@ -152,6 +152,26 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     setPendingDeleteCol(null);
   };
 
+  // 삭제(숨김) 행 관리 — execution 단위로 저장
+  const hiddenRows: number[] = (execution as any)?.hidden_rows || [];
+  const [pendingDeleteRow, setPendingDeleteRow] = useState<number | null>(null);
+  const hiddenRowsMut = useMutation({
+    mutationFn: (rows: number[]) => api.updateSheetHiddenRows(executionId!, rows, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
+    },
+    onError: (e: any) => alert(e?.response?.data?.detail || '행 삭제 실패'),
+  });
+  const handleDeleteRow = useCallback((rowIdx: number) => {
+    setPendingDeleteRow(rowIdx);
+  }, []);
+  const confirmDeleteRow = () => {
+    if (pendingDeleteRow == null) return;
+    const next = Array.from(new Set([...hiddenRows, pendingDeleteRow])).sort((a, b) => a - b);
+    hiddenRowsMut.mutate(next);
+    setPendingDeleteRow(null);
+  };
+
   // v3.11: ALL 진행 — 시트 내 미진행/빈/X 항목을 일괄 진행 처리.
   const markAllMut = useMutation({
     mutationFn: () => api.markAllSheetProgress(executionId!, true, userId),
@@ -398,6 +418,8 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
               readOnly={execution?.status === 'completed'}
               hiddenCols={hiddenCols}
               onDeleteColumn={execution?.status === 'completed' ? undefined : handleDeleteColumn}
+              hiddenRows={hiddenRows}
+              onDeleteRow={execution?.status === 'completed' ? undefined : handleDeleteRow}
               freeTextEdit
             />
           </Box>
@@ -452,6 +474,30 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             variant="contained"
             disabled={hiddenColsMut.isPending}
             onClick={confirmDeleteColumn}
+            sx={{ bgcolor: '#DC2626', '&:hover': { bgcolor: '#B91C1C' } }}
+          >
+            삭제
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 행 삭제 확인 */}
+      <Dialog open={pendingDeleteRow != null} onClose={() => setPendingDeleteRow(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>이 행을 삭제하시겠습니까?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: '#374151', lineHeight: 1.7 }}>
+            · 행 <b>{pendingDeleteRow != null ? pendingDeleteRow + 1 : ''}</b> 이(가) 이 실행본에서 숨겨집니다.<br />
+            · <b>원본 양식(template)</b> 은 변경되지 않으며 다른 실행본에는 영향이 없습니다.<br />
+            · 병합 셀이 포함된 경우 가시 영역에 맞춰 표시 범위가 자동 조정됩니다.<br />
+            · 이미 입력된 데이터는 보존됩니다.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPendingDeleteRow(null)} sx={{ color: '#6B7280' }}>취소</Button>
+          <Button
+            variant="contained"
+            disabled={hiddenRowsMut.isPending}
+            onClick={confirmDeleteRow}
             sx={{ bgcolor: '#DC2626', '&:hover': { bgcolor: '#B91C1C' } }}
           >
             삭제

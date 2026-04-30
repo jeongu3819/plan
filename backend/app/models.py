@@ -563,6 +563,8 @@ class SheetExecution(Base):
 
     # 사용자가 실행본에서 숨긴 컬럼 인덱스 배열 (template.structure는 그대로 유지)
     hidden_cols = Column(JSON, nullable=True)
+    # 사용자가 실행본에서 숨긴 행 인덱스 배열 (template.structure는 그대로 유지)
+    hidden_rows = Column(JSON, nullable=True)
 
     __table_args__ = (
         Index("ix_sheet_exec_template", "template_id", "started_at"),

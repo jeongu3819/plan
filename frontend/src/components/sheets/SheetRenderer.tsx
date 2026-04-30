@@ -45,6 +45,10 @@ interface Props {
   hiddenCols?: number[];
   /** 헤더 셀에 컬럼 삭제 버튼을 표시하고 클릭 시 호출. 미제공 시 버튼 숨김. */
   onDeleteColumn?: (colIdx: number) => void;
+  /** 실행본에서 숨김 처리된 행 인덱스. template은 그대로 두고 렌더링 시점에만 가린다. */
+  hiddenRows?: number[];
+  /** 행의 가장 왼쪽 가시 셀에 행 삭제 버튼을 표시하고 클릭 시 호출. 미제공 시 버튼 숨김. */
+  onDeleteRow?: (rowIdx: number) => void;
   /** 모든 일반 텍스트 셀(헤더 아래/체크/상태/점검일시/숨김 제외)을 자유 편집 허용 */
   freeTextEdit?: boolean;
 }
@@ -176,7 +180,7 @@ export default function SheetRenderer({
   columnRoles,
   onCheckChange, onValueChange, onStatusChange, readOnly,
   templatePreview,
-  hiddenCols, onDeleteColumn, freeTextEdit,
+  hiddenCols, onDeleteColumn, hiddenRows, onDeleteRow, freeTextEdit,
 }: Props) {
   const { cells, merges, col_widths, row_heights, total_rows, total_cols, checkable_cells } = structure;
 
@@ -265,44 +269,54 @@ export default function SheetRenderer({
   }, [effectiveRoles, readOnly]);
 
   const [editingCell, setEditingCell] = useState<string | null>(null);
+  const [hoveredRow, setHoveredRow] = useState<number | null>(null);
 
   // 실행본에서 숨긴 컬럼 인덱스 (Set lookup)
   const hiddenColSet = useMemo(() => new Set<number>(hiddenCols || []), [hiddenCols]);
+  // 실행본에서 숨긴 행 인덱스 (Set lookup)
+  const hiddenRowSet = useMemo(() => new Set<number>(hiddenRows || []), [hiddenRows]);
 
   // Build hidden cells set + merge origin lookup
   //  v3.5: HTML <table> + rowSpan/colSpan으로 렌더링하므로 hidden 셀은 그냥 skip하면 됨
   //        (브라우저 table layout이 자동으로 병합 영역을 처리)
-  //  hiddenCols가 있으면 병합 origin을 첫 가시 컬럼으로 옮기고 colSpan을 가시 개수로 줄인다.
+  //  hiddenCols/hiddenRows가 있으면 병합 origin을 첫 가시 행/컬럼으로 옮기고 span을 가시 개수로 줄인다.
   const { hiddenCells, mergeAt } = useMemo(() => {
     const set = new Set<string>();
     const originMap = new Map<string, { rowSpan: number; colSpan: number }>();
     for (const merge of (merges || [])) {
-      const rs = merge.endRow - merge.startRow + 1;
-      let visibleCount = 0;
+      let visibleRowCount = 0;
+      let firstVisibleRow = -1;
+      for (let r = merge.startRow; r <= merge.endRow; r++) {
+        if (!hiddenRowSet.has(r)) {
+          visibleRowCount++;
+          if (firstVisibleRow < 0) firstVisibleRow = r;
+        }
+      }
+      let visibleColCount = 0;
       let firstVisibleCol = -1;
       for (let c = merge.startCol; c <= merge.endCol; c++) {
         if (!hiddenColSet.has(c)) {
-          visibleCount++;
+          visibleColCount++;
           if (firstVisibleCol < 0) firstVisibleCol = c;
         }
       }
-      if (visibleCount === 0 || firstVisibleCol < 0) {
+      if (visibleRowCount === 0 || visibleColCount === 0 || firstVisibleRow < 0 || firstVisibleCol < 0) {
         // 병합 전체가 가려진 경우 — 모두 hidden 처리
         for (let r = merge.startRow; r <= merge.endRow; r++) {
           for (let c = merge.startCol; c <= merge.endCol; c++) set.add(`${r}-${c}`);
         }
         continue;
       }
-      originMap.set(`${merge.startRow}-${firstVisibleCol}`, { rowSpan: rs, colSpan: visibleCount });
+      originMap.set(`${firstVisibleRow}-${firstVisibleCol}`, { rowSpan: visibleRowCount, colSpan: visibleColCount });
       for (let r = merge.startRow; r <= merge.endRow; r++) {
         for (let c = merge.startCol; c <= merge.endCol; c++) {
-          if (r === merge.startRow && c === firstVisibleCol) continue;
+          if (r === firstVisibleRow && c === firstVisibleCol) continue;
           set.add(`${r}-${c}`);
         }
       }
     }
     return { hiddenCells: set, mergeAt: originMap };
-  }, [merges, hiddenColSet]);
+  }, [merges, hiddenColSet, hiddenRowSet]);
 
   const colWidths = useMemo(() => {
     const widths: number[] = [];
@@ -369,6 +383,24 @@ export default function SheetRenderer({
   // v3.5: 헤더 행 인덱스
   const headerRowIdx = (structure as any).header_row_idx ?? 0;
 
+  // 행 삭제 버튼을 어느 셀에 띄울지 — 각 행에서 가장 왼쪽의 "실제로 렌더되는" 셀 위치
+  // (hidden col 이거나 merge 로 흡수된 셀은 건너뜀)
+  const rowDeleteAnchorCol = useMemo(() => {
+    const map = new Map<number, number>();
+    if (!onDeleteRow) return map;
+    for (let r = 0; r < total_rows; r++) {
+      if (hiddenRowSet.has(r)) continue;
+      if (r === headerRowIdx) continue;
+      for (let c = 0; c < total_cols; c++) {
+        if (hiddenColSet.has(c)) continue;
+        if (hiddenCells.has(`${r}-${c}`)) continue;
+        map.set(r, c);
+        break;
+      }
+    }
+    return map;
+  }, [onDeleteRow, total_rows, total_cols, hiddenRowSet, hiddenColSet, hiddenCells, headerRowIdx]);
+
   return (
     <Box sx={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 1, bgcolor: '#f3f4f6', p: 2 }}>
       <Box sx={{
@@ -399,8 +431,14 @@ export default function SheetRenderer({
             ))}
           </colgroup>
           <tbody>
-            {Array.from({ length: total_rows }, (_, rowIdx) => (
-              <tr key={rowIdx}>
+            {Array.from({ length: total_rows }, (_, rowIdx) => {
+              if (hiddenRowSet.has(rowIdx)) return null;
+              return (
+              <tr
+                key={rowIdx}
+                onMouseEnter={onDeleteRow ? () => setHoveredRow(rowIdx) : undefined}
+                onMouseLeave={onDeleteRow ? () => setHoveredRow((cur) => (cur === rowIdx ? null : cur)) : undefined}
+              >
                 {Array.from({ length: total_cols }, (_, colIdx) => {
                   const key = `${rowIdx}-${colIdx}`;
                   // 실행본에서 삭제(숨김)된 컬럼은 렌더 자체를 건너뛴다
@@ -453,6 +491,9 @@ export default function SheetRenderer({
                   const showDeleteBtn = !!onDeleteColumn && !readOnly && !templatePreview
                     && rowIdx === headerRowIdx
                     && !protectedColSet.has(colIdx);
+                  const showRowDeleteBtn = !!onDeleteRow && !readOnly && !templatePreview
+                    && rowIdx !== headerRowIdx
+                    && rowDeleteAnchorCol.get(rowIdx) === colIdx;
 
                   const tdStyle: React.CSSProperties = {
                     padding: '2px 4px',
@@ -466,7 +507,7 @@ export default function SheetRenderer({
                     cursor: isEditableHoverable ? 'text' : 'default',
                     wordBreak: 'break-word',
                     overflowWrap: 'anywhere',
-                    position: showDeleteBtn ? 'relative' : undefined,
+                    position: (showDeleteBtn || showRowDeleteBtn) ? 'relative' : undefined,
                     height: 'inherit',
                   };
 
@@ -674,11 +715,45 @@ export default function SheetRenderer({
                       ×
                     </button>
                   )}
+                  {showRowDeleteBtn && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onDeleteRow?.(rowIdx); }}
+                      title="이 행 삭제"
+                      style={{
+                        position: 'absolute',
+                        left: 1,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        width: 16,
+                        height: 16,
+                        padding: 0,
+                        border: 'none',
+                        borderRadius: '50%',
+                        background: 'rgba(239, 68, 68, 0.85)',
+                        color: '#fff',
+                        fontSize: 11,
+                        lineHeight: '14px',
+                        cursor: 'pointer',
+                        display: hoveredRow === rowIdx ? 'flex' : 'none',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        opacity: 0.85,
+                        transition: 'opacity 0.15s',
+                        zIndex: 5,
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.85'; }}
+                    >
+                      ×
+                    </button>
+                  )}
                     </td>
                   );
                 })}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </Box>
