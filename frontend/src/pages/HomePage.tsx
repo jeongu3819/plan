@@ -355,7 +355,7 @@ const taskDateRange = (t: Task): { from: Date; to: Date; single: boolean } | nul
 const DashboardCalendar: React.FC<{
   stats: DashboardStats | undefined;
   overviewData: any;
-  openDrawer: (task: Task) => void;
+  openDrawer: (task?: Task | null, projectId?: number, initialData?: Partial<Task> | null) => void;
   /** flat: 외곽 Paper/패딩 제거 — Dashboard widget 안에 들어갈 때 박스-인-박스 회피용 */
   flat?: boolean;
 }> = ({ stats, overviewData, openDrawer, flat }) => {

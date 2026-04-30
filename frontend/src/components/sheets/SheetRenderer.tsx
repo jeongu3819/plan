@@ -53,7 +53,6 @@ interface Props {
   freeTextEdit?: boolean;
 }
 
-const DEFAULT_ROW_HEIGHT = 22; // ~15pt in Excel
 const MIN_COL_WIDTH = 24;
 
 function borderStyle(style?: string): string {
@@ -182,7 +181,7 @@ export default function SheetRenderer({
   templatePreview,
   hiddenCols, onDeleteColumn, hiddenRows, onDeleteRow, freeTextEdit,
 }: Props) {
-  const { cells, merges, col_widths, row_heights, total_rows, total_cols, checkable_cells } = structure;
+  const { cells, merges, col_widths, total_rows, total_cols, checkable_cells } = structure;
 
   // columnRoles prop이 없으면 structure.column_roles를 자동 사용 (v3.2)
   const effectiveRoles: ColumnRoleMapping | null | undefined = columnRoles ?? (structure as any).column_roles;
@@ -339,16 +338,6 @@ export default function SheetRenderer({
     }
     return s;
   }, [effectiveRoles]);
-
-  const rowHeights = useMemo(() => {
-    const heights: number[] = [];
-    for (let r = 0; r < total_rows; r++) {
-      const h = row_heights?.[r] || 15;
-      // Excel 15pt -> ~20px
-      heights.push(Math.max(DEFAULT_ROW_HEIGHT, Math.round(h * 1.33)));
-    }
-    return heights;
-  }, [row_heights, total_rows]);
 
   const totalWidth = colWidths.reduce((a, b, i) => (hiddenColSet.has(i) ? a : a + b), 0);
 

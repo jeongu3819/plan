@@ -272,14 +272,6 @@ const TaskDrawer: React.FC = () => {
         : null;
     const displayProgress = activityProgress !== null ? activityProgress : (formData.progress || 0);
 
-    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const selectedFiles = e.target.files;
-        if (!selectedFiles) return;
-        setUploading(true);
-        Array.from(selectedFiles).forEach((file) => uploadFileMutation.mutate(file));
-        if (fileInputRef.current) fileInputRef.current.value = '';
-    };
-
     const handleChange = (field: keyof Task, value: any) => {
         setFormData((prev) => ({ ...prev, [field]: value }));
     };
@@ -768,7 +760,7 @@ const TaskDrawer: React.FC = () => {
                     )}
 
                     {/* v3.13: 상세 기능 영역 (보드 생성 시에도 노출, 캘린더 생성 시에만 프로젝트 선택 후 노출) */}
-                    {(!isCalendarCreateMode || selectedTask?.id) && (
+                    {(!isCalendarCreateMode || formData.project_id) && (
                         <>
                         {/* URL Attachments */}
                         <Box>
