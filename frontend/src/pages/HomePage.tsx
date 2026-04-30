@@ -1766,25 +1766,6 @@ const HomePage: React.FC = () => {
           userId={currentUserId}
           onClose={() => setPopupExecId(null)}
         />
-        {/* ── Dashboard Calendar (Full width, Top) ── */}
-        {visibleWidgets.includes('calendar') && calendarPosition === 'top' && (
-          <Box
-            sx={{
-              mb: 2,
-              opacity: introPhase === 'done' ? 1 : 0,
-              transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
-              transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
-            }}
-          >
-            <DashboardCalendar
-              stats={stats}
-              overviewData={overviewData}
-              openDrawer={openDrawer}
-              position="top"
-              onTogglePosition={toggleCalendarPosition}
-            />
-          </Box>
-        )}
         {/* ── Sortable Widget Grid ── */}
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={displayOrder} strategy={rectSortingStrategy}>
@@ -1806,26 +1787,6 @@ const HomePage: React.FC = () => {
             </Box>
           </SortableContext>
         </DndContext>
-
-        {/* ── Dashboard Calendar (Full width, Bottom) ── */}
-        {visibleWidgets.includes('calendar') && calendarPosition === 'bottom' && (
-          <Box
-            sx={{
-              mt: 2,
-              opacity: introPhase === 'done' ? 1 : 0,
-              transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
-              transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
-            }}
-          >
-            <DashboardCalendar
-              stats={stats}
-              overviewData={overviewData}
-              openDrawer={openDrawer}
-              position="bottom"
-              onTogglePosition={toggleCalendarPosition}
-            />
-          </Box>
-        )}
         </>
       )}
 
