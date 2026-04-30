@@ -50,11 +50,14 @@ const TaskDrawer: React.FC = () => {
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // mode flag: calendar 날짜 클릭으로 생성 중인가?
+    const isCalendarCreateMode = !selectedTask && (drawerInitialData as any)?.isCalendarCreate === true;
+
     // Fetch space projects for creation selection
     const { data: spaceProjects = [] } = useQuery<any[]>({
-        queryKey: ['spaceProjects', currentSpaceId],
-        queryFn: () => api.getProjects(currentSpaceId!),
-        enabled: !!currentSpaceId && !selectedTask,
+        queryKey: ['spaceProjects', currentUserId, currentSpaceId],
+        queryFn: () => api.getProjects(currentUserId, currentSpaceId),
+        enabled: !!currentSpaceId && isCalendarCreateMode,
     });
 
     // Fetch users (all - for fallback/display)
@@ -64,7 +67,7 @@ const TaskDrawer: React.FC = () => {
     });
 
     // Fetch project members - only assignable (not viewer)
-    const activeProjectId = selectedTask?.project_id || formData.project_id || drawerProjectId;
+    const activeProjectId = selectedTask?.project_id || formData.project_id || (drawerProjectId > 0 ? drawerProjectId : undefined);
     const { data: projectMembers = [] } = useQuery<any[]>({
         queryKey: ['projectMembers', activeProjectId],
         queryFn: () => api.getProjectMembers(activeProjectId!),

@@ -477,7 +477,7 @@ const DashboardCalendar: React.FC<{
             <Box
               key={day.toISOString()}
               onClick={() => {
-                openDrawer(null, 0, { start_date: dateKey, due_date: dateKey });
+                openDrawer(null, 0, { start_date: dateKey, due_date: dateKey, isCalendarCreate: true } as any);
               }}
               sx={{
                 minHeight: 110,
