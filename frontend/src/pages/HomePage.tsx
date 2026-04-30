@@ -660,55 +660,21 @@ const HomePage: React.FC = () => {
   //   { bySpace: { [spaceId]: { widgetIds, widgetOrder, widgetHeights, gridLayouts } },
   //     widgetIds?, widgetOrder?, widgetHeights?, gridLayouts?  ← 레거시 (단일 공간) }
   const spaceKey: string = currentSpaceId != null ? String(currentSpaceId) : '__no_space__';
+
+  const spacePurposeForDefaults: string = (overviewData as any)?.purpose || 'project_management';
+  const defaultVisibleForPurpose =
+    spacePurposeForDefaults === 'project_management' ? DEFAULT_VISIBLE_PM : DEFAULT_VISIBLE;
+
   const layoutForSpace = (() => {
     const bySpace = (savedLayout as any)?.bySpace;
     if (bySpace && typeof bySpace === 'object' && bySpace[spaceKey]) {
       return bySpace[spaceKey];
     }
+    // v3.12: 해당 공간의 설정이 없을 때, '프로젝트 관리' 목적이면 무조건 기본 OFF 정책 적용.
+    // 타 목적 공간은 기존 legacy 설정을 마이그레이션 용도로 fallback 허용.
+    if (spacePurposeForDefaults === 'project_management') return {};
     return savedLayout || {};
   })();
-
-  const saveMutation = useMutation({
-    mutationFn: (spaceLayout: any) => {
-      const prev = (savedLayout as any) || {};
-      const prevBySpace = (prev.bySpace && typeof prev.bySpace === 'object') ? prev.bySpace : {};
-      const merged = {
-        ...prev,
-        bySpace: {
-          ...prevBySpace,
-          [spaceKey]: {
-            ...(prevBySpace[spaceKey] || {}),
-            ...spaceLayout,
-          },
-        },
-      };
-      return api.saveUserLayout(currentUserId, merged);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['layout', currentUserId] });
-    },
-  });
-
-  const patchLayoutCache = (patch: Record<string, any>) => {
-    queryClient.setQueryData(['layout', currentUserId], (old: any) => {
-      const base = old || {};
-      const baseBySpace = (base.bySpace && typeof base.bySpace === 'object') ? base.bySpace : {};
-      return {
-        ...base,
-        bySpace: {
-          ...baseBySpace,
-          [spaceKey]: {
-            ...(baseBySpace[spaceKey] || {}),
-            ...patch,
-          },
-        },
-      };
-    });
-  };
-
-  const spacePurposeForDefaults: string = (overviewData as any)?.purpose || 'project_management';
-  const defaultVisibleForPurpose =
-    spacePurposeForDefaults === 'project_management' ? DEFAULT_VISIBLE_PM : DEFAULT_VISIBLE;
 
   const widgetOrder: string[] =
     layoutForSpace?.widgetOrder && Array.isArray(layoutForSpace.widgetOrder)
