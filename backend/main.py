@@ -3566,6 +3566,48 @@ def delete_task_activity(activity_id: int, db: Session = Depends(get_db)):
     _sync_task_progress(db, task_id)
     return {"ok": True}
 
+def _recompute_sheet_progress(db: Session, execution: "SheetExecution") -> tuple[int, int, int]:
+    """Recompute (checked_count, total, progress) for a sheet execution, counting only
+    items at template's checkable_cells positions. This guards against historical data
+    corruption where mark-all overwrote progress_date/remark items with checked=True,
+    which would otherwise cap progress at 100% even after a status flip back to X.
+
+    Mutates execution.checked_items / execution.progress in place. Caller must commit.
+    Returns (checked_count, effective_total, progress).
+    """
+    template = db.query(SheetTemplate).filter(SheetTemplate.id == execution.template_id).first()
+    structure = (template.structure if template else {}) or {}
+    checkable_cells = structure.get("checkable_cells") or []
+    checkable_positions = {(int(c["row"]), int(c["col"])) for c in checkable_cells if "row" in c and "col" in c}
+
+    items = db.query(SheetExecutionItem).filter(
+        SheetExecutionItem.execution_id == execution.id
+    ).all()
+
+    # Fallback: 옛 데이터(checkable_cells 미저장 등) 는 기존 단순 카운트 유지.
+    if not checkable_positions:
+        total = execution.total_items or len(items) or 1
+        na_count = sum(1 for it in items if it.value == "N/A")
+        checked_count = sum(1 for it in items if it.checked)
+    else:
+        total = len(checkable_positions)
+        na_count = 0
+        checked_count = 0
+        for it in items:
+            if (it.row_idx, it.col_idx) not in checkable_positions:
+                continue
+            if it.value == "N/A":
+                na_count += 1
+            elif it.checked:
+                checked_count += 1
+
+    effective_total = max(1, total - na_count)
+    progress = min(100, int(checked_count / effective_total * 100))
+    execution.checked_items = checked_count
+    execution.progress = progress
+    return checked_count, total, progress
+
+
 def _sync_task_progress(db: Session, task_id: int, force_zero_if_empty: bool = False):
     """Recalculate task progress from checkbox activities and auto-sync status.
 
@@ -6747,20 +6789,9 @@ def upsert_sheet_execution_cell(
             item.memo = body.memo
 
     db.commit()
-    
-    # 진행률 재계산 — N/A는 모수에서 제외
-    total = execution.total_items or 1
-    na_count = db.query(SheetExecutionItem).filter(
-        SheetExecutionItem.execution_id == execution_id,
-        SheetExecutionItem.value == "N/A",
-    ).count()
-    effective_total = max(1, total - na_count)
-    checked_count = db.query(SheetExecutionItem).filter(
-        SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
-    ).count()
-    progress = min(100, int((checked_count / effective_total) * 100))
-    execution.checked_items = checked_count
-    execution.progress = progress
+
+    # 진행률 재계산 — checkable_cells 위치의 항목만 모수에 포함 (N/A 제외)
+    checked_count, total, progress = _recompute_sheet_progress(db, execution)
     db.commit()
 
     # v3.4: task progress 동기화 (시트만 있는 task 대응)
@@ -7046,6 +7077,11 @@ def mark_all_sheet_progress(
     except Exception:
         progress_date_col = None
 
+    # 체크 가능 셀 위치만 ALL 진행 대상이다. 진행일자/비고/담당자 등 비체크 셀은 건드리지 않는다.
+    structure = (template.structure if template else {}) or {}
+    checkable_cells = structure.get("checkable_cells") or []
+    checkable_positions = {(int(c["row"]), int(c["col"])) for c in checkable_cells if "row" in c and "col" in c}
+
     def _col_letter(col_idx: int) -> str:
         s = ""
         n = col_idx + 1
@@ -7067,6 +7103,9 @@ def mark_all_sheet_progress(
     skipped_na_count = 0
     progressed_rows: set[int] = set()
     for it in items:
+        # 체크 가능 셀이 아닌 항목(진행일자/비고 등)은 건너뛴다.
+        if checkable_positions and (it.row_idx, it.col_idx) not in checkable_positions:
+            continue
         if it.value == "N/A":
             if body.keep_na:
                 skipped_na_count += 1
@@ -7108,18 +7147,8 @@ def mark_all_sheet_progress(
             user_id=user_id,
         ))
 
-    # 진행률 재계산 (N/A는 모수에서 제외 — 기존 정책 동일)
-    total = execution.total_items or len(items) or 1
-    na_count = db.query(SheetExecutionItem).filter(
-        SheetExecutionItem.execution_id == execution_id,
-        SheetExecutionItem.value == "N/A",
-    ).count()
-    effective_total = max(1, total - na_count)
-    checked_count = db.query(SheetExecutionItem).filter(
-        SheetExecutionItem.execution_id == execution_id, SheetExecutionItem.checked == True
-    ).count()
-    execution.checked_items = checked_count
-    execution.progress = min(100, int(checked_count / effective_total * 100))
+    # 진행률 재계산 — checkable_cells 위치 항목만 모수 (N/A 제외)
+    checked_count, total, _progress = _recompute_sheet_progress(db, execution)
     db.commit()
 
     # Task 동기화

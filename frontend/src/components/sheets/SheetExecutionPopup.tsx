@@ -172,17 +172,6 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     setPendingDeleteRow(null);
   };
 
-  // v3.11: ALL 진행 — 시트 내 미진행/빈/X 항목을 일괄 진행 처리.
-  const markAllMut = useMutation({
-    mutationFn: () => api.markAllSheetProgress(executionId!, true, userId),
-    onSuccess: (response: any) => {
-      queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
-      applyTaskSync(response);
-      setPendingChanges(new Map()); // 서버에서 직접 처리하므로 로컬 pending 비움
-    },
-    onError: (e: any) => alert(e?.response?.data?.detail || 'ALL 진행 처리 실패'),
-  });
-
   const [confirmAllOpen, setConfirmAllOpen] = useState(false);
 
   const [downloading, setDownloading] = useState(false);
@@ -228,6 +217,40 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     },
     [progressDateCol],
   );
+
+  // v3.13: ALL 진행 — 서버 호출 대신 pendingChanges 에 staging.
+  //  · 저장하기 버튼이 활성화되어 사용자가 명시 저장해야 반영된다.
+  //  · 저장은 기존 upsert 경로를 통과하므로 진행률 재계산이 항상 현재 시트 상태 기준이다.
+  //  · 이미 "O" 또는 "N/A" 인 항목은 건너뛴다.
+  const handleApplyMarkAllPending = useCallback(() => {
+    const checkable = execution?.template_structure?.checkable_cells || [];
+    if (checkable.length === 0) return;
+    setPendingChanges(prev => {
+      const next = new Map(prev);
+      const today = todayYmd();
+      const progressedRows = new Set<number>();
+      for (const c of checkable) {
+        const cellRef = c.ref;
+        // 현재 값 — pending 우선, 없으면 서버 항목.
+        const pendingVal = next.get(cellRef)?.value;
+        const serverItem = execution?.items?.find(i => i.cell_ref === cellRef);
+        const currentValue = (pendingVal !== undefined ? pendingVal : (serverItem?.value ?? '')).toString().trim().toUpperCase();
+        if (currentValue === 'N/A') continue;
+        if (currentValue === 'O') continue;
+        const existing = next.get(cellRef) || {};
+        next.set(cellRef, { ...existing, value: 'O', checked: true });
+        progressedRows.add(c.row);
+      }
+      if (progressDateCol !== undefined && progressDateCol >= 0) {
+        for (const rowIdx of progressedRows) {
+          const dateRef = refOf(rowIdx, progressDateCol);
+          const existingDate = next.get(dateRef) || {};
+          next.set(dateRef, { ...existingDate, value: today });
+        }
+      }
+      return next;
+    });
+  }, [execution?.template_structure?.checkable_cells, execution?.items, progressDateCol]);
 
   const handleDownloadClick = async () => {
     if (!executionId || downloading) return;
@@ -349,22 +372,22 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             }}
           />
 
-          {(upsertMut.isPending || markAllMut.isPending || downloading) && (
+          {(upsertMut.isPending || downloading) && (
             <Chip
-              label={downloading ? "다운로드 중..." : markAllMut.isPending ? "ALL 진행 중..." : "저장 중..."}
+              label={downloading ? "다운로드 중..." : "저장 중..."}
               size="small"
               sx={{ bgcolor: alpha('#F59E0B', 0.15), color: '#F59E0B', height: 22, fontSize: '0.62rem' }}
             />
           )}
 
-          {/* v3.11: ALL 진행 — 미진행/빈/X 일괄 진행 처리. completed 시트엔 비활성. */}
+          {/* v3.13: ALL 진행 — 미진행/빈/X 항목을 일괄 진행으로 staging (저장 시 서버 반영). */}
           {execution?.status !== 'completed' && (
             <Chip
               icon={<DoneAllIcon sx={{ fontSize: 14, color: '#fff !important' }} />}
               label="ALL 진행"
               onClick={() => setConfirmAllOpen(true)}
               size="small"
-              disabled={markAllMut.isPending || upsertMut.isPending}
+              disabled={upsertMut.isPending}
               sx={{
                 bgcolor: alpha('#22C55E', 0.85), color: '#fff',
                 fontWeight: 700, fontSize: '0.72rem', height: 26, cursor: 'pointer',
@@ -432,24 +455,24 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
         )}
       </Box>
 
-      {/* v3.11: ALL 진행 확인 모달 */}
+      {/* v3.13: ALL 진행 확인 모달 — staging 만 수행하고 저장 버튼으로 명시 저장. */}
       <Dialog open={confirmAllOpen} onClose={() => setConfirmAllOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ fontWeight: 700 }}>모든 항목을 진행 처리할까요?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ color: '#374151', lineHeight: 1.7 }}>
             · 미진행 / 빈 값 항목을 모두 <b>진행</b>으로 변경합니다.<br />
             · 진행으로 바뀐 행의 <b>진행일자</b>는 오늘 날짜로 자동 입력됩니다.<br />
-            · 이미 <b>N/A</b>로 표시된 항목은 그대로 유지됩니다.
+            · 이미 <b>N/A</b>로 표시된 항목은 그대로 유지됩니다.<br />
+            · 변경 사항은 <b>저장하기</b> 버튼을 눌러야 서버에 반영됩니다.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setConfirmAllOpen(false)} sx={{ color: '#6B7280' }}>취소</Button>
           <Button
             variant="contained"
-            disabled={markAllMut.isPending}
             onClick={() => {
+              handleApplyMarkAllPending();
               setConfirmAllOpen(false);
-              markAllMut.mutate();
             }}
             sx={{ bgcolor: '#22C55E', '&:hover': { bgcolor: '#16A34A' } }}
           >
