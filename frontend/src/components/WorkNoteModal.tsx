@@ -18,7 +18,30 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
 import type { TaskActivity, Task } from '../types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
+import { api, API_URL } from '../api/client';
+
+/** 백엔드가 돌려준 root-relative URL(/api/...)을 절대 URL로 보정.
+ *  - 이미 절대 URL(http://, https://, data:, blob:) 이면 그대로.
+ *  - WorkNote 는 5173(Vite) 에서 동작하지만 백엔드는 8085 라 prepend 필요. */
+const toAbsoluteAttachmentUrl = (url: string): string => {
+    if (!url) return url;
+    if (/^(https?:|data:|blob:)/i.test(url)) return url;
+    const baseUrl = API_URL.replace(/\/api\/?$/, '');
+    return url.startsWith('/') ? `${baseUrl}${url}` : `${baseUrl}/${url}`;
+};
+
+/** 기존에 root-relative 로 저장된 <img src="/api/..."> 들을 in-place 로 절대 URL 로 보정.
+ *  innerHTML 자체는 보존돼야 저장 시 의도치 않은 diff 가 나지 않음. 그래서 src 가 이미
+ *  절대 URL 인 경우는 건드리지 않는다. */
+const normalizeImagesInRoot = (root: HTMLElement) => {
+    const imgs = root.querySelectorAll('img');
+    imgs.forEach((img) => {
+        const raw = img.getAttribute('src') || '';
+        if (!raw) return;
+        if (/^(https?:|data:|blob:)/i.test(raw)) return;
+        img.setAttribute('src', toAbsoluteAttachmentUrl(raw));
+    });
+};
 import {
     DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors,
     DragEndEvent,
@@ -159,6 +182,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     useEffect(() => {
         if (contentRef.current && block.content !== lastSavedContent.current) {
             contentRef.current.innerHTML = block.content || '';
+            normalizeImagesInRoot(contentRef.current);
             lastSavedContent.current = block.content;
         }
     }, [block.content]);
@@ -167,6 +191,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
     useEffect(() => {
         if (contentRef.current && !contentRef.current.innerHTML && block.content) {
             contentRef.current.innerHTML = block.content;
+            normalizeImagesInRoot(contentRef.current);
         }
     }, []);
 
@@ -453,7 +478,7 @@ const SortableBlock: React.FC<SortableBlockProps> = ({
             try {
                 const currentUserId = useAppStore.getState().currentUserId || 1;
                 const response = await api.uploadTaskFile(taskId, file, currentUserId);
-                const imageUrl = response.url;
+                const imageUrl = toAbsoluteAttachmentUrl(response.url);
 
                 const img = document.createElement('img');
                 img.src = imageUrl;
@@ -1193,18 +1218,66 @@ const WorkNoteModal: React.FC<WorkNoteModalProps> = ({ open, onClose, taskId, ta
     }, [blocks]);
 
     const [copied, setCopied] = useState(false);
-    const handleCopyAll = useCallback(() => {
-        const text = blocks.map(b => {
-            const plain = b.content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+    const handleCopyAll = useCallback(async () => {
+        // HTML: <table>, <img>, 스타일 그대로 보존. 외부 (Excel/Word/Notion) 에 붙여넣어도 표 유지.
+        // src 는 절대 URL 로 정규화해야 다른 origin (Excel 등) 에서도 이미지 fetch 가능.
+        const buildBlockHtml = (b: typeof blocks[number]): string => {
+            const isCheckbox = (b.block_type || 'checkbox') === 'checkbox';
+            const tmp = document.createElement('div');
+            tmp.innerHTML = b.content || '';
+            tmp.querySelectorAll('img').forEach((img) => {
+                const raw = img.getAttribute('src') || '';
+                if (raw && !/^(https?:|data:)/i.test(raw)) {
+                    img.setAttribute('src', toAbsoluteAttachmentUrl(raw));
+                }
+                img.removeAttribute('crossorigin');
+            });
+            const inner = tmp.innerHTML;
+            if (isCheckbox) {
+                const mark = b.checked ? '☑' : '☐';
+                return `<div>${mark}&nbsp;${inner}</div>`;
+            }
+            return `<div>${inner}</div>`;
+        };
+        const html = `<div>${blocks.map(buildBlockHtml).join('')}</div>`;
+
+        // Plain text fallback (외부 에디터가 text/plain 만 받는 경우 + 일반 메모장).
+        const buildBlockText = (b: typeof blocks[number]): string => {
+            const tmp = document.createElement('div');
+            tmp.innerHTML = b.content || '';
+            const plain = (tmp.textContent || '').replace(/\u00A0/g, ' ').trim();
             if ((b.block_type || 'checkbox') === 'checkbox') {
                 return `${b.checked ? '[x]' : '[ ]'} ${plain}`;
             }
             return plain;
-        }).join('\n');
-        navigator.clipboard.writeText(text).then(() => {
+        };
+        const text = blocks.map(buildBlockText).join('\n');
+
+        const flash = () => {
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
-        });
+        };
+
+        try {
+            if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+                const item = new ClipboardItem({
+                    'text/html': new Blob([html], { type: 'text/html' }),
+                    'text/plain': new Blob([text], { type: 'text/plain' }),
+                });
+                await navigator.clipboard.write([item]);
+                flash();
+                return;
+            }
+        } catch (err) {
+            // ClipboardItem 미지원 또는 권한 거부 시 fallback
+            console.warn('clipboard.write failed, falling back to writeText:', err);
+        }
+        try {
+            await navigator.clipboard.writeText(text);
+            flash();
+        } catch (err) {
+            console.error('clipboard.writeText failed:', err);
+        }
     }, [blocks]);
 
     const checkboxBlocks = blocks.filter(b => (b.block_type || 'checkbox') === 'checkbox');

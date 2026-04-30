@@ -373,8 +373,23 @@ export function ProjectGroupedSheetList({
           {groups.map((g) => {
             const stats = computeGroupStats(g.sheets);
             const isOpen = expanded[g.key] ?? false;
+            // flat 모드(Dashboard widget 안): 외곽 SortableWidget Paper 가 이미 카드 역할을 하므로
+            // group 단위 border/bg 를 제거해 박스-인-박스 회피. divider 만 얇게 남김.
+            const groupBoxSx = flat
+              ? {
+                  borderBottom: `1px solid ${alpha(color, 0.1)}`,
+                  bgcolor: 'transparent',
+                  overflow: 'hidden' as const,
+                  '&:last-child': { borderBottom: 'none' },
+                }
+              : {
+                  border: `1px solid ${alpha(color, 0.15)}`,
+                  borderRadius: 1.5,
+                  bgcolor: alpha(color, 0.02),
+                  overflow: 'hidden' as const,
+                };
             return (
-              <Box key={g.key} sx={{ border: `1px solid ${alpha(color, 0.15)}`, borderRadius: 1.5, bgcolor: alpha(color, 0.02), overflow: 'hidden' }}>
+              <Box key={g.key} sx={groupBoxSx}>
                 <Box
                   onClick={() => setExpanded((prev) => ({ ...prev, [g.key]: !isOpen }))}
                   sx={{
@@ -415,18 +430,28 @@ export function ProjectGroupedSheetList({
                   <Box sx={{ maxHeight: 260, overflowY: 'auto', borderTop: `1px solid ${alpha(color, 0.1)}`, p: 0.75, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                     {g.sheets.map((s) => {
                       const isDone = (s.progress ?? 0) >= 100 || s.status === 'completed';
-                      return (
-                        <Box
-                          key={s.id}
-                          onClick={() => onSheetClick?.(s.id)}
-                          sx={{
+                      // flat 모드: 박스-인-박스 회피 위해 row 외곽 border + 흰 bg 제거.
+                      const sheetRowSx = flat
+                        ? {
+                            display: 'flex', alignItems: 'center', gap: 1,
+                            py: 0.6, px: 0.9, borderRadius: 1, cursor: 'pointer',
+                            bgcolor: 'transparent',
+                            '&:hover': { bgcolor: alpha(color, 0.06) },
+                            transition: 'background-color 0.15s',
+                          }
+                        : {
                             display: 'flex', alignItems: 'center', gap: 1,
                             py: 0.6, px: 0.9, borderRadius: 1, cursor: 'pointer',
                             border: `1px solid ${alpha(color, 0.1)}`,
                             bgcolor: 'background.paper',
                             '&:hover': { bgcolor: alpha(color, 0.04), borderColor: alpha(color, 0.3) },
                             transition: 'all 0.15s',
-                          }}
+                          };
+                      return (
+                        <Box
+                          key={s.id}
+                          onClick={() => onSheetClick?.(s.id)}
+                          sx={sheetRowSx}
                         >
                           <Typography variant="body2" sx={{ fontSize: '0.82rem', fontWeight: 600, flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {s.title}

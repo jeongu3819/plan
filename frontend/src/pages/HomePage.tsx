@@ -170,6 +170,9 @@ const ALL_WIDGETS: WidgetDef[] = [
 
 const DEFAULT_VISIBLE = ALL_WIDGETS.map(w => w.id);
 
+/** project_management 모드의 기본 visible — 사용자가 widget palette 에서 켜기 전에는 캘린더 숨김. */
+const DEFAULT_VISIBLE_PM = DEFAULT_VISIBLE.filter(id => id !== 'calendar');
+
 const statusColors: Record<string, string> = {
   todo: '#6B7280',
   in_progress: '#2955FF',
@@ -347,7 +350,9 @@ const DashboardCalendar: React.FC<{
   stats: DashboardStats | undefined;
   overviewData: any;
   openDrawer: (task: Task) => void;
-}> = ({ stats, overviewData, openDrawer }) => {
+  /** flat: 외곽 Paper/패딩 제거 — Dashboard widget 안에 들어갈 때 박스-인-박스 회피용 */
+  flat?: boolean;
+}> = ({ stats, overviewData, openDrawer, flat }) => {
   const [calMonth, setCalMonth] = useState(new Date());
   const [overflowAnchor, setOverflowAnchor] = useState<HTMLElement | null>(null);
   const [overflowDate, setOverflowDate] = useState<Date | null>(null);
@@ -387,14 +392,22 @@ const DashboardCalendar: React.FC<{
     setOverflowAnchor(e.currentTarget);
   };
 
+  const Wrapper: React.ElementType = flat ? Box : Paper;
+  const wrapperProps = flat ? {} : { variant: 'outlined' as const };
+  const wrapperSx = flat
+    ? { p: 0, bgcolor: 'transparent' }
+    : { p: 2, borderRadius: 3, bgcolor: '#fff', border: '1px solid rgba(0,0,0,0.08)' };
+
   return (
-    <Paper variant="outlined" sx={{ p: 2, borderRadius: 3, bgcolor: '#fff', border: '1px solid rgba(0,0,0,0.08)' }}>
+    <Wrapper {...wrapperProps} sx={wrapperSx}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CalendarMonthIcon sx={{ color: '#2955FF', fontSize: '1.4rem' }} />
-          <Typography variant="h6" sx={{ fontWeight: 800, color: '#1A1D29' }}>
-            월간 작업 캘린더
-          </Typography>
+          {!flat && <CalendarMonthIcon sx={{ color: '#2955FF', fontSize: '1.4rem' }} />}
+          {!flat && (
+            <Typography variant="h6" sx={{ fontWeight: 800, color: '#1A1D29' }}>
+              월간 작업 캘린더
+            </Typography>
+          )}
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <IconButton size="small" onClick={() => setCalMonth(subMonths(calMonth, 1))} sx={{ bgcolor: '#F3F4F6', '&:hover': { bgcolor: '#E5E7EB' } }}>
@@ -584,7 +597,7 @@ const DashboardCalendar: React.FC<{
           })}
         </Box>
       </Popover>
-    </Paper>
+    </Wrapper>
   );
 };
 
@@ -637,16 +650,21 @@ const HomePage: React.FC = () => {
     },
   });
 
+  // 공간 운영 목적 (project_management 면 캘린더는 widget 으로만 동작) — 기본값 결정에 필요해서 일찍 평가.
+  const spacePurposeForDefaults: string = (overviewData as any)?.purpose || 'project_management';
+  const defaultVisibleForPurpose =
+    spacePurposeForDefaults === 'project_management' ? DEFAULT_VISIBLE_PM : DEFAULT_VISIBLE;
+
   // Visible widgets + order — saved preference or default
   const widgetOrder: string[] =
     savedLayout?.widgetOrder && Array.isArray(savedLayout.widgetOrder)
       ? (savedLayout.widgetOrder as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
-      : DEFAULT_VISIBLE;
+      : defaultVisibleForPurpose;
 
   const visibleWidgets: string[] =
     savedLayout?.widgetIds && Array.isArray(savedLayout.widgetIds)
       ? (savedLayout.widgetIds as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
-      : DEFAULT_VISIBLE;
+      : defaultVisibleForPurpose;
 
   // Per-widget heights (persisted in layout)
   const widgetHeights: Record<string, number> =
@@ -686,13 +704,13 @@ const HomePage: React.FC = () => {
   const resetToDefault = () => {
     queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
       ...old,
-      widgetIds: DEFAULT_VISIBLE,
-      widgetOrder: DEFAULT_VISIBLE,
+      widgetIds: defaultVisibleForPurpose,
+      widgetOrder: defaultVisibleForPurpose,
       widgetHeights: {},
     }));
     saveMutation.mutate({
-      widgetIds: DEFAULT_VISIBLE,
-      widgetOrder: DEFAULT_VISIBLE,
+      widgetIds: defaultVisibleForPurpose,
+      widgetOrder: defaultVisibleForPurpose,
       widgetHeights: {},
       gridLayouts: {},
     });
@@ -1279,8 +1297,15 @@ const HomePage: React.FC = () => {
           </>
         );
       case 'calendar':
-        // Calendar is now rendered outside the grid
-        return null;
+        // 비-PM 공간: grid 위에서 full-width 로 렌더 (아래 above-grid 블록).
+        // PM 공간: widget 으로 등록 → 여기서 렌더 (다른 widget 과 동일하게 SortableWidget 안, flat 모드).
+        if (spacePurpose !== 'project_management') return null;
+        return (
+          <>
+            <WidgetHeader def={def} />
+            <DashboardCalendar stats={stats} overviewData={overviewData} openDrawer={openDrawer} flat />
+          </>
+        );
       case 'today_tasks':
         return (
           <>
@@ -1474,17 +1499,25 @@ const HomePage: React.FC = () => {
   };
 
   // Space purpose drives which widgets are renderable in the grid.
-  const spacePurpose: string = (overviewData as any)?.purpose || 'project_management';
+  // (defaultVisibleForPurpose 계산용으로 위에서 spacePurposeForDefaults 로 동일 값을 이미 평가함.)
+  const spacePurpose: string = spacePurposeForDefaults;
 
   // Globally suppressed:
-  //   - 'calendar': rendered above the grid (its grid slot would be an empty card)
   //   - 'overdue': duplicate of '미완료/이월 작업' (incomplete_tasks)
   //   - 'upcoming': duplicate of "우선순위 높은 항목" (kept) — also superseded for project_management
-  const FORCE_HIDDEN_GLOBAL = new Set(['calendar', 'upcoming', 'overdue']);
+  // 'calendar' 는 비-PM 공간에서는 grid 밖 full-width 로 렌더되므로 grid 에서 숨김.
+  // PM 공간에서는 widget 으로 grid 안에 들어가도록 허용.
+  const FORCE_HIDDEN_GLOBAL = new Set(['upcoming', 'overdue']);
   const FORCE_HIDDEN_PM = new Set(['check_sheets']);
-  const isHiddenForPurpose = (id: string) =>
-    FORCE_HIDDEN_GLOBAL.has(id) ||
-    (spacePurpose === 'project_management' && FORCE_HIDDEN_PM.has(id));
+  const isHiddenForPurpose = (id: string) => {
+    if (FORCE_HIDDEN_GLOBAL.has(id)) return true;
+    if (spacePurpose === 'project_management') {
+      return FORCE_HIDDEN_PM.has(id);
+    }
+    // 비-PM: calendar 는 grid 밖에서만 렌더
+    if (id === 'calendar') return true;
+    return false;
+  };
 
   // Display order = widgetOrder filtered to visible & not purpose-hidden
   const displayOrder = widgetOrder.filter(
@@ -1700,8 +1733,8 @@ const HomePage: React.FC = () => {
           userId={currentUserId}
           onClose={() => setPopupExecId(null)}
         />
-        {/* ── Dashboard Calendar (Full width) ── */}
-        {visibleWidgets.includes('calendar') && (
+        {/* ── Dashboard Calendar (Full width) — PM 공간에서는 widget 으로 동작하므로 여기선 숨김 ── */}
+        {spacePurpose !== 'project_management' && visibleWidgets.includes('calendar') && (
           <Box
             sx={{
               mb: 2,
@@ -1760,7 +1793,12 @@ const HomePage: React.FC = () => {
         </Button>
         <Divider sx={{ mb: 2 }} />
         <List disablePadding>
-          {ALL_WIDGETS.filter(w => !['calendar', 'upcoming', 'overdue'].includes(w.id)).map(w => (
+          {ALL_WIDGETS.filter(w => {
+            if (w.id === 'upcoming' || w.id === 'overdue') return false;
+            // PM 공간: 캘린더를 widget 으로 토글 가능. 비-PM: full-width 라 팔레트에서 숨김.
+            if (w.id === 'calendar' && spacePurpose !== 'project_management') return false;
+            return true;
+          }).map(w => (
             <ListItemButton
               key={w.id}
               onClick={() => toggleWidget(w.id)}
