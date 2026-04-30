@@ -643,34 +643,85 @@ const HomePage: React.FC = () => {
 
   const queryClient = useQueryClient();
 
+  // ── Space-keyed layout helpers ──
+  // Layout JSON 구조:
+  //   { bySpace: { [spaceId]: { widgetIds, widgetOrder, widgetHeights, gridLayouts, calendarPosition } },
+  //     widgetIds?, widgetOrder?, widgetHeights?, gridLayouts?  ← 레거시 (단일 공간) }
+  // 공간이 정해지지 않은 경우엔 레거시 top-level 키를 그대로 사용한다.
+  const spaceKey: string = currentSpaceId != null ? String(currentSpaceId) : '__no_space__';
+  const layoutForSpace = (() => {
+    const bySpace = (savedLayout as any)?.bySpace;
+    if (bySpace && typeof bySpace === 'object' && bySpace[spaceKey]) {
+      return bySpace[spaceKey];
+    }
+    // 레거시 fallback — bySpace 가 없거나 이 공간 키가 없을 때 top-level 사용
+    return savedLayout || {};
+  })();
+
   const saveMutation = useMutation({
-    mutationFn: (layout: any) => api.saveUserLayout(currentUserId, layout),
+    mutationFn: (spaceLayout: any) => {
+      const prev = (savedLayout as any) || {};
+      const prevBySpace = (prev.bySpace && typeof prev.bySpace === 'object') ? prev.bySpace : {};
+      const merged = {
+        ...prev,
+        bySpace: {
+          ...prevBySpace,
+          [spaceKey]: {
+            ...(prevBySpace[spaceKey] || {}),
+            ...spaceLayout,
+          },
+        },
+      };
+      return api.saveUserLayout(currentUserId, merged);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['layout', currentUserId] });
     },
   });
 
-  // 공간 운영 목적 (project_management 면 캘린더는 widget 으로만 동작) — 기본값 결정에 필요해서 일찍 평가.
+  // Optimistic updater — bySpace[spaceKey] 만 갱신하고 다른 공간/레거시 키는 보존.
+  const patchLayoutCache = (patch: Record<string, any>) => {
+    queryClient.setQueryData(['layout', currentUserId], (old: any) => {
+      const base = old || {};
+      const baseBySpace = (base.bySpace && typeof base.bySpace === 'object') ? base.bySpace : {};
+      return {
+        ...base,
+        bySpace: {
+          ...baseBySpace,
+          [spaceKey]: {
+            ...(baseBySpace[spaceKey] || {}),
+            ...patch,
+          },
+        },
+      };
+    });
+  };
+
+  // 공간 운영 목적 (project_management 면 캘린더 default-hidden) — 기본값 결정에 필요해서 일찍 평가.
   const spacePurposeForDefaults: string = (overviewData as any)?.purpose || 'project_management';
   const defaultVisibleForPurpose =
     spacePurposeForDefaults === 'project_management' ? DEFAULT_VISIBLE_PM : DEFAULT_VISIBLE;
 
   // Visible widgets + order — saved preference or default
   const widgetOrder: string[] =
-    savedLayout?.widgetOrder && Array.isArray(savedLayout.widgetOrder)
-      ? (savedLayout.widgetOrder as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
+    layoutForSpace?.widgetOrder && Array.isArray(layoutForSpace.widgetOrder)
+      ? (layoutForSpace.widgetOrder as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
       : defaultVisibleForPurpose;
 
   const visibleWidgets: string[] =
-    savedLayout?.widgetIds && Array.isArray(savedLayout.widgetIds)
-      ? (savedLayout.widgetIds as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
+    layoutForSpace?.widgetIds && Array.isArray(layoutForSpace.widgetIds)
+      ? (layoutForSpace.widgetIds as string[]).filter(id => ALL_WIDGETS.some(w => w.id === id))
       : defaultVisibleForPurpose;
 
   // Per-widget heights (persisted in layout)
   const widgetHeights: Record<string, number> =
-    savedLayout?.widgetHeights && typeof savedLayout.widgetHeights === 'object'
-      ? (savedLayout.widgetHeights as Record<string, number>)
+    layoutForSpace?.widgetHeights && typeof layoutForSpace.widgetHeights === 'object'
+      ? (layoutForSpace.widgetHeights as Record<string, number>)
       : {};
+
+  // 큰 calendar 가 grid 위/아래 어디에 위치할지 — 드래그 핸들 클릭으로 토글.
+  const calendarPosition: 'top' | 'bottom' =
+    layoutForSpace?.calendarPosition === 'bottom' ? 'bottom' : 'top';
 
   const defaultH = getDefaultWidgetHeight();
   const getWidgetHeight = (id: string) => widgetHeights[id] || defaultH;
@@ -678,12 +729,7 @@ const HomePage: React.FC = () => {
   const saveDebounceRef = useRef<ReturnType<typeof setTimeout>>();
   const handleWidgetHeightChange = (id: string, height: number) => {
     const next = { ...widgetHeights, [id]: height };
-    // Optimistic update
-    queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
-      ...old,
-      widgetHeights: next,
-    }));
-    // Debounced save
+    patchLayoutCache({ widgetHeights: next });
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
     saveDebounceRef.current = setTimeout(() => {
       saveMutation.mutate({ widgetIds: visibleWidgets, widgetOrder, widgetHeights: next, gridLayouts: {} });
@@ -694,34 +740,35 @@ const HomePage: React.FC = () => {
     const next = visibleWidgets.includes(id)
       ? visibleWidgets.filter(w => w !== id)
       : [...visibleWidgets, id];
-    queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
-      ...old,
-      widgetIds: next,
-    }));
+    patchLayoutCache({ widgetIds: next });
     saveMutation.mutate({ widgetIds: next, widgetOrder, gridLayouts: {} });
   };
 
   const resetToDefault = () => {
-    queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
-      ...old,
+    patchLayoutCache({
       widgetIds: defaultVisibleForPurpose,
       widgetOrder: defaultVisibleForPurpose,
       widgetHeights: {},
-    }));
+      calendarPosition: 'top',
+    });
     saveMutation.mutate({
       widgetIds: defaultVisibleForPurpose,
       widgetOrder: defaultVisibleForPurpose,
       widgetHeights: {},
       gridLayouts: {},
+      calendarPosition: 'top',
     });
   };
 
   const resetWidgetHeights = () => {
-    queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
-      ...old,
-      widgetHeights: {},
-    }));
+    patchLayoutCache({ widgetHeights: {} });
     saveMutation.mutate({ widgetIds: visibleWidgets, widgetOrder, widgetHeights: {}, gridLayouts: {} });
+  };
+
+  const toggleCalendarPosition = () => {
+    const next: 'top' | 'bottom' = calendarPosition === 'top' ? 'bottom' : 'top';
+    patchLayoutCache({ calendarPosition: next });
+    saveMutation.mutate({ widgetIds: visibleWidgets, widgetOrder, calendarPosition: next, gridLayouts: {} });
   };
 
   // ── DnD sensors ──
@@ -738,10 +785,7 @@ const HomePage: React.FC = () => {
       const newOrder = arrayMove(displayOrder, oldIdx, newIdx);
       // Also update widgetOrder to include all for persistence
       const fullNewOrder = newOrder.concat(widgetOrder.filter(id => !newOrder.includes(id)));
-      queryClient.setQueryData(['layout', currentUserId], (old: any) => ({
-        ...old,
-        widgetOrder: fullNewOrder,
-      }));
+      patchLayoutCache({ widgetOrder: fullNewOrder });
       saveMutation.mutate({
         widgetIds: visibleWidgets,
         widgetOrder: fullNewOrder,
@@ -1296,16 +1340,6 @@ const HomePage: React.FC = () => {
             )}
           </>
         );
-      case 'calendar':
-        // 비-PM 공간: grid 위에서 full-width 로 렌더 (아래 above-grid 블록).
-        // PM 공간: widget 으로 등록 → 여기서 렌더 (다른 widget 과 동일하게 SortableWidget 안, flat 모드).
-        if (spacePurpose !== 'project_management') return null;
-        return (
-          <>
-            <WidgetHeader def={def} />
-            <DashboardCalendar stats={stats} overviewData={overviewData} openDrawer={openDrawer} flat />
-          </>
-        );
       case 'today_tasks':
         return (
           <>
@@ -1504,18 +1538,15 @@ const HomePage: React.FC = () => {
 
   // Globally suppressed:
   //   - 'overdue': duplicate of '미완료/이월 작업' (incomplete_tasks)
-  //   - 'upcoming': duplicate of "우선순위 높은 항목" (kept) — also superseded for project_management
-  // 'calendar' 는 비-PM 공간에서는 grid 밖 full-width 로 렌더되므로 grid 에서 숨김.
-  // PM 공간에서는 widget 으로 grid 안에 들어가도록 허용.
-  const FORCE_HIDDEN_GLOBAL = new Set(['upcoming', 'overdue']);
+  //   - 'upcoming': duplicate of "우선순위 높은 항목"
+  //   - 'calendar': 모든 공간에서 grid 바깥 full-width 로 렌더되므로 grid 에서는 항상 숨김
+  const FORCE_HIDDEN_GLOBAL = new Set(['upcoming', 'overdue', 'calendar']);
   const FORCE_HIDDEN_PM = new Set(['check_sheets']);
   const isHiddenForPurpose = (id: string) => {
     if (FORCE_HIDDEN_GLOBAL.has(id)) return true;
     if (spacePurpose === 'project_management') {
       return FORCE_HIDDEN_PM.has(id);
     }
-    // 비-PM: calendar 는 grid 밖에서만 렌더
-    if (id === 'calendar') return true;
     return false;
   };
 

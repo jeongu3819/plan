@@ -29,7 +29,10 @@
       "Bash(echo \"EXIT=$?\")",
       "Bash(git *)",
       "Bash(echo \"EXIT:$?\")",
-      "Bash(tee /tmp/tsc-out.txt)"
+      "Bash(tee /tmp/tsc-out.txt)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8085/api/health)",
+      "Bash(PYTHONIOENCODING=utf-8 BYPASS_SSO=true uvicorn main:app *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8085/docs)"
     ]
   }
 }
