@@ -85,6 +85,9 @@ const InlineCellEditor = React.memo(function InlineCellEditor({
       autoFocus
       variant="standard"
       size="small"
+      multiline={editorType !== 'date'}
+      rows={1}
+      maxRows={10}
       type={editorType === 'date' ? 'date' : 'text'}
       value={value}
       onChange={(e) => setValue(e.target.value)}
@@ -93,9 +96,9 @@ const InlineCellEditor = React.memo(function InlineCellEditor({
         else onCancel();
       }}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          (e.target as HTMLInputElement).blur();
+          (e.target as any).blur();
         } else if (e.key === 'Escape') {
           e.preventDefault();
           setValue(initialValue);
@@ -110,8 +113,11 @@ const InlineCellEditor = React.memo(function InlineCellEditor({
           color: fontColor || '#111827',
           width: '100%',
           textAlign: (align as any) || 'left',
+          lineHeight: 1.2,
         },
       }}
+      helperText={editorType !== 'date' ? "Shift+Enter: 줄바꿈" : undefined}
+      FormHelperTextProps={{ sx: { fontSize: '0.6rem', mt: 0, mb: -0.5, opacity: 0.6, position: 'absolute', bottom: -12 } }}
       sx={{ p: 0, m: 0, width: '100%' }}
     />
   );

@@ -352,7 +352,9 @@ const DashboardCalendar: React.FC<{
   openDrawer: (task: Task) => void;
   /** flat: 외곽 Paper/패딩 제거 — Dashboard widget 안에 들어갈 때 박스-인-박스 회피용 */
   flat?: boolean;
-}> = ({ stats, overviewData, openDrawer, flat }) => {
+  position?: 'top' | 'bottom';
+  onTogglePosition?: () => void;
+}> = ({ stats, overviewData, openDrawer, flat, position, onTogglePosition }) => {
   const [calMonth, setCalMonth] = useState(new Date());
   const [overflowAnchor, setOverflowAnchor] = useState<HTMLElement | null>(null);
   const [overflowDate, setOverflowDate] = useState<Date | null>(null);
@@ -396,7 +398,13 @@ const DashboardCalendar: React.FC<{
   const wrapperProps = flat ? {} : { variant: 'outlined' as const };
   const wrapperSx = flat
     ? { p: 0, bgcolor: 'transparent' }
-    : { p: 2, borderRadius: 3, bgcolor: '#fff', border: '1px solid rgba(0,0,0,0.08)' };
+    : {
+        p: 2,
+        borderRadius: 3,
+        bgcolor: '#fff',
+        border: '1px solid rgba(0,0,0,0.08)',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.04)',
+      };
 
   return (
     <Wrapper {...wrapperProps} sx={wrapperSx}>
@@ -419,6 +427,23 @@ const DashboardCalendar: React.FC<{
           <IconButton size="small" onClick={() => setCalMonth(addMonths(calMonth, 1))} sx={{ bgcolor: '#F3F4F6', '&:hover': { bgcolor: '#E5E7EB' } }}>
             <ChevronRightIcon />
           </IconButton>
+
+          {onTogglePosition && (
+            <Tooltip title={position === 'top' ? '아래로 이동' : '위로 이동'}>
+              <IconButton
+                size="small"
+                onClick={onTogglePosition}
+                sx={{
+                  ml: 1,
+                  bgcolor: 'rgba(41, 85, 255, 0.05)',
+                  color: '#2955FF',
+                  '&:hover': { bgcolor: 'rgba(41, 85, 255, 0.1)' },
+                }}
+              >
+                <DragIndicatorIcon sx={{ fontSize: '1.1rem' }} />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       </Box>
 
@@ -1764,8 +1789,8 @@ const HomePage: React.FC = () => {
           userId={currentUserId}
           onClose={() => setPopupExecId(null)}
         />
-        {/* ── Dashboard Calendar (Full width) — PM 공간에서는 widget 으로 동작하므로 여기선 숨김 ── */}
-        {spacePurpose !== 'project_management' && visibleWidgets.includes('calendar') && (
+        {/* ── Dashboard Calendar (Full width, Top) ── */}
+        {visibleWidgets.includes('calendar') && calendarPosition === 'top' && (
           <Box
             sx={{
               mb: 2,
@@ -1774,7 +1799,13 @@ const HomePage: React.FC = () => {
               transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
             }}
           >
-            <DashboardCalendar stats={stats} overviewData={overviewData} openDrawer={openDrawer} />
+            <DashboardCalendar
+              stats={stats}
+              overviewData={overviewData}
+              openDrawer={openDrawer}
+              position="top"
+              onTogglePosition={toggleCalendarPosition}
+            />
           </Box>
         )}
         {/* ── Sortable Widget Grid ── */}
@@ -1798,6 +1829,26 @@ const HomePage: React.FC = () => {
             </Box>
           </SortableContext>
         </DndContext>
+
+        {/* ── Dashboard Calendar (Full width, Bottom) ── */}
+        {visibleWidgets.includes('calendar') && calendarPosition === 'bottom' && (
+          <Box
+            sx={{
+              mt: 2,
+              opacity: introPhase === 'done' ? 1 : 0,
+              transform: introPhase === 'done' ? 'translateY(0)' : 'translateY(16px)',
+              transition: 'opacity 0.6s ease 0.25s, transform 0.6s ease 0.25s',
+            }}
+          >
+            <DashboardCalendar
+              stats={stats}
+              overviewData={overviewData}
+              openDrawer={openDrawer}
+              position="bottom"
+              onTogglePosition={toggleCalendarPosition}
+            />
+          </Box>
+        )}
         </>
       )}
 
@@ -1826,8 +1877,6 @@ const HomePage: React.FC = () => {
         <List disablePadding>
           {ALL_WIDGETS.filter(w => {
             if (w.id === 'upcoming' || w.id === 'overdue') return false;
-            // PM 공간: 캘린더를 widget 으로 토글 가능. 비-PM: full-width 라 팔레트에서 숨김.
-            if (w.id === 'calendar' && spacePurpose !== 'project_management') return false;
             return true;
           }).map(w => (
             <ListItemButton

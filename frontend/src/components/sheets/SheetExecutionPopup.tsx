@@ -13,7 +13,8 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import DoneAllIcon from '@mui/icons-material/DoneAll';
-import { useState } from 'react';
+import SaveIcon from '@mui/icons-material/Save';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useAppStore } from '../../stores/useAppStore';
@@ -51,6 +52,9 @@ interface Props {
 export default function SheetExecutionPopup({ open, executionId, userId, onClose }: Props) {
   const queryClient = useQueryClient();
 
+  // 로컬 변경 사항 (수동 저장용)
+  const [pendingChanges, setPendingChanges] = useState<Map<string, { checked?: boolean; value?: string; memo?: string }>>(new Map());
+
   const { data: execution, isLoading } = useQuery<SheetExecution>({
     queryKey: ['sheetExecution', executionId],
     queryFn: () => api.getSheetExecution(executionId!),
@@ -58,9 +62,12 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
     refetchInterval: 30000,
   });
 
+  // 데이터 로드 시 pending 초기화
+  useEffect(() => {
+    if (open) setPendingChanges(new Map());
+  }, [open, executionId]);
+
   // v3.11: 응답의 task_progress + task_status 를 caches/store 에 즉시 반영
-  //   - Check Sheet 100% 시 Task Details Status 가 새로고침 없이 Done 으로 보이게 함
-  //   - 단일 dropdown 변경 / ALL 진행 양쪽에서 같은 로직을 쓰므로 헬퍼로 분리
   const applyTaskSync = (response: any) => {
     const taskId: number | null | undefined = response?.task_id;
     const taskProgress: number | null | undefined = response?.task_progress;
@@ -97,12 +104,33 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   const upsertMut = useMutation({
     mutationFn: ({ cellRef, data }: { cellRef: string; data: any }) =>
       api.upsertSheetExecutionCell(executionId!, cellRef, data, userId),
-    onSuccess: (response: any) => {
-      // 시트 자체는 invalidate (item 목록/메타가 바뀌었으므로)
-      queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
-      applyTaskSync(response);
-    },
   });
+
+  const handleSave = async () => {
+    if (pendingChanges.size === 0) return;
+    try {
+      const promises = Array.from(pendingChanges.entries()).map(([cellRef, data]) =>
+        upsertMut.mutateAsync({ cellRef, data })
+      );
+      const results = await Promise.all(promises);
+      setPendingChanges(new Map());
+      queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
+      // 마지막 결과로 task sync
+      if (results.length > 0) applyTaskSync(results[results.length - 1]);
+    } catch (err) {
+      console.error('Failed to save changes:', err);
+      alert('저장 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleClose = () => {
+    if (pendingChanges.size > 0) {
+      if (!window.confirm('저장하지 않은 변경사항이 있습니다. 닫으시겠습니까?')) {
+        return;
+      }
+    }
+    onClose();
+  };
 
   // 삭제(숨김) 컬럼 관리 — execution 단위로 저장
   const hiddenCols: number[] = (execution as any)?.hidden_cols || [];
@@ -125,12 +153,12 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   };
 
   // v3.11: ALL 진행 — 시트 내 미진행/빈/X 항목을 일괄 진행 처리.
-  //   N/A 는 건너뛰고, 진행으로 바뀐 행은 backend 가 진행일자 컬럼에 오늘 날짜를 기록한다.
   const markAllMut = useMutation({
     mutationFn: () => api.markAllSheetProgress(executionId!, true, userId),
     onSuccess: (response: any) => {
       queryClient.invalidateQueries({ queryKey: ['sheetExecution', executionId] });
       applyTaskSync(response);
+      setPendingChanges(new Map()); // 서버에서 직접 처리하므로 로컬 pending 비움
     },
     onError: (e: any) => alert(e?.response?.data?.detail || 'ALL 진행 처리 실패'),
   });
@@ -140,30 +168,45 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   const [downloading, setDownloading] = useState(false);
 
   const handleCheckChange = useCallback((cellRef: string, checked: boolean) => {
-    upsertMut.mutate({ cellRef, data: { checked } });
-  }, [upsertMut]);
+    setPendingChanges(prev => {
+      const next = new Map(prev);
+      const existing = next.get(cellRef) || {};
+      next.set(cellRef, { ...existing, checked });
+      return next;
+    });
+  }, []);
 
   const handleValueChange = useCallback((cellRef: string, value: string) => {
-    upsertMut.mutate({ cellRef, data: { value } });
-  }, [upsertMut]);
+    setPendingChanges(prev => {
+      const next = new Map(prev);
+      const existing = next.get(cellRef) || {};
+      next.set(cellRef, { ...existing, value });
+      return next;
+    });
+  }, []);
 
   // v3.4: 상태 select 변경 — value/checked 동시 갱신 + 진행일자 자동 연동
-  //   진행(O) → checked=true, 진행일자에 오늘 날짜
-  //   미진행(X) → checked=false, 진행일자 비움
-  //   N/A     → checked=false (모수 제외), 진행일자 비움
-  //   '' (선택 해제) → checked=false, value 비움
   const progressDateCol = execution?.template_structure?.column_roles?.progress_date?.col;
   const handleStatusChange = useCallback(
     (cellRef: string, status: StatusValue, rowIdx: number, _colIdx: number) => {
       const checked = status === 'O';
-      upsertMut.mutate({ cellRef, data: { value: status, checked } });
-      if (progressDateCol !== undefined && progressDateCol >= 0) {
-        const dateRef = refOf(rowIdx, progressDateCol);
-        const dateValue = status === 'O' ? todayYmd() : '';
-        upsertMut.mutate({ cellRef: dateRef, data: { value: dateValue } });
-      }
+      setPendingChanges(prev => {
+        const next = new Map(prev);
+        // 상태값 변경
+        const existing = next.get(cellRef) || {};
+        next.set(cellRef, { ...existing, value: status, checked });
+
+        // 점검일 자동 기록 (staging)
+        if (progressDateCol !== undefined && progressDateCol >= 0) {
+          const dateRef = refOf(rowIdx, progressDateCol);
+          const dateValue = status === 'O' ? todayYmd() : '';
+          const existingDate = next.get(dateRef) || {};
+          next.set(dateRef, { ...existingDate, value: dateValue });
+        }
+        return next;
+      });
     },
-    [upsertMut, progressDateCol],
+    [progressDateCol],
   );
 
   const handleDownloadClick = async () => {
@@ -186,8 +229,7 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
   const totalCount = execution?.total_items ?? 0;
   const columnRoles = structure?.column_roles;
 
-  // 항목별 매핑 — execution.items가 바뀔 때만 재생성하여 SheetRenderer의 useMemo가
-  // 매 부모 렌더마다 무효화되지 않게 한다 (입력 시 grid 전체 리렌더 방지).
+  // 항목별 매핑 — execution.items가 바뀔 때만 재생성
   const { checkedMap, checkedAtMap, valueMap } = useMemo(() => {
     const cMap = new Map<string, boolean>();
     const aMap = new Map<string, string>();
@@ -199,13 +241,22 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
         if (item.value) vMap.set(item.cell_ref, item.value);
       }
     }
+
+    // Overlay Pending
+    pendingChanges.forEach((data, ref) => {
+      if (data.checked !== undefined) cMap.set(ref, data.checked);
+      if (data.value !== undefined) vMap.set(ref, data.value);
+    });
+
     return { checkedMap: cMap, checkedAtMap: aMap, valueMap: vMap };
-  }, [execution?.items]);
+  }, [execution?.items, pendingChanges]);
+
+  const isDirty = pendingChanges.size > 0;
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={handleClose}
       fullScreen
       PaperProps={{ sx: { bgcolor: '#F9FAFB' } }}
     >
@@ -259,6 +310,25 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             />
           </Box>
 
+          {/* 저장 버튼 */}
+          <Chip
+            icon={<SaveIcon sx={{ fontSize: '1.1rem !important', color: isDirty ? '#fff !important' : 'inherit' }} />}
+            label={upsertMut.isPending ? '저장 중...' : '저장하기'}
+            clickable
+            onClick={handleSave}
+            disabled={!isDirty || upsertMut.isPending}
+            sx={{
+              fontWeight: 800,
+              bgcolor: isDirty ? '#2955FF' : 'rgba(255,255,255,0.05)',
+              color: isDirty ? '#fff' : '#6B7280',
+              border: isDirty ? 'none' : '1px solid rgba(255,255,255,0.1)',
+              '&:hover': { bgcolor: isDirty ? '#1E40AF' : 'rgba(255,255,255,0.1)' },
+              transition: 'all 0.2s',
+              height: 26,
+              fontSize: '0.72rem',
+            }}
+          />
+
           {(upsertMut.isPending || markAllMut.isPending || downloading) && (
             <Chip
               label={downloading ? "다운로드 중..." : markAllMut.isPending ? "ALL 진행 중..." : "저장 중..."}
@@ -296,7 +366,7 @@ export default function SheetExecutionPopup({ open, executionId, userId, onClose
             }}
           />
 
-          <IconButton onClick={onClose} sx={{ color: 'rgba(255,255,255,0.7)' }}>
+          <IconButton onClick={handleClose} sx={{ color: 'rgba(255,255,255,0.7)' }}>
             <CloseIcon />
           </IconButton>
         </Toolbar>
