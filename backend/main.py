@@ -2382,9 +2382,34 @@ async def upload_task_file(
         )
 
 
+_IMAGE_EXT_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+}
+
+
+def _attachment_response_meta(filename: str, stored_name: str):
+    """이미지 확장자면 inline + image/* MIME 으로 응답해 <img> 태그가 그대로 렌더되게 한다.
+    그 외 파일은 기존대로 attachment 다운로드."""
+    import urllib.parse
+    ext = os.path.splitext(stored_name or filename or "")[1].lower()
+    mime = _IMAGE_EXT_MIME.get(ext)
+    if mime:
+        encoded_filename = urllib.parse.quote(filename)
+        return mime, f"inline; filename*=UTF-8''{encoded_filename}"
+    encoded_filename = urllib.parse.quote(filename)
+    return "application/octet-stream", f"attachment; filename*=UTF-8''{encoded_filename}"
+
+
 @app.get("/api/tasks/{task_id}/files/{stored_name}/download")
 def download_task_file(task_id: int, stored_name: str):
-    """Download a file attachment from a task. S3 우선, 없으면 로컬 fallback."""
+    """Download a file attachment from a task. S3 우선, 없으면 로컬 fallback.
+    이미지 파일은 inline + image/* MIME 으로 응답하여 <img> 렌더링 가능."""
     from fastapi.responses import Response
     from app.utils.s3.s3_utils import download_from_s3, is_s3_configured
 
@@ -2399,20 +2424,19 @@ def download_task_file(task_id: int, stored_name: str):
 
     filename = att.get("filename", stored_name)
     s3_key = att.get("s3_key", "")
+    media_type, content_disposition = _attachment_response_meta(filename, stored_name)
 
     # 1) S3에서 다운로드 시도
     if s3_key and is_s3_configured():
         data = download_from_s3(s3_key)
         if data is not None:
-            # RFC 5987 인코딩으로 한글 파일명 지원
-            import urllib.parse
-            encoded_filename = urllib.parse.quote(filename)
             return Response(
                 content=data,
-                media_type="application/octet-stream",
+                media_type=media_type,
                 headers={
-                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Disposition": content_disposition,
                     "Content-Length": str(len(data)),
+                    "Cache-Control": "private, max-age=86400",
                 },
             )
 
@@ -2422,14 +2446,13 @@ def download_task_file(task_id: int, stored_name: str):
         reconstructed_key = get_attachment_s3_key(filename, stored_name, "task", task_id)
         data = download_from_s3(reconstructed_key)
         if data is not None:
-            import urllib.parse
-            encoded_filename = urllib.parse.quote(filename)
             return Response(
                 content=data,
-                media_type="application/octet-stream",
+                media_type=media_type,
                 headers={
-                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                    "Content-Disposition": content_disposition,
                     "Content-Length": str(len(data)),
+                    "Cache-Control": "private, max-age=86400",
                 },
             )
 
@@ -2439,7 +2462,8 @@ def download_task_file(task_id: int, stored_name: str):
         return FileResponse(
             path=file_path,
             filename=filename,
-            media_type="application/octet-stream",
+            media_type=media_type,
+            content_disposition_type="inline" if media_type.startswith("image/") else "attachment",
         )
 
     raise HTTPException(status_code=404, detail="File not found")
